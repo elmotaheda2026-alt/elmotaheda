@@ -1,18 +1,27 @@
 import React, { useState } from 'react';
-import { Save, Building, Phone, Mail, MapPin, Percent, FileText } from 'lucide-react';
+import { Save, Building, Phone, Mail, MapPin, Percent, FileText, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Setting } from '../types';
+import { clearAllData } from '../lib/storage';
 
 export default function Settings() {
   const { settings, updateSettings } = useAuth();
   const [formData, setFormData] = useState<Setting>(settings);
   const [saved, setSaved] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     updateSettings(formData);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
+  };
+
+  const handleClearData = () => {
+    clearAllData();
+    setShowDeleteConfirm(false);
+    // Reload page
+    window.location.reload();
   };
 
   return (
@@ -133,6 +142,56 @@ export default function Settings() {
           )}
         </div>
       </form>
+
+      {/* Danger Zone - Clear Data */}
+      <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+        <h3 className="font-bold text-red-800 mb-2 flex items-center gap-2">
+          <Trash2 size={20} className="text-red-600" />
+          منطقة الخطر
+        </h3>
+        <p className="text-red-700 text-sm mb-4">حذف جميع البيانات الافتراضية والبدء من جديد. لا يمكن التراجع عن هذا الإجراء.</p>
+        <button
+          onClick={() => setShowDeleteConfirm(true)}
+          className="flex items-center gap-2 bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm"
+        >
+          <Trash2 size={16} />
+          <span>حذف جميع البيانات</span>
+        </button>
+
+        {/* Delete Confirmation Modal */}
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 rounded-lg">
+            <div className="bg-white rounded-xl p-6 max-w-sm mx-4 shadow-xl">
+              <h4 className="text-lg font-bold text-gray-800 mb-2">تأكيد حذف البيانات</h4>
+              <p className="text-gray-600 mb-6">هل أنت متأكد من حذف جميع البيانات؟ سيتم حذف:</p>
+              <ul className="text-sm text-gray-600 mb-6 list-disc list-inside space-y-1">
+                <li>جميع العملاء</li>
+                <li>جميع الموردين</li>
+                <li>جميع المنتجات</li>
+                <li>جميع المبيعات</li>
+                <li>جميع المشتريات</li>
+                <li>جميع الدفعات</li>
+                <li>جميع المصروفات</li>
+              </ul>
+              <p className="text-red-600 font-medium text-sm mb-6">لا يمكن التراجع عن هذا الإجراء!</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleClearData}
+                  className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors font-medium"
+                >
+                  حذف نهائياً
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors font-medium"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

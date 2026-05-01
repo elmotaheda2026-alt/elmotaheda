@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Search, ShoppingBag, Trash2, Printer } from 'lucide-react';
-import { Sale, SaleItem, Customer, Product } from '../types';
-import { getSales, createSale, getCustomers, getProducts } from '../lib/storage';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Plus, Printer, Search, ShoppingBag, Trash2 } from 'lucide-react';
+import { Customer, Product, Sale, SaleItem } from '../types';
+import { createSale, getCustomers, getProducts, getSales } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 
 export default function Sales() {
+  const { settings, user } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
-  const [showModal, setShowModal] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const { settings } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [showModal, setShowModal] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [message, setMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
   const [formData, setFormData] = useState({
     customerId: '',
     customerName: '',
@@ -23,80 +24,130 @@ export default function Sales() {
   }, []);
 
   const loadData = () => {
-    setSales(getSales().reverse());
+    setSales(getSales().slice().reverse());
     setCustomers(getCustomers());
     setProducts(getProducts());
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) =>
+    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
 
   const calculateTotals = () => {
-    const subtotal = saleItems.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
-    const totalDiscount = saleItems.reduce((sum, item) => sum + (item.discount * item.quantity), 0);
-    const totalTax = saleItems.reduce((sum, item) => sum + (item.tax * item.quantity), 0);
+    const subtotal = saleItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const totalDiscount = saleItems.reduce((sum, item) => sum + item.discount * item.quantity, 0);
+    const totalTax = saleItems.reduce((sum, item) => sum + item.tax * item.quantity, 0);
     const total = subtotal - totalDiscount + totalTax;
     return { subtotal, totalDiscount, totalTax, total };
   };
 
   const addItem = (product: Product) => {
-    const existingItem = saleItems.find(item => item.productId === product.id);
-    if (existingItem) {
-      setSaleItems(saleItems.map(item =>
-        item.productId === product.id
-          ? { ...item, quantity: item.quantity + 1, total: (item.quantity + 1) * item.unitPrice - (item.quantity + 1) * item.discount + (item.quantity + 1) * item.tax }
-          : item
-      ));
-    } else {
-      const newItem: SaleItem = {
-        productId: product.id,
-        productName: product.name,
-        barcode: product.barcode,
-        quantity: 1,
-        unitPrice: product.salePrice,
-        discount: product.discount,
-        tax: (product.salePrice - product.discount) * (product.tax / 100),
-        total: product.salePrice - product.discount + (product.salePrice - product.discount) * (product.tax / 100),
-      };
-      setSaleItems([...saleItems, newItem]);
+    if (product.fulfillmentType === 'on_demand' && product.quantity <= 0) {
+      setMessage({
+        type: 'error',
+        text: `الصنف "${product.name}" مسجل كـ حسب الطلب ولم يدخل المخزن بعد. اشتره أولًا من المشتريات ثم أكمل البيع.`,
+      });
+      return;
     }
+
+    const existingItem = saleItems.find((item) => item.productId === product.id);
+    const nextQuantity = existingItem ? existingItem.quantity + 1 : 1;
+
+    if (product.quantity < nextQuantity) {
+      setMessage({
+        type: 'error',
+        text: `الكمية المتاحة من "${product.name}" هي ${product.quantity} فقط.`,
+      });
+      return;
+    }
+
+    if (existingItem) {
+      setSaleItems((current) =>
+        current.map((item) =>
+          item.productId === product.id
+            ? {
+                ...item,
+                quantity: nextQuantity,
+                total: nextQuantity * item.unitPrice - nextQuantity * item.discount + nextQuantity * item.tax,
+              }
+            : item,
+        ),
+      );
+    } else {
+      const taxValue = (product.salePrice - product.discount) * (product.tax / 100);
+      setSaleItems((current) => [
+        ...current,
+        {
+          productId: product.id,
+          productName: product.name,
+          barcode: product.barcode,
+          quantity: 1,
+          unitPrice: product.salePrice,
+          discount: product.discount,
+          tax: taxValue,
+          total: product.salePrice - product.discount + taxValue,
+        },
+      ]);
+    }
+
+    setMessage(null);
   };
 
   const updateItemQuantity = (productId: string, quantity: number) => {
+    const product = products.find((entry) => entry.id === productId);
+    if (!product) return;
+
     if (quantity <= 0) {
-      removeItem(productId);
+      setSaleItems((current) => current.filter((item) => item.productId !== productId));
       return;
     }
-    setSaleItems(saleItems.map(item => {
-      if (item.productId === productId) {
-        return {
-          ...item,
-          quantity,
-          total: quantity * item.unitPrice - quantity * item.discount + quantity * item.tax,
-        };
-      }
-      return item;
-    }));
-  };
 
-  const removeItem = (productId: string) => {
-    setSaleItems(saleItems.filter(item => item.productId !== productId));
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (saleItems.length === 0) {
-      alert('يرجى إضافة منتجات للبيع');
+    if (quantity > product.quantity) {
+      setMessage({
+        type: 'error',
+        text: `لا يمكن بيع ${quantity} من "${product.name}" لأن المتاح ${product.quantity} فقط.`,
+      });
       return;
     }
+
+    setSaleItems((current) =>
+      current.map((item) =>
+        item.productId === productId
+          ? {
+              ...item,
+              quantity,
+              total: quantity * item.unitPrice - quantity * item.discount + quantity * item.tax,
+            }
+          : item,
+      ),
+    );
+    setMessage(null);
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+
     if (!formData.customerId) {
-      alert('يرجى اختيار عميل');
+      setMessage({ type: 'error', text: 'اختر العميل أولاً.' });
+      return;
+    }
+
+    if (saleItems.length === 0) {
+      setMessage({ type: 'error', text: 'أضف صنفًا واحدًا على الأقل قبل الحفظ.' });
+      return;
+    }
+
+    const hasStockProblem = saleItems.some((item) => {
+      const product = products.find((entry) => entry.id === item.productId);
+      return !product || product.quantity < item.quantity;
+    });
+
+    if (hasStockProblem) {
+      setMessage({ type: 'error', text: 'يوجد صنف لا يملك كمية كافية. راجع المخزن أو نفذ شراء أولًا.' });
       return;
     }
 
     const totals = calculateTotals();
-    const sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'> = {
+    createSale({
       customerId: formData.customerId,
       customerName: formData.customerName,
       items: saleItems,
@@ -109,84 +160,79 @@ export default function Sales() {
       status: 'pending',
       date: new Date().toISOString(),
       notes: formData.notes,
-      createdBy: 'current_user',
-    };
+      createdBy: user?.name || 'مدير النظام',
+    });
 
-    createSale(sale);
     loadData();
     setShowModal(false);
     setSaleItems([]);
     setFormData({ customerId: '', customerName: '', notes: '' });
+    setMessage({ type: 'success', text: 'تم حفظ عملية البيع بنجاح.' });
   };
 
-  const filteredSales = sales.filter(sale =>
-    sale.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    sale.customerName.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredSales = useMemo(
+    () =>
+      sales.filter(
+        (sale) =>
+          sale.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          sale.customerName.toLowerCase().includes(searchTerm.toLowerCase()),
+      ),
+    [sales, searchTerm],
   );
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">المبيعات</h2>
-          <p className="text-gray-500 text-sm mt-1">إجمالي {sales.length} فاتورة</p>
+          <h2 className="text-2xl font-bold text-slate-900">المبيعات</h2>
+          <p className="mt-1 text-sm text-slate-500">النظام يمنع الآن بيع الصنف حسب الطلب قبل إدخاله للمخزن.</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
-        >
-          <Plus size={20} />
-          <span>إضافة عملية بيع</span>
+        <button onClick={() => setShowModal(true)} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700">
+          <Plus size={18} />
+          إضافة عملية بيع
         </button>
       </div>
 
-      {/* Search */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      {message && (
+        <div className={`rounded-2xl border px-4 py-3 text-sm ${message.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>
+          {message.text}
+        </div>
+      )}
+
+      <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
         <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            placeholder="بحث برقم الفاتورة أو اسم العميل..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-          />
+          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="بحث بالفاتورة أو العميل" className="input-ui pr-10" />
         </div>
       </div>
 
-      {/* Sales Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-green-50">
+          <table className="w-full min-w-[860px]">
+            <thead className="bg-slate-100">
               <tr>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">رقم الفاتورة</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">العميل</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">التاريخ</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الإجمالي</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الحالة</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الإجراءات</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">رقم الفاتورة</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">العميل</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">التاريخ</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الإجمالي</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الحالة</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">إجراء</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredSales.map(sale => (
-                <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-4 font-mono font-bold text-indigo-600">{sale.invoiceNumber}</td>
-                  <td className="px-4 py-4 font-medium text-gray-800">{sale.customerName}</td>
-                  <td className="px-4 py-4 text-gray-600">{new Date(sale.date).toLocaleDateString('ar-EG')}</td>
-                  <td className="px-4 py-4 font-bold text-green-600">{formatCurrency(sale.total)}</td>
+            <tbody className="divide-y divide-slate-100">
+              {filteredSales.map((sale) => (
+                <tr key={sale.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-4 font-mono font-bold text-sky-700">{sale.invoiceNumber}</td>
+                  <td className="px-4 py-4 font-medium text-slate-800">{sale.customerName}</td>
+                  <td className="px-4 py-4 text-slate-600">{new Date(sale.date).toLocaleDateString('ar-EG')}</td>
+                  <td className="px-4 py-4 font-bold text-emerald-700">{formatCurrency(sale.total)}</td>
                   <td className="px-4 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      sale.status === 'completed' ? 'bg-green-100 text-green-700' :
-                      sale.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
-                      {sale.status === 'completed' ? 'مكتمل' : sale.status === 'pending' ? 'معلق' : 'ملغي'}
+                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${sale.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {sale.status === 'completed' ? 'مكتملة' : 'معلقة'}
                     </span>
                   </td>
                   <td className="px-4 py-4">
-                    <button className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                    <button className="rounded-xl p-2 text-slate-600 hover:bg-slate-100">
                       <Printer size={18} />
                     </button>
                   </td>
@@ -197,115 +243,116 @@ export default function Sales() {
         </div>
       </div>
 
-      {/* Sale Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl my-8">
-            <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-green-600 to-emerald-600 rounded-t-2xl">
-              <h3 className="text-xl font-bold text-white">إضافة عملية بيع جديدة</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-5xl rounded-[28px] bg-white shadow-2xl">
+            <div className="rounded-t-[28px] bg-gradient-to-r from-emerald-600 to-green-600 p-6 text-white">
+              <h3 className="text-xl font-bold">إضافة عملية بيع</h3>
             </div>
+
             <form onSubmit={handleSubmit} className="p-6">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Left: Products */}
+              <div className="grid gap-6 lg:grid-cols-2">
                 <div>
-                  <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                    <ShoppingBag size={20} className="text-green-600" />
-                    المنتجات
+                  <h4 className="mb-4 flex items-center gap-2 font-bold text-slate-800">
+                    <ShoppingBag size={18} className="text-emerald-600" />
+                    الأصناف
                   </h4>
-                  <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto">
-                    {products.map(product => (
+                  <div className="grid max-h-96 grid-cols-2 gap-3 overflow-y-auto">
+                    {products.map((product) => (
                       <button
                         key={product.id}
                         type="button"
                         onClick={() => addItem(product)}
-                        className="p-3 border border-gray-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all text-right"
+                        className="rounded-2xl border border-slate-200 p-3 text-right hover:border-emerald-400 hover:bg-emerald-50"
                       >
-                        <p className="font-medium text-gray-800 text-sm">{product.name}</p>
-                        <p className="text-xs text-gray-500">{product.barcode}</p>
-                        <p className="text-green-600 font-bold mt-1">{formatCurrency(product.salePrice)}</p>
-                        <p className="text-xs text-gray-400">المخزون: {product.quantity}</p>
+                        <p className="font-semibold text-slate-800">{product.name}</p>
+                        <p className="text-xs text-slate-500">{product.barcode}</p>
+                        <p className="mt-1 font-bold text-emerald-700">{formatCurrency(product.salePrice)}</p>
+                        <div className="mt-2 flex items-center justify-between text-xs">
+                          <span className={`rounded-full px-2 py-1 ${product.fulfillmentType === 'on_demand' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {product.fulfillmentType === 'on_demand' ? 'حسب الطلب' : 'مخزني'}
+                          </span>
+                          <span className="text-slate-500">المتاح: {product.quantity}</span>
+                        </div>
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* Right: Sale Details */}
                 <div className="space-y-4">
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                    إذا كان الصنف "حسب الطلب" والكمية صفر، اشتره أولًا من شاشة المشتريات ليُسجَّل في المخزن، ثم أكمل البيع.
+                  </div>
+
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">العميل</label>
+                    <label className="mb-1 block text-sm font-bold text-slate-700">العميل</label>
                     <select
                       value={formData.customerId}
                       onChange={(e) => {
-                        const customer = customers.find(c => c.id === e.target.value);
-                        setFormData({ ...formData, customerId: e.target.value, customerName: customer?.name || '' });
+                        const customer = customers.find((entry) => entry.id === e.target.value);
+                        setFormData({ ...formData, customerId: e.target.value, customerName: customer?.name || '', notes: formData.notes });
                       }}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
-                      required
+                      className="input-ui"
                     >
                       <option value="">اختر العميل</option>
-                      {customers.map(customer => (
+                      {customers.map((customer) => (
                         <option key={customer.id} value={customer.id}>{customer.name}</option>
                       ))}
                     </select>
                   </div>
 
                   <div>
-                    <h4 className="font-bold text-gray-800 mb-2">المنتجات المختارة</h4>
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {saleItems.map(item => (
-                        <div key={item.productId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                    <h4 className="mb-2 font-bold text-slate-800">الأصناف المختارة</h4>
+                    <div className="space-y-2">
+                      {saleItems.map((item) => (
+                        <div key={item.productId} className="flex items-center gap-3 rounded-2xl bg-slate-50 p-3">
                           <div className="flex-1">
-                            <p className="font-medium text-gray-800 text-sm">{item.productName}</p>
-                            <p className="text-xs text-gray-500">{formatCurrency(item.unitPrice)}</p>
+                            <p className="font-medium text-slate-800">{item.productName}</p>
+                            <p className="text-xs text-slate-500">{formatCurrency(item.unitPrice)}</p>
                           </div>
                           <div className="flex items-center gap-2">
-                            <button type="button" onClick={() => updateItemQuantity(item.productId, item.quantity - 1)} className="w-8 h-8 bg-gray-200 rounded">-</button>
+                            <button type="button" onClick={() => updateItemQuantity(item.productId, item.quantity - 1)} className="h-8 w-8 rounded bg-slate-200">-</button>
                             <span className="w-8 text-center">{item.quantity}</span>
-                            <button type="button" onClick={() => updateItemQuantity(item.productId, item.quantity + 1)} className="w-8 h-8 bg-gray-200 rounded">+</button>
+                            <button type="button" onClick={() => updateItemQuantity(item.productId, item.quantity + 1)} className="h-8 w-8 rounded bg-slate-200">+</button>
                           </div>
-                          <button type="button" onClick={() => removeItem(item.productId)} className="p-1 text-red-600 hover:bg-red-50 rounded">
+                          <button type="button" onClick={() => setSaleItems((current) => current.filter((entry) => entry.productId !== item.productId))} className="rounded-lg p-1 text-rose-600 hover:bg-rose-50">
                             <Trash2 size={16} />
                           </button>
-                          <span className="font-bold text-green-600 w-20 text-left">{formatCurrency(item.total)}</span>
+                          <span className="w-20 text-left font-bold text-emerald-700">{formatCurrency(item.total)}</span>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  <div className="border-t pt-4 space-y-2">
-                    <div className="flex justify-between text-gray-600">
+                  <div className="space-y-2 border-t border-slate-200 pt-4">
+                    <div className="flex justify-between text-slate-600">
                       <span>المجموع الفرعي</span>
                       <span>{formatCurrency(calculateTotals().subtotal)}</span>
                     </div>
-                    <div className="flex justify-between text-red-600">
+                    <div className="flex justify-between text-rose-600">
                       <span>الخصم</span>
                       <span>- {formatCurrency(calculateTotals().totalDiscount)}</span>
                     </div>
-                    <div className="flex justify-between text-gray-600">
+                    <div className="flex justify-between text-slate-600">
                       <span>الضريبة</span>
                       <span>{formatCurrency(calculateTotals().totalTax)}</span>
                     </div>
-                    <div className="flex justify-between font-bold text-xl text-green-600 pt-2 border-t">
+                    <div className="flex justify-between border-t border-slate-200 pt-2 text-xl font-bold text-emerald-700">
                       <span>الإجمالي</span>
                       <span>{formatCurrency(calculateTotals().total)}</span>
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">ملاحظات</label>
-                    <textarea
-                      value={formData.notes}
-                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none"
-                      rows={2}
-                    />
+                    <label className="mb-1 block text-sm font-bold text-slate-700">ملاحظات</label>
+                    <textarea value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} rows={3} className="input-ui resize-none" />
                   </div>
 
-                  <div className="flex gap-3 pt-4">
-                    <button type="button" onClick={() => { setShowModal(false); setSaleItems([]); }} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+                  <div className="flex gap-3 pt-2">
+                    <button type="button" onClick={() => { setShowModal(false); setSaleItems([]); }} className="flex-1 rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50">
                       إلغاء
                     </button>
-                    <button type="submit" className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                    <button type="submit" className="flex-1 rounded-2xl bg-emerald-600 px-4 py-3 font-bold text-white hover:bg-emerald-700">
                       حفظ البيع
                     </button>
                   </div>

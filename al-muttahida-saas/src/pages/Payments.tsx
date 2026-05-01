@@ -1,262 +1,926 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Search, Banknote, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
-import { Payment, Customer, Supplier } from '../types';
-import { getPayments, createPayment, getCustomers, getSuppliers } from '../lib/storage';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Banknote,
+  CalendarDays,
+  CreditCard,
+  Plus,
+  Printer,
+  Search,
+} from 'lucide-react';
+import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
+import { createPayment, getCustomers, getPayments, getSales, getSuppliers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 
+type PaymentType = 'in' | 'out';
+type IncomingSubmitMode = 'save' | 'save_print';
+
+interface IncomingPaymentForm {
+  customerId: string;
+  saleId: string;
+  installmentId: string;
+  amount: number;
+  date: string;
+  description: string;
+}
+
+interface OutgoingPaymentForm {
+  supplierId: string;
+  amount: number;
+  date: string;
+  description: string;
+}
+
+const today = () => new Date().toISOString().split('T')[0];
+
 export default function Payments() {
+  const { settings, user } = useAuth();
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [showModal, setShowModal] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const { settings } = useAuth();
+  const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [paymentType, setPaymentType] = useState<'in' | 'out'>('in');
-  const [formData, setFormData] = useState({
-    referenceId: '',
-    referenceName: '',
-    description: '',
+  const [showModal, setShowModal] = useState(false);
+  const [paymentType, setPaymentType] = useState<PaymentType>('in');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [incomingSubmitMode, setIncomingSubmitMode] = useState<IncomingSubmitMode>('save');
+
+  const [incomingForm, setIncomingForm] = useState<IncomingPaymentForm>({
+    customerId: '',
+    saleId: '',
+    installmentId: '',
     amount: 0,
+    date: today(),
+    description: '',
   });
+
+  const [outgoingForm, setOutgoingForm] = useState<OutgoingPaymentForm>({
+    supplierId: '',
+    amount: 0,
+    date: today(),
+    description: '',
+  });
+
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const loadData = () => {
+    const nextPayments = getPayments().slice().reverse();
+    const nextSales = getSales().slice().reverse();
+    const nextCustomers = getCustomers();
+    const nextSuppliers = getSuppliers();
+
+    setPayments(nextPayments);
+    setSales(nextSales);
+    setCustomers(nextCustomers);
+    setSuppliers(nextSuppliers);
+
+    if (!incomingForm.customerId && nextCustomers.length > 0) {
+      setIncomingForm((current) => ({ ...current, customerId: nextCustomers[0].id }));
+    }
+
+    if (!outgoingForm.supplierId && nextSuppliers.length > 0) {
+      setOutgoingForm((current) => ({ ...current, supplierId: nextSuppliers[0].id }));
+    }
+  };
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadData = () => {
-    setPayments(getPayments().reverse());
-    setCustomers(getCustomers());
-    setSuppliers(getSuppliers());
+  const formatCurrency = (amount: number) =>
+    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+
+  const formatDate = (date: string) => {
+    if (!date) return '-';
+    const parsed = new Date(`${date}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return date;
+    return parsed.toLocaleDateString('ar-EG');
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
+  const customerSales = useMemo(
+    () =>
+      sales.filter(
+        (sale) =>
+          (!incomingForm.customerId || sale.customerId === incomingForm.customerId) &&
+          sale.status !== 'cancelled' &&
+          sale.remaining > 0,
+      ),
+    [incomingForm.customerId, sales],
+  );
+
+  const selectedCustomer = customers.find((customer) => customer.id === incomingForm.customerId) || null;
+  const selectedSale = customerSales.find((sale) => sale.id === incomingForm.saleId) || null;
+
+  const selectedSchedules = selectedSale?.financing?.schedules?.length
+    ? selectedSale.financing.schedules
+    : selectedSale
+      ? [
+          {
+            id: `${selectedSale.id}-full`,
+            monthIndex: 1,
+            label: 'دفعة كاملة',
+            dueDate: selectedSale.date,
+            amount: selectedSale.total,
+            paidAmount: selectedSale.paid,
+            paidAt: selectedSale.paid > 0 ? selectedSale.date : undefined,
+            status: (selectedSale.remaining <= 0 ? 'paid' : selectedSale.paid > 0 ? 'partial' : 'unpaid') as InstallmentSchedule['status'],
+          },
+        ]
+      : [];
+
+  const selectedInstallment =
+    selectedSchedules.find((schedule) => schedule.id === incomingForm.installmentId) || null;
+
+  const selectedInstallmentRemaining = selectedInstallment
+    ? Number(Math.max(selectedInstallment.amount - selectedInstallment.paidAmount, 0).toFixed(2))
+    : 0;
+
+  const pendingSchedules = selectedSchedules.filter((schedule) => schedule.status !== 'paid');
+
+  const filteredPayments = payments.filter((payment) => {
+    const customerName =
+      customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '';
+    const supplierName =
+      suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '';
+    const invoiceNumber = payment.invoiceNumber || '';
+    const search = searchTerm.toLowerCase();
+
+    return (
+      payment.description.toLowerCase().includes(search) ||
+      customerName.toLowerCase().includes(search) ||
+      supplierName.toLowerCase().includes(search) ||
+      invoiceNumber.toLowerCase().includes(search)
+    );
+  });
+
+  const totalIn = payments.filter((payment) => payment.type === 'in').reduce((sum, payment) => sum + payment.amount, 0);
+  const totalOut = payments.filter((payment) => payment.type === 'out').reduce((sum, payment) => sum + payment.amount, 0);
+
+  const openModal = (type: PaymentType) => {
+    setPaymentType(type);
+    setShowModal(true);
+    setIncomingSubmitMode('save');
+    setMessage(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.referenceId || formData.amount <= 0) {
-      alert('يرجى ملء جميع الحقول المطلوبة');
+  const closeModal = () => {
+    setShowModal(false);
+  };
+
+  const printInstallmentReceipt = (params: {
+    payment: Payment;
+    sale: Sale;
+    installment: InstallmentSchedule | null;
+    customerName: string;
+    remainingInstallments: number;
+  }) => {
+    const { payment, sale, installment, customerName, remainingInstallments } = params;
+    const receiptNo = payment.id.slice(-8).toUpperCase();
+    const installmentLabel = installment?.label || 'القسط';
+    const dueDate = installment?.dueDate || '-';
+    const installmentAmount = installment?.amount ?? payment.amount;
+    const contractDate = sale.date;
+    const paymentDate = payment.date;
+    const companyName = settings.companyName || 'شركة المتحدة';
+    const companyPhone = settings.companyPhone || '';
+
+    const printWindow = window.open('', '_blank', 'width=420,height=760');
+    if (!printWindow) {
+      setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
       return;
     }
 
-    const payment: Omit<Payment, 'id' | 'createdAt'> = {
-      type: paymentType,
-      amount: formData.amount,
-      referenceId: formData.referenceId,
-      referenceType: paymentType === 'in' ? 'customer' : 'supplier',
-      description: formData.description,
-      date: new Date().toISOString(),
-      createdBy: 'current_user',
-    };
+    const html = `
+      <!doctype html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="utf-8" />
+        <title>إيصال سداد قسط</title>
+        <style>
+          @page { size: 80mm auto; margin: 0; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 0;
+            width: 80mm;
+            background: #fff;
+            color: #000;
+            font-family: Tahoma, Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.35;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          .receipt {
+            width: 72mm;
+            margin: 0 auto;
+            padding: 3mm 0 4mm;
+          }
+          .head {
+            text-align: center;
+            border: 1px solid #000;
+            padding: 2.5mm 2mm 2mm;
+            margin-bottom: 2.5mm;
+          }
+          .company { font-size: 14px; font-weight: 700; margin-bottom: 1mm; }
+          .title { font-size: 13px; font-weight: 800; margin-bottom: 1mm; }
+          .meta { font-size: 11px; margin-top: 1mm; }
+          .box { border: 1px solid #000; padding: 0; }
+          .row {
+            display: grid;
+            grid-template-columns: 26mm 1fr;
+            align-items: center;
+            min-height: 8.6mm;
+            border-bottom: 1px solid #000;
+          }
+          .row:last-child { border-bottom: 0; }
+          .label {
+            border-left: 1px solid #000;
+            font-weight: 700;
+            padding: 1.2mm 1.6mm;
+            font-size: 11.4px;
+          }
+          .value {
+            padding: 1.2mm 1.6mm;
+            font-weight: 600;
+            font-size: 11.4px;
+            overflow-wrap: anywhere;
+          }
+          .amount-row .value { font-size: 12.2px; font-weight: 800; }
+          .note {
+            margin-top: 2.5mm;
+            border-top: 1px dashed #000;
+            padding-top: 2mm;
+            font-size: 10.4px;
+            text-align: center;
+          }
+          .signatures {
+            margin-top: 4.5mm;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2mm;
+            font-size: 10.7px;
+            font-weight: 700;
+            text-align: center;
+          }
+          .sig {
+            border-top: 1px solid #000;
+            padding-top: 1.5mm;
+            min-height: 9mm;
+          }
+          @media print {
+            html, body { width: 80mm; }
+            .receipt { width: 72mm; margin: 0 auto; }
+          }
+        </style>
+      </head>
+      <body>
+        <main class="receipt">
+          <header class="head">
+            <div class="company">${companyName}</div>
+            <div class="title">إيصال سداد قسط</div>
+            <div class="meta">رقم الإيصال: ${receiptNo}</div>
+            <div class="meta">تاريخ الإصدار: ${formatDate(paymentDate)}</div>
+            ${companyPhone ? `<div class="meta">هاتف الشركة: ${companyPhone}</div>` : ''}
+          </header>
 
-    createPayment(payment);
-    loadData();
-    setShowModal(false);
-    setFormData({ referenceId: '', referenceName: '', description: '', amount: 0 });
+          <section class="box">
+            <div class="row"><div class="label">اسم العميل</div><div class="value">${customerName}</div></div>
+            <div class="row"><div class="label">رقم الفاتورة</div><div class="value">${sale.invoiceNumber}</div></div>
+            <div class="row"><div class="label">رقم القسط</div><div class="value">${installmentLabel}</div></div>
+            <div class="row amount-row"><div class="label">قيمة القسط</div><div class="value">${formatCurrency(installmentAmount)}</div></div>
+            <div class="row"><div class="label">المبلغ المسدد</div><div class="value">${formatCurrency(payment.amount)}</div></div>
+            <div class="row"><div class="label">الاستحقاق</div><div class="value">${formatDate(dueDate)}</div></div>
+            <div class="row"><div class="label">تاريخ السداد</div><div class="value">${formatDate(paymentDate)}</div></div>
+            <div class="row"><div class="label">تاريخ التعاقد</div><div class="value">${formatDate(contractDate)}</div></div>
+            <div class="row"><div class="label">الأقساط الباقية</div><div class="value">${remainingInstallments} قسط</div></div>
+          </section>
+
+          <div class="note">تم استلام المبلغ المذكور من العميل أعلاه.</div>
+
+          <section class="signatures">
+            <div class="sig">توقيع المستلم</div>
+            <div class="sig">توقيع واعتماد</div>
+          </section>
+        </main>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.onload = () => {
+      printWindow.print();
+    };
   };
 
-  const filteredPayments = payments.filter(payment =>
-    payment.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (paymentType === 'in'
-      ? customers.find(c => c.id === payment.referenceId)?.name || ''
-      : suppliers.find(s => s.id === payment.referenceId)?.name || ''
-    ).toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleIncomingSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
 
-  const totalIn = payments.filter(p => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
-  const totalOut = payments.filter(p => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+    if (!incomingForm.customerId || !incomingForm.saleId || !incomingForm.installmentId) {
+      setMessage({ type: 'error', text: 'اختر العميل والفاتورة والقسط المطلوب سداده.' });
+      return;
+    }
+
+    if (incomingForm.amount <= 0) {
+      setMessage({ type: 'error', text: 'أدخل مبلغًا صحيحًا للسداد.' });
+      return;
+    }
+
+    if (!selectedSale || !selectedInstallment) {
+      setMessage({ type: 'error', text: 'تعذر تحديد بيانات القسط المختار.' });
+      return;
+    }
+
+    if (incomingForm.amount > selectedInstallmentRemaining) {
+      setMessage({
+        type: 'error',
+        text: `المبلغ أكبر من المتبقي لهذا الشهر (${formatCurrency(selectedInstallmentRemaining)}).`,
+      });
+      return;
+    }
+
+    const createdPayment = createPayment({
+      type: 'in',
+      amount: incomingForm.amount,
+      referenceId: selectedSale.id,
+      referenceType: 'sale',
+      description:
+        incomingForm.description.trim() ||
+        `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
+      date: incomingForm.date,
+      createdBy: user?.name || 'مدير النظام',
+      customerId: incomingForm.customerId,
+      saleId: selectedSale.id,
+      installmentId: selectedInstallment.id,
+      invoiceNumber: selectedSale.invoiceNumber,
+      affectsCustomerBalance: true,
+    });
+
+    const updatedSale = getSales().find((sale) => sale.id === selectedSale.id) || selectedSale;
+    const updatedInstallment =
+      updatedSale.financing?.schedules?.find((schedule) => schedule.id === selectedInstallment.id) || null;
+    const remainingInstallments =
+      updatedSale.financing?.schedules?.filter((schedule) => schedule.status !== 'paid').length || 0;
+
+    loadData();
+    closeModal();
+
+    setIncomingForm((current) => ({
+      customerId: current.customerId,
+      saleId: '',
+      installmentId: '',
+      amount: 0,
+      date: today(),
+      description: '',
+    }));
+
+    if (incomingSubmitMode === 'save_print') {
+      printInstallmentReceipt({
+        payment: createdPayment,
+        sale: updatedSale,
+        installment: updatedInstallment,
+        customerName: selectedCustomer?.name || selectedSale.customerName,
+        remainingInstallments,
+      });
+    }
+
+    setIncomingSubmitMode('save');
+    setMessage({
+      type: 'success',
+      text: `تم تسجيل سداد ${selectedInstallment.label} وربطه بالفاتورة ${selectedSale.invoiceNumber}.`,
+    });
+  };
+
+  const handleOutgoingSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!outgoingForm.supplierId || outgoingForm.amount <= 0) {
+      setMessage({ type: 'error', text: 'اختر المورد وأدخل مبلغًا صحيحًا.' });
+      return;
+    }
+
+    createPayment({
+      type: 'out',
+      amount: outgoingForm.amount,
+      referenceId: outgoingForm.supplierId,
+      referenceType: 'supplier',
+      description: outgoingForm.description.trim() || 'دفعة للمورد',
+      date: outgoingForm.date,
+      createdBy: user?.name || 'مدير النظام',
+      supplierId: outgoingForm.supplierId,
+    });
+
+    loadData();
+    closeModal();
+
+    setOutgoingForm((current) => ({
+      supplierId: current.supplierId,
+      amount: 0,
+      date: today(),
+      description: '',
+    }));
+
+    setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
+  };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">إدارة المدفوعات</h2>
-          <p className="text-gray-500 text-sm mt-1">إجمالي {payments.length} حركة</p>
+          <h2 className="text-2xl font-bold text-slate-900">إدارة المدفوعات</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            إدارة المقبوضات والمدفوعات مع ربط ذكي بالفواتير والأقساط الشهرية.
+          </p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
-        >
-          <Plus size={20} />
-          <span>إضافة حركة مالية</span>
-        </button>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
-              <ArrowDownLeft size={24} className="text-green-600" />
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm">إجمالي الوارد</p>
-              <p className="text-xl font-bold text-green-600">{formatCurrency(totalIn)}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
-              <ArrowUpRight size={24} className="text-red-600" />
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm">إجمالي الصادر</p>
-              <p className="text-xl font-bold text-red-600">{formatCurrency(totalOut)}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center">
-              <Banknote size={24} className="text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm">صافي الحركة</p>
-              <p className="text-xl font-bold text-gray-800">{formatCurrency(totalIn - totalOut)}</p>
-            </div>
-          </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => openModal('in')}
+            className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700"
+          >
+            <Plus size={18} />
+            سداد عميل
+          </button>
+          <button
+            onClick={() => openModal('out')}
+            className="inline-flex items-center gap-2 rounded-2xl bg-rose-600 px-4 py-2 text-white hover:bg-rose-700"
+          >
+            <Plus size={18} />
+            دفعة مورد
+          </button>
         </div>
       </div>
 
-      {/* Type Tabs */}
-      <div className="flex gap-2 bg-white rounded-xl p-2 shadow-sm border border-gray-100 w-fit">
-        <button
-          onClick={() => setPaymentType('in')}
-          className={`px-6 py-2 rounded-lg transition-colors ${paymentType === 'in' ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+      {message && (
+        <div
+          className={`rounded-2xl border px-4 py-3 text-sm ${
+            message.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : 'border-red-200 bg-red-50 text-red-700'
+          }`}
         >
-          مدفوعات العملاء
-        </button>
-        <button
-          onClick={() => setPaymentType('out')}
-          className={`px-6 py-2 rounded-lg transition-colors ${paymentType === 'out' ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-        >
-          مدفوعات الموردين
-        </button>
+          {message.text}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <StatCard
+          icon={<ArrowDownLeft size={22} className="text-emerald-600" />}
+          label="إجمالي الوارد"
+          value={formatCurrency(totalIn)}
+          tone="emerald"
+        />
+        <StatCard
+          icon={<ArrowUpRight size={22} className="text-rose-600" />}
+          label="إجمالي الصادر"
+          value={formatCurrency(totalOut)}
+          tone="rose"
+        />
+        <StatCard
+          icon={<Banknote size={22} className="text-sky-600" />}
+          label="صافي الحركة"
+          value={formatCurrency(totalIn - totalOut)}
+          tone="sky"
+        />
       </div>
 
-      {/* Search */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <div className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm">
         <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="بحث..."
+            placeholder="بحث بالعميل أو الفاتورة أو الوصف"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+            onChange={(event) => setSearchTerm(event.target.value)}
+            className="input-ui pr-10"
           />
         </div>
       </div>
 
-      {/* Payments Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className={paymentType === 'in' ? 'bg-green-50' : 'bg-red-50'}>
+          <table className="w-full min-w-[950px]">
+            <thead className="bg-slate-100 text-slate-700">
               <tr>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الوصف</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">النوع</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">التاريخ</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">المبلغ</th>
+                <th className="px-4 py-4 text-right text-sm font-bold">الوصف</th>
+                <th className="px-4 py-4 text-right text-sm font-bold">الجهة</th>
+                <th className="px-4 py-4 text-right text-sm font-bold">الفاتورة / القسط</th>
+                <th className="px-4 py-4 text-right text-sm font-bold">التاريخ</th>
+                <th className="px-4 py-4 text-right text-sm font-bold">المبلغ</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredPayments.map(payment => (
-                <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-4">
-                    <p className="font-medium text-gray-800">{payment.description}</p>
-                    <p className="text-xs text-gray-500">
-                      {payment.type === 'in'
-                        ? customers.find(c => c.id === payment.referenceId)?.name
-                        : suppliers.find(s => s.id === payment.referenceId)?.name}
-                    </p>
-                  </td>
-                  <td className="px-4 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      payment.type === 'in' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                    }`}>
-                      {payment.type === 'in' ? 'وارد' : 'صادر'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4 text-gray-600">{new Date(payment.date).toLocaleDateString('ar-EG')}</td>
-                  <td className="px-4 py-4">
-                    <span className={`font-bold ${payment.type === 'in' ? 'text-green-600' : 'text-red-600'}`}>
-                      {payment.type === 'in' ? '+' : '-'} {formatCurrency(payment.amount)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+            <tbody className="divide-y divide-slate-100">
+              {filteredPayments.map((payment) => {
+                const customerName =
+                  customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
+                const supplierName =
+                  suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '-';
+
+                const linkedSchedule = payment.saleId
+                  ? sales
+                      .find((sale) => sale.id === payment.saleId)
+                      ?.financing?.schedules?.find((schedule) => schedule.id === payment.installmentId)
+                  : null;
+
+                return (
+                  <tr key={payment.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-4">
+                      <p className="font-medium text-slate-800">{payment.description}</p>
+                      <p className="mt-1 text-xs text-slate-500">{payment.type === 'in' ? 'وارد' : 'صادر'}</p>
+                    </td>
+                    <td className="px-4 py-4 text-sm text-slate-700">
+                      {payment.type === 'in' ? customerName : supplierName}
+                    </td>
+                    <td className="px-4 py-4">
+                      <div className="space-y-1 text-sm">
+                        <p className="font-semibold text-slate-700">{payment.invoiceNumber || '-'}</p>
+                        <p className="text-xs text-slate-500">{linkedSchedule?.label || '-'}</p>
+                      </div>
+                    </td>
+                    <td className="px-4 py-4 text-sm text-slate-600">{payment.date}</td>
+                    <td className="px-4 py-4">
+                      <span className={`font-bold ${payment.type === 'in' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {payment.type === 'in' ? '+' : '-'} {formatCurrency(payment.amount)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-            <div className={`p-6 border-b border-gray-100 ${paymentType === 'in' ? 'bg-green-600' : 'bg-red-600'} rounded-t-2xl`}>
-              <h3 className="text-xl font-bold text-white">
-                {paymentType === 'in' ? 'إضافة مدفوع من عميل' : 'إضافة مدفوع لمورد'}
-              </h3>
+        <div className="fixed inset-0 z-50 bg-black/45 p-3 sm:p-5">
+          <div className="flex min-h-full items-center justify-center">
+            <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[30px] bg-white shadow-2xl">
+              <div className={`px-6 py-5 text-white ${paymentType === 'in' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                <h3 className="text-xl font-bold">{paymentType === 'in' ? 'تسجيل سداد عميل' : 'تسجيل دفعة مورد'}</h3>
+                <p className="mt-1 text-sm text-white/85">
+                  {paymentType === 'in'
+                    ? 'اختر العميل والفاتورة والقسط، ثم احفظ السداد مع ربطه بالشهر الصحيح.'
+                    : 'سجل دفعة المورد بسرعة مع تفاصيل أساسية فقط.'}
+                </p>
+              </div>
+
+              <div className="overflow-y-auto">
+                {paymentType === 'in' ? (
+                  <form onSubmit={handleIncomingSubmit} className="space-y-6 p-6">
+                    <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+                      <section className="space-y-5">
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <Field label="العميل">
+                            <select
+                              value={incomingForm.customerId}
+                              onChange={(event) =>
+                                setIncomingForm({
+                                  customerId: event.target.value,
+                                  saleId: '',
+                                  installmentId: '',
+                                  amount: 0,
+                                  date: incomingForm.date,
+                                  description: '',
+                                })
+                              }
+                              className="input-ui"
+                            >
+                              <option value="">اختر العميل</option>
+                              {customers.map((customer) => (
+                                <option key={customer.id} value={customer.id}>
+                                  {customer.name}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+
+                          <Field label="الفاتورة">
+                            <select
+                              value={incomingForm.saleId}
+                              onChange={(event) =>
+                                setIncomingForm((current) => ({
+                                  ...current,
+                                  saleId: event.target.value,
+                                  installmentId: '',
+                                  amount: 0,
+                                  description: '',
+                                }))
+                              }
+                              className="input-ui"
+                            >
+                              <option value="">اختر الفاتورة</option>
+                              {customerSales.map((sale) => (
+                                <option key={sale.id} value={sale.id}>
+                                  {sale.invoiceNumber} - المتبقي {formatCurrency(sale.remaining)}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+
+                          <Field label="الشهر / القسط">
+                            <select
+                              value={incomingForm.installmentId}
+                              onChange={(event) => {
+                                const installment = selectedSchedules.find((schedule) => schedule.id === event.target.value);
+                                const remainingAmount = installment
+                                  ? Number(Math.max(installment.amount - installment.paidAmount, 0).toFixed(2))
+                                  : 0;
+
+                                setIncomingForm((current) => ({
+                                  ...current,
+                                  installmentId: event.target.value,
+                                  amount: remainingAmount,
+                                  description:
+                                    installment && selectedSale
+                                      ? `سداد ${installment.label} من الفاتورة ${selectedSale.invoiceNumber}`
+                                      : '',
+                                }));
+                              }}
+                              className="input-ui"
+                            >
+                              <option value="">اختر الشهر</option>
+                              {pendingSchedules.map((schedule) => (
+                                <option key={schedule.id} value={schedule.id}>
+                                  {schedule.label} - {schedule.dueDate} - المتبقي{' '}
+                                  {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+
+                          <Field label="تاريخ السداد">
+                            <input
+                              type="date"
+                              value={incomingForm.date}
+                              onChange={(event) => setIncomingForm((current) => ({ ...current, date: event.target.value }))}
+                              className="input-ui"
+                            />
+                          </Field>
+
+                          <Field label="المبلغ المدفوع">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={incomingForm.amount}
+                              onChange={(event) =>
+                                setIncomingForm((current) => ({ ...current, amount: Number(event.target.value) || 0 }))
+                              }
+                              className="input-ui"
+                            />
+                          </Field>
+
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="flex items-center gap-2 text-slate-700">
+                              <CalendarDays size={16} />
+                              <span className="text-sm font-bold">مؤشر سريع</span>
+                            </div>
+                            <div className="mt-3 space-y-2 text-sm">
+                              <QuickInfo label="الأقساط المفتوحة" value={String(pendingSchedules.length)} />
+                              <QuickInfo
+                                label="إجمالي المتبقي"
+                                value={selectedSale ? formatCurrency(selectedSale.remaining) : '-'}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <Field label="الوصف">
+                          <input
+                            type="text"
+                            value={incomingForm.description}
+                            onChange={(event) => setIncomingForm((current) => ({ ...current, description: event.target.value }))}
+                            className="input-ui"
+                            placeholder="سيُنشأ وصف مناسب تلقائيًا ويمكن تعديله"
+                          />
+                        </Field>
+                      </section>
+
+                      <aside className="space-y-4">
+                        <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex items-center gap-2 text-slate-800">
+                            <CreditCard size={16} />
+                            <h4 className="font-bold">ملخص السداد</h4>
+                          </div>
+                          <div className="mt-4 space-y-2">
+                            <QuickInfo label="العميل" value={selectedCustomer?.name || '-'} />
+                            <QuickInfo label="الفاتورة" value={selectedSale?.invoiceNumber || '-'} />
+                            <QuickInfo label="القسط" value={selectedInstallment?.label || '-'} />
+                            <QuickInfo label="تاريخ الاستحقاق" value={selectedInstallment?.dueDate || '-'} />
+                            <QuickInfo
+                              label="المدفوع سابقًا"
+                              value={selectedInstallment ? formatCurrency(selectedInstallment.paidAmount) : '-'}
+                            />
+                            <QuickInfo
+                              label="المتبقي لهذا الشهر"
+                              value={selectedInstallment ? formatCurrency(selectedInstallmentRemaining) : '-'}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rounded-[24px] border border-slate-200 bg-white p-4">
+                          <div className="mb-3">
+                            <h4 className="font-bold text-slate-800">حالة الأقساط</h4>
+                            <p className="text-xs text-slate-500">عرض مختصر لتوفير المساحة داخل نافذة السداد.</p>
+                          </div>
+
+                          {selectedSchedules.length > 0 ? (
+                            <div className="max-h-[320px] overflow-y-auto rounded-2xl border border-slate-100">
+                              <table className="w-full text-sm">
+                                <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                                  <tr>
+                                    <th className="px-3 py-3 text-right font-bold">القسط</th>
+                                    <th className="px-3 py-3 text-right font-bold">الاستحقاق</th>
+                                    <th className="px-3 py-3 text-right font-bold">المتبقي</th>
+                                    <th className="px-3 py-3 text-right font-bold">الحالة</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {selectedSchedules.map((schedule) => (
+                                    <tr
+                                      key={schedule.id}
+                                      className={incomingForm.installmentId === schedule.id ? 'bg-emerald-50/70' : 'bg-white'}
+                                    >
+                                      <td className="px-3 py-3 font-semibold text-slate-800">{schedule.label}</td>
+                                      <td className="px-3 py-3 text-slate-600">{schedule.dueDate}</td>
+                                      <td className="px-3 py-3 text-slate-600">
+                                        {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
+                                      </td>
+                                      <td className="px-3 py-3">
+                                        <StatusBadge status={schedule.status} />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-sm text-slate-500">اختر فاتورة لعرض جدول الأشهر الخاصة بها.</p>
+                          )}
+                        </div>
+                      </aside>
+                    </div>
+
+                    <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={closeModal}
+                        className="rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50 sm:w-48"
+                      >
+                        إلغاء
+                      </button>
+                      <button
+                        type="submit"
+                        onClick={() => setIncomingSubmitMode('save')}
+                        className="rounded-2xl bg-emerald-600 px-4 py-3 font-bold text-white hover:bg-emerald-700 sm:w-56"
+                      >
+                        حفظ السداد
+                      </button>
+                      <button
+                        type="submit"
+                        onClick={() => setIncomingSubmitMode('save_print')}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-sky-600 px-4 py-3 font-bold text-white hover:bg-sky-700 sm:w-56"
+                      >
+                        <Printer size={17} />
+                        حفظ وطباعة
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleOutgoingSubmit} className="space-y-6 p-6">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field label="المورد">
+                        <select
+                          value={outgoingForm.supplierId}
+                          onChange={(event) => setOutgoingForm((current) => ({ ...current, supplierId: event.target.value }))}
+                          className="input-ui"
+                        >
+                          <option value="">اختر المورد</option>
+                          {suppliers.map((supplier) => (
+                            <option key={supplier.id} value={supplier.id}>
+                              {supplier.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="تاريخ الدفع">
+                        <input
+                          type="date"
+                          value={outgoingForm.date}
+                          onChange={(event) => setOutgoingForm((current) => ({ ...current, date: event.target.value }))}
+                          className="input-ui"
+                        />
+                      </Field>
+                      <Field label="المبلغ">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={outgoingForm.amount}
+                          onChange={(event) => setOutgoingForm((current) => ({ ...current, amount: Number(event.target.value) || 0 }))}
+                          className="input-ui"
+                        />
+                      </Field>
+                      <Field label="الوصف">
+                        <input
+                          type="text"
+                          value={outgoingForm.description}
+                          onChange={(event) => setOutgoingForm((current) => ({ ...current, description: event.target.value }))}
+                          className="input-ui"
+                          placeholder="مثال: دفعة توريد أو سداد فاتورة شراء"
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={closeModal}
+                        className="rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50 sm:w-48"
+                      >
+                        إلغاء
+                      </button>
+                      <button
+                        type="submit"
+                        className="rounded-2xl bg-rose-600 px-4 py-3 font-bold text-white hover:bg-rose-700 sm:w-56"
+                      >
+                        حفظ الدفعة
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {paymentType === 'in' ? 'العميل' : 'المورد'}
-                </label>
-                <select
-                  value={formData.referenceId}
-                  onChange={(e) => {
-                    const ref = paymentType === 'in'
-                      ? customers.find(c => c.id === e.target.value)
-                      : suppliers.find(s => s.id === e.target.value);
-                    setFormData({ ...formData, referenceId: e.target.value, referenceName: ref?.name || '' });
-                  }}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required
-                >
-                  <option value="">اختر {paymentType === 'in' ? 'العميل' : 'المورد'}</option>
-                  {(paymentType === 'in' ? customers : suppliers).map(ref => (
-                    <option key={ref.id} value={ref.id}>{ref.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">المبلغ</label>
-                <input
-                  type="number"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">الوصف</label>
-                <input
-                  type="text"
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required
-                />
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
-                  إلغاء
-                </button>
-                <button type="submit" className={`flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 ${paymentType === 'in' ? 'bg-green-600' : 'bg-red-600'}`}>
-                  حفظ
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+function StatCard({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tone: 'emerald' | 'rose' | 'sky';
+}) {
+  const toneClass = {
+    emerald: 'border-emerald-100 bg-emerald-50',
+    rose: 'border-rose-100 bg-rose-50',
+    sky: 'border-sky-100 bg-sky-50',
+  }[tone];
+
+  return (
+    <div className={`rounded-[24px] border p-5 ${toneClass}`}>
+      <div className="flex items-center gap-4">
+        <div className="rounded-2xl bg-white p-3 shadow-sm">{icon}</div>
+        <div>
+          <p className="text-sm text-slate-500">{label}</p>
+          <p className="mt-1 text-xl font-bold text-slate-800">{value}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-700">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function QuickInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-left font-semibold text-slate-800">{value}</span>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: InstallmentSchedule['status'] }) {
+  const toneClass = {
+    paid: 'bg-emerald-100 text-emerald-700',
+    partial: 'bg-amber-100 text-amber-700',
+    unpaid: 'bg-rose-100 text-rose-700',
+  }[status];
+
+  const label = {
+    paid: 'مدفوع',
+    partial: 'جزئي',
+    unpaid: 'غير مدفوع',
+  }[status];
+
+  return <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${toneClass}`}>{label}</span>;
 }

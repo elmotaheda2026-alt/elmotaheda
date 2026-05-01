@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Menu, Bell, Search, User } from 'lucide-react';
+import { Bell, Menu, Search, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getNotifications } from '../lib/storage';
@@ -10,96 +10,73 @@ interface HeaderProps {
 }
 
 export default function Header({ onMenuClick, title }: HeaderProps) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [showNotifications, setShowNotifications] = useState(false);
   const notifications = getNotifications().slice(0, 5);
-
-  const unreadCount = notifications.filter(n => !n.isRead).length;
+  const unreadCount = notifications.filter((notification) => !notification.isRead).length;
 
   return (
-    <header className="sticky top-0 z-30 bg-white shadow-sm border-b border-gray-200">
-      <div className="flex items-center justify-between px-4 py-3">
-        {/* Right Section */}
+    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+      <div className="mx-auto flex w-full max-w-[1720px] items-center justify-between px-4 py-3 md:px-6 xl:px-8">
         <div className="flex items-center gap-4">
-          <button
-            onClick={onMenuClick}
-            className="lg:hidden p-2 rounded-lg hover:bg-gray-100"
-          >
-            <Menu size={24} />
+          <button onClick={onMenuClick} className="rounded-xl p-2 hover:bg-slate-100 lg:hidden">
+            <Menu size={18} />
           </button>
-          <h1 className="text-xl font-bold text-gray-800">{title || 'لوحة التحكم'}</h1>
+          <div>
+            <h1 className="text-xl font-bold text-slate-800">{title || 'لوحة التحكم'}</h1>
+            <p className="hidden text-xs text-slate-500 md:block">واجهة محسنة للديسكتوب مع تنظيم أوضح للمحتوى</p>
+          </div>
         </div>
 
-        {/* Left Section */}
         <div className="flex items-center gap-3">
-          {/* Search */}
-          <div className="hidden md:flex items-center bg-gray-100 rounded-lg px-3 py-2">
-            <Search size={18} className="text-gray-400 ml-2" />
-            <input
-              type="text"
-              placeholder="بحث..."
-              className="bg-transparent outline-none text-sm w-48"
-            />
+          <div className="hidden items-center rounded-full border border-slate-200 bg-slate-50 px-4 py-2 md:flex">
+            <Search size={16} className="ml-2 text-slate-400" />
+            <input type="text" placeholder="بحث سريع" className="w-48 bg-transparent text-sm outline-none xl:w-64" />
           </div>
 
-          {/* Notifications */}
           <div className="relative">
-            <button
-              onClick={() => setShowNotifications(!showNotifications)}
-              className="relative p-2 rounded-lg hover:bg-gray-100"
-            >
-              <Bell size={22} className="text-gray-600" />
+            <button onClick={() => setShowNotifications((current) => !current)} className="relative rounded-xl p-2 hover:bg-slate-100">
+              <Bell size={18} className="text-slate-600" />
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
+                <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
                   {unreadCount}
                 </span>
               )}
             </button>
 
             {showNotifications && (
-              <div className="absolute left-0 top-full mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
-                <div className="p-4 border-b border-gray-100">
-                  <h3 className="font-bold text-gray-800">الإشعارات</h3>
+              <div className="absolute left-0 top-full z-50 mt-2 w-80 rounded-2xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-100 p-4">
+                  <h3 className="font-bold text-slate-800">الإشعارات</h3>
                 </div>
-                <div className="max-h-64 overflow-y-auto">
+                <div className="max-h-72 overflow-y-auto">
                   {notifications.length === 0 ? (
-                    <p className="p-4 text-center text-gray-500 text-sm">لا توجد إشعارات</p>
+                    <p className="p-4 text-center text-sm text-slate-500">لا توجد إشعارات حاليًا</p>
                   ) : (
-                    notifications.map(notif => (
-                      <div
-                        key={notif.id}
-                        className={`p-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer ${
-                          !notif.isRead ? 'bg-blue-50' : ''
-                        }`}
+                    notifications.map((notification) => (
+                      <button
+                        key={notification.id}
                         onClick={() => navigate('/notifications')}
+                        className={`block w-full border-b border-slate-50 p-4 text-right hover:bg-slate-50 ${!notification.isRead ? 'bg-sky-50' : ''}`}
                       >
-                        <p className="text-sm font-medium text-gray-800">{notif.title}</p>
-                        <p className="text-xs text-gray-500 mt-1">{notif.message}</p>
-                      </div>
+                        <p className="text-sm font-semibold text-slate-800">{notification.title}</p>
+                        <p className="mt-1 text-xs text-slate-500">{notification.message}</p>
+                      </button>
                     ))
                   )}
-                </div>
-                <div className="p-3 border-t border-gray-100">
-                  <button
-                    onClick={() => navigate('/notifications')}
-                    className="w-full text-center text-sm text-indigo-600 hover:text-indigo-700"
-                  >
-                    عرض كل الإشعارات
-                  </button>
                 </div>
               </div>
             )}
           </div>
 
-          {/* User Menu */}
-          <div className="flex items-center gap-3 pr-3 border-r border-gray-200">
-            <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
-              <User size={20} className="text-indigo-600" />
+          <div className="flex items-center gap-3 border-r border-slate-200 pr-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-100">
+              <User size={16} className="text-sky-600" />
             </div>
             <div className="hidden sm:block">
-              <p className="text-sm font-medium text-gray-800">{user?.name}</p>
-              <p className="text-xs text-gray-500">{user?.role === 'admin' ? 'مدير' : 'مستخدم'}</p>
+              <p className="text-sm font-semibold text-slate-800">{user?.name}</p>
+              <p className="text-xs text-slate-500">{user?.role === 'admin' ? 'مدير النظام' : 'مستخدم'}</p>
             </div>
           </div>
         </div>

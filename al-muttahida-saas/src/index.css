@@ -28,6 +28,10 @@
   body {
     direction: rtl;
     text-align: right;
+    background: radial-gradient(circle at top, #f8fafc 0%, #eef2f7 55%, #e8eef5 100%);
+    color: #0f172a;
+    font-size: 16.5px;
+    line-height: 1.6;
   }
 
   /* Custom scrollbar */
@@ -52,6 +56,11 @@
 }
 
 @layer utilities {
+  .input-ui {
+    @apply w-full rounded-2xl border border-slate-300 bg-white px-4 py-3.5 text-base text-slate-800 outline-none transition;
+    @apply focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100;
+  }
+
   .line-clamp-2 {
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -88,6 +97,10 @@
   margin-right: 16rem;
 }
 
+[dir="rtl"] .mr-72 {
+  margin-right: 18rem;
+}
+
 [dir="rtl"] .ml-64 {
   margin-left: 16rem;
 }
@@ -95,14 +108,17 @@
 /* Table RTL fixes */
 table {
   direction: rtl;
+  font-size: 1rem;
 }
 
 th {
   text-align: right;
+  white-space: nowrap;
 }
 
 td {
   text-align: right;
+  vertical-align: middle;
 }
 
 /* Input RTL fixes */
@@ -110,14 +126,34 @@ input, select, textarea {
   text-align: right;
 }
 
+section[class*="rounded"], div[class*="rounded-[24px]"], div[class*="rounded-[26px]"], div[class*="rounded-[28px]"] {
+  scroll-margin-top: 7rem;
+}
+
+@media (min-width: 1280px) {
+  table {
+    font-size: 0.95rem;
+  }
+
+  th, td {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+}
+
 /* Print styles */
 @media print {
+  @page {
+    margin: 0;
+  }
+
   .no-print {
     display: none !important;
   }
 
   body {
     background: white !important;
+    padding: 1cm;
   }
 
   .shadow-sm, .shadow-md, .shadow-lg {

@@ -1,5 +1,3 @@
-// Types for Al Muttahida SaaS ERP System
-
 export interface User {
   id: string;
   name: string;
@@ -37,7 +35,7 @@ export interface Customer {
   age: number;
   pensionDate: string;
   balance: number;
-  balanceType: 'debtor' | 'creditor'; // مدين / دائن
+  balanceType: 'debtor' | 'creditor';
   notes?: string;
   image?: string;
   guarantors: [Guarantor | null, Guarantor | null, Guarantor | null];
@@ -51,7 +49,7 @@ export interface Supplier {
   phone: string;
   email?: string;
   address: string;
-  balance: number; // رصيد المورد
+  balance: number;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -62,17 +60,54 @@ export interface Product {
   name: string;
   barcode: string;
   category: string;
-  unit: string; // وحدة القياس
+  fulfillmentType: 'stocked' | 'on_demand';
+  unit: string;
   purchasePrice: number;
   salePrice: number;
   discount: number;
   tax: number;
-  quantity: number; // الكمية في المخزون
-  minQuantity: number; // الحد الأدنى للمخزون
+  quantity: number;
+  minQuantity: number;
   image?: string;
   description?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SaleItem {
+  productId: string;
+  productName: string;
+  barcode: string;
+  quantity: number;
+  unitPrice: number;
+  discount: number;
+  tax: number;
+  total: number;
+}
+
+export interface InstallmentSchedule {
+  id: string;
+  monthIndex: number;
+  label: string;
+  dueDate: string;
+  amount: number;
+  paidAmount: number;
+  paidAt?: string;
+  status: 'paid' | 'partial' | 'unpaid';
+}
+
+export interface SaleFinancing {
+  paymentMethod: 'cash' | 'card' | 'transfer' | 'installment';
+  manualInvoiceRef?: string;
+  salesRepId?: string;
+  salesRepName?: string;
+  commissionRate?: number;
+  commissionAmount?: number;
+  installmentMonths?: number;
+  installmentStartDate?: string;
+  upfrontAmount?: number;
+  monthlyInstallmentAmount?: number;
+  schedules?: InstallmentSchedule[];
 }
 
 export interface Sale {
@@ -92,9 +127,10 @@ export interface Sale {
   notes?: string;
   createdBy: string;
   createdAt: string;
+  financing?: SaleFinancing;
 }
 
-export interface SaleItem {
+export interface PurchaseItem {
   productId: string;
   productName: string;
   barcode: string;
@@ -124,27 +160,22 @@ export interface Purchase {
   createdAt: string;
 }
 
-export interface PurchaseItem {
-  productId: string;
-  productName: string;
-  barcode: string;
-  quantity: number;
-  unitPrice: number;
-  discount: number;
-  tax: number;
-  total: number;
-}
-
 export interface Payment {
   id: string;
-  type: 'in' | 'out'; // in = من عميل، out = لمورد
+  type: 'in' | 'out';
   amount: number;
-  referenceId: string; // invoice id or customer/supplier id
+  referenceId: string;
   referenceType: 'customer' | 'supplier' | 'sale' | 'purchase' | 'other';
   description: string;
   date: string;
   createdBy: string;
   createdAt: string;
+  customerId?: string;
+  supplierId?: string;
+  saleId?: string;
+  installmentId?: string;
+  invoiceNumber?: string;
+  affectsCustomerBalance?: boolean;
 }
 
 export interface Expense {
@@ -185,7 +216,7 @@ export interface SalesRep {
   email?: string;
   address: string;
   area: string;
-  target: number; // الهدف الشهري
+  target: number;
   achieved: number;
   commission: number;
   isActive: boolean;

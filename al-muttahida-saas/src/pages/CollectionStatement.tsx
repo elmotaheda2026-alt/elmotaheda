@@ -1,437 +1,773 @@
-import React, { useState, useEffect } from 'react';
-import { FileText, Search, Download, Printer, User, Phone, Calendar, DollarSign, Users, Filter } from 'lucide-react';
-import { Customer, Sale, Payment } from '../types';
-import { getCustomers, getSales, getPayments } from '../lib/storage';
+import React, { useEffect, useMemo, useState } from 'react';
+import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield } from 'lucide-react';
+import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
+import { getCustomers, getSales, getSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 
-interface CustomerStatement {
+interface CollectionInvoiceView {
+  saleId: string;
   customerId: string;
+  invoiceNumber: string;
   customerName: string;
   customerPhone: string;
   customerAddress: string;
-  totalInvoice: number;
-  totalPaid: number;
+  saleDate: string;
+  total: number;
+  paid: number;
   remaining: number;
-  invoices: InvoiceDetail[];
+  paymentMethod: string;
+  salesRepId?: string;
+  salesRepName?: string;
+  schedules: InstallmentSchedule[];
+  guarantors: (Guarantor | null)[];
 }
 
-interface InvoiceDetail {
+interface DueCustomerRow {
+  saleId: string;
   invoiceNumber: string;
-  invoiceDate: string;
-  invoiceTotal: number;
-  amountPaid: number;
-  remaining: number;
-  dueDate?: string;
-  status: 'paid' | 'partial' | 'unpaid';
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  installmentLabel: string;
+  dueDate: string;
+  installmentAmount: number;
+  remainingAmount: number;
+  status: InstallmentSchedule['status'];
+  paidAt?: string;
+  guarantors: (Guarantor | null)[];
+  salesRepId?: string;
+  salesRepName?: string;
+}
+
+const today = () => new Date().toISOString().split('T')[0];
+
+function addDays(dateStr: string, days: number): string {
+  const date = new Date(`${dateStr}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().split('T')[0];
 }
 
 export default function CollectionStatement() {
   const { settings } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [statements, setStatements] = useState<CustomerStatement[]>([]);
+  const [activeTab, setActiveTab] = useState<'due' | 'invoices'>('due');
+  
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCustomer, setSelectedCustomer] = useState<string>('all');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [showOnlyDue, setShowOnlyDue] = useState(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState('all');
+  const [showOnlyDue, setShowOnlyDue] = useState(true);
+  
+  const [dueFromDate, setDueFromDate] = useState(today());
+  const [dueToDate, setDueToDate] = useState(addDays(today(), 30));
+  const [selectedSalesRepId, setSelectedSalesRepId] = useState('all');
+  const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
+  const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
 
   useEffect(() => {
-    loadData();
+    setCustomers(getCustomers());
+    setSales(getSales().filter((sale) => sale.status !== 'cancelled').slice().reverse());
+    setSalesReps(getSalesReps());
   }, []);
 
-  const loadData = () => {
-    const c = getCustomers();
-    const s = getSales().filter(sale => sale.status !== 'cancelled');
-    const p = getPayments();
-    setCustomers(c);
-    setSales(s);
-    setPayments(p);
-    generateStatements(c, s, p);
-  };
+  const customerMap = useMemo(() => {
+    return new Map(customers.map((customer) => [customer.id, customer]));
+  }, [customers]);
 
-  const generateStatements = (cust: Customer[], sal: Sale[], pay: Payment[]) => {
-    const filteredSales = sal.filter(s => {
-      if (selectedCustomer !== 'all' && s.customerId !== selectedCustomer) return false;
-      if (dateFrom && s.date < dateFrom) return false;
-      if (dateTo && s.date > dateTo) return false;
-      return true;
-    });
+  const salesRepMap = useMemo(() => {
+    return new Map(salesReps.map((rep) => [rep.id, rep.name]));
+  }, [salesReps]);
 
-    const customerStatements: CustomerStatement[] = cust.map(customer => {
-      const customerSales = filteredSales.filter(s => s.customerId === customer.id);
-      const customerPayments = pay.filter(p => p.referenceId === customer.id && p.type === 'in');
+  const rows = useMemo<CollectionInvoiceView[]>(
+    () =>
+      sales.map((sale) => {
+        const customer = customerMap.get(sale.customerId);
+        const salesRepId = sale.financing?.salesRepId;
+        const salesRepName = sale.financing?.salesRepName || (salesRepId ? salesRepMap.get(salesRepId) : undefined);
+        
+        const schedules = sale.financing?.schedules?.length
+          ? sale.financing.schedules
+          : [
+              {
+                id: `${sale.id}-single`,
+                monthIndex: 1,
+                label: 'دفعة واحدة',
+                dueDate: sale.date,
+                amount: sale.total,
+                paidAmount: sale.paid,
+                paidAt: sale.paid > 0 ? sale.date : undefined,
+                status: (sale.remaining <= 0 ? 'paid' : sale.paid > 0 ? 'partial' : 'unpaid') as InstallmentSchedule['status'],
+              },
+            ];
 
-      const totalInvoice = customerSales.reduce((sum: number, s: Sale) => sum + s.total, 0);
-      const totalPaid = customerPayments.reduce((sum: number, p: Payment) => sum + p.amount, 0);
-      const remaining = totalInvoice - totalPaid;
-
-      const invoices: InvoiceDetail[] = customerSales.map(sale => {
-        const paidForThisInvoice = customerPayments
-          .filter(p => p.referenceId === sale.id)
-          .reduce((sum, p) => sum + p.amount, 0) || (sale.total - sale.remaining);
-
-        let status: 'paid' | 'partial' | 'unpaid' = 'unpaid';
-        if (paidForThisInvoice >= sale.total) status = 'paid';
-        else if (paidForThisInvoice > 0) status = 'partial';
+        const customerAddress = customer
+          ? [customer.address, customer.region, customer.city, customer.governorate].filter(Boolean).join(' - ')
+          : '-';
 
         return {
+          saleId: sale.id,
+          customerId: sale.customerId,
           invoiceNumber: sale.invoiceNumber,
-          invoiceDate: sale.date,
-          invoiceTotal: sale.total,
-          amountPaid: paidForThisInvoice,
-          remaining: sale.total - paidForThisInvoice,
-          dueDate: calculateDueDate(sale.date),
-          status,
+          customerName: sale.customerName,
+          customerPhone: customer?.phone || '-',
+          customerAddress,
+          saleDate: sale.date,
+          total: sale.total,
+          paid: sale.paid,
+          remaining: sale.remaining,
+          paymentMethod: sale.financing?.paymentMethod || 'cash',
+          salesRepId,
+          salesRepName,
+          schedules,
+          guarantors: customer?.guarantors || [],
+          lastPaymentDate: schedules
+            .filter((s) => s.paidAt)
+            .reduce((latest, s) => (!latest || s.paidAt! > latest ? s.paidAt : latest), undefined as string | undefined),
         };
+      }),
+    [customerMap, sales, salesRepMap],
+  );
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      if (selectedCustomerId !== 'all' && row.customerId !== selectedCustomerId) return false;
+      
+      // Filter by sales rep removed from here as per user request to keep it only for Due tab
+
+      if (showOnlyDue && row.remaining <= 0) return false;
+
+      const search = searchTerm.trim().toLowerCase();
+      if (!search) return true;
+
+      return (
+        row.customerName.toLowerCase().includes(search) ||
+        row.invoiceNumber.toLowerCase().includes(search) ||
+        row.customerPhone.includes(search) ||
+        row.customerAddress.toLowerCase().includes(search)
+      );
+    });
+  }, [rows, searchTerm, selectedCustomerId, showOnlyDue]);
+
+  const dueRows = useMemo<DueCustomerRow[]>(() => {
+    if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) return [];
+
+    const result: DueCustomerRow[] = [];
+
+    rows.forEach((row) => {
+      row.schedules.forEach((schedule) => {
+        if (schedule.status === 'paid') return;
+        if (schedule.dueDate < dueFromDate || schedule.dueDate > dueToDate) return;
+
+        result.push({
+          saleId: row.saleId,
+          invoiceNumber: row.invoiceNumber,
+          customerName: row.customerName,
+          customerPhone: row.customerPhone,
+          customerAddress: row.customerAddress,
+          installmentLabel: schedule.label,
+          dueDate: schedule.dueDate,
+          installmentAmount: schedule.amount,
+          remainingAmount: Math.max(schedule.amount - schedule.paidAmount, 0),
+          status: schedule.status,
+          paidAt: schedule.paidAt,
+          lastPaymentDate: row.lastPaymentDate,
+          guarantors: customerMap.get(row.customerId)?.guarantors || [],
+          salesRepId: row.salesRepId,
+          salesRepName: row.salesRepName,
+        });
       });
-
-      return {
-        customerId: customer.id,
-        customerName: customer.name,
-        customerPhone: customer.phone,
-        customerAddress: customer.address,
-        totalInvoice,
-        totalPaid,
-        remaining,
-        invoices,
-      };
-    }).filter(stmt => {
-      if (showOnlyDue && stmt.remaining <= 0) return false;
-      if (searchTerm) {
-        return stmt.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-               stmt.customerPhone.includes(searchTerm);
-      }
-      return true;
     });
 
-    setStatements(customerStatements.sort((a, b) => b.remaining - a.remaining));
-  };
-
-  const calculateDueDate = (invoiceDate: string): string => {
-    const date = new Date(invoiceDate);
-    date.setDate(date.getDate() + 30);
-    return date.toISOString().split('T')[0];
-  };
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('ar-EG', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const handleFilter = () => {
-    const cust = getCustomers();
-    const sal = getSales().filter(s => s.status !== 'cancelled');
-    const pay = getPayments();
-    generateStatements(cust, sal, pay);
-  };
-
-  const totalDue = statements.reduce((sum, s) => sum + s.remaining, 0);
-  const totalCustomers = statements.filter(s => s.remaining > 0).length;
-
-  const handlePrint = () => {
-    window.print();
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'paid':
-        return <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs">مدفوع</span>;
-      case 'partial':
-        return <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs">جزئي</span>;
-      default:
-        return <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs">غير مدفوع</span>;
+    let finalResult = result.sort((a, b) => (a.dueDate > b.dueDate ? 1 : -1));
+    
+    if (selectedSalesRepId !== 'all') {
+      finalResult = finalResult.filter(r => r.salesRepId === selectedSalesRepId);
     }
+    
+    return finalResult;
+  }, [dueFromDate, dueToDate, rows, selectedSalesRepId, customerMap]);
+
+  const groupedDueRows = useMemo(() => {
+    const groupsMap = new Map<string, DueCustomerRow[]>();
+    dueRows.forEach((row) => {
+      const key = row.saleId; // Group by Invoice
+      if (!groupsMap.has(key)) groupsMap.set(key, []);
+      groupsMap.get(key)!.push(row);
+    });
+    return Array.from(groupsMap.values());
+  }, [dueRows]);
+
+  const totalDue = filteredRows.reduce((sum, row) => sum + row.remaining, 0);
+  const dueInvoices = filteredRows.filter((row) => row.remaining > 0).length;
+  const overdueMonths = filteredRows.reduce(
+    (sum, row) => sum + row.schedules.filter((schedule) => schedule.status !== 'paid').length,
+    0,
+  );
+
+  const dueTotalInPeriod = dueRows.reduce((sum, row) => sum + row.remainingAmount, 0);
+
+  const formatCurrency = (amount: number) =>
+    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+
+  const handlePrint = (invoice: CollectionInvoiceView) => {
+    setPrintingInvoice(invoice);
+    setTimeout(() => window.print(), 100);
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+    <>
+    <style>{`
+      @media print {
+        @page {
+          size: A4 portrait;
+          margin: 0;
+        }
+        body {
+          background: white !important;
+          padding: 10mm !important;
+          margin: 0 !important;
+        }
+        table {
+          min-width: 0 !important;
+          width: 100% !important;
+          table-layout: fixed !important;
+        }
+        th, td {
+          padding: 4px 2px !important;
+          font-size: 10px !important;
+          word-break: break-all !important;
+        }
+        .print\\:hidden {
+          display: none !important;
+        }
+      }
+    `}</style>
+    <div className={`space-y-6 ${printingInvoice ? 'print:hidden' : ''}`}>
+      {/* HEADER SECTION - COMPACT */}
+      <section className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm print:hidden">
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">كشف التحصيل</h2>
-          <p className="text-gray-500 text-sm mt-1">كشف بأسماء العملاء المستحقين مبالغهم</p>
+          <h2 className="text-2xl font-bold text-slate-900">متابعة التحصيل</h2>
+          <p className="text-sm text-slate-500 mt-1">عرض ومتابعة الفواتير وأقساط العملاء.</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors no-print"
-          >
-            <Printer size={20} />
-            <span>طباعة</span>
-          </button>
+        <div className="grid grid-cols-3 gap-3 w-full lg:w-auto">
+          <StatCard label="إجمالي المتبقي" value={formatCurrency(totalDue)} tone="red" />
+          <StatCard label="الفواتير المفتوحة" value={String(dueInvoices)} tone="amber" />
+          <StatCard label="الأشهر المتأخرة" value={String(overdueMonths)} tone="slate" />
         </div>
+      </section>
+
+      {/* TABS SECTION */}
+      <div className="flex gap-2 border-b border-slate-200 pb-[1px] print:hidden">
+        <button
+          onClick={() => setActiveTab('due')}
+          className={`flex items-center gap-2 px-5 py-3 font-semibold text-sm rounded-t-xl transition-colors ${
+            activeTab === 'due' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
+          }`}
+        >
+          <LayoutList size={18} />
+          العملاء المستحقون (فترة)
+        </button>
+        <button
+          onClick={() => setActiveTab('invoices')}
+          className={`flex items-center gap-2 px-5 py-3 font-semibold text-sm rounded-t-xl transition-colors ${
+            activeTab === 'invoices' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
+          }`}
+        >
+          <FileText size={18} />
+          سجل فواتير العملاء
+        </button>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl p-6 text-white shadow-lg">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-              <DollarSign size={24} />
-            </div>
-            <div>
-              <p className="text-white/80 text-sm">إجمالي المستحق</p>
-              <p className="text-2xl font-bold">{formatCurrency(totalDue)}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl p-6 text-white shadow-lg">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-              <Users size={24} />
-            </div>
-            <div>
-              <p className="text-white/80 text-sm">عدد العملاء المستحقين</p>
-              <p className="text-2xl font-bold">{totalCustomers}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl p-6 text-white shadow-lg">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-              <FileText size={24} />
-            </div>
-            <div>
-              <p className="text-white/80 text-sm">إجمالي الفواتير</p>
-              <p className="text-2xl font-bold">{statements.reduce((sum, s) => sum + s.invoices.length, 0)}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 no-print">
-        <div className="flex items-center gap-4 mb-4">
-          <Filter size={20} className="text-gray-500" />
-          <h3 className="font-bold text-gray-800">تصفية النتائج</h3>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">العميل</label>
-            <select
-              value={selectedCustomer}
-              onChange={(e) => {
-                setSelectedCustomer(e.target.value);
-                setTimeout(handleFilter, 100);
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-            >
-              <option value="all">جميع العملاء</option>
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">من تاريخ</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">إلى تاريخ</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">بحث</label>
-            <div className="relative">
-              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="اسم العميل أو الهاتف..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-              />
-            </div>
-          </div>
-          <div className="flex items-end">
-            <button
-              onClick={handleFilter}
-              className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-            >
-              تطبيق الفلتر
-            </button>
-          </div>
-        </div>
-        <div className="mt-4">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showOnlyDue}
-              onChange={(e) => {
-                setShowOnlyDue(e.target.checked);
-                setTimeout(handleFilter, 100);
-              }}
-              className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500"
-            />
-            <span className="text-sm text-gray-700">عرض العملاء الذين عليهم مبالغ فقط</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Report Content */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden" id="printableArea">
-        {/* Report Header */}
-        <div className="p-6 border-b border-gray-200 bg-gray-50">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-xl font-bold text-gray-800">{settings.companyName}</h1>
-              <p className="text-gray-500 text-sm">{settings.companyAddress}</p>
-              <p className="text-gray-500 text-sm">ت: {settings.companyPhone}</p>
-            </div>
-            <div className="text-left">
-              <h2 className="text-lg font-bold text-indigo-600">كشف تحصيل</h2>
-              <p className="text-gray-500 text-sm">تاريخ التقرير: {new Date().toLocaleDateString('ar-EG')}</p>
-              {selectedCustomer !== 'all' && (
-                <p className="text-gray-500 text-sm">
-                  عميل: {customers.find(c => c.id === selectedCustomer)?.name}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Statements List */}
-        <div className="divide-y divide-gray-100">
-          {statements.length === 0 ? (
-            <div className="p-12 text-center">
-              <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <FileText size={32} className="text-gray-400" />
+      {/* TAB CONTENT: DUE */}
+      {activeTab === 'due' && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {/* Filters for Due */}
+          <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex items-end gap-3 print:hidden overflow-x-auto no-scrollbar">
+            <label className="block w-36 shrink-0">
+              <span className="mb-1 block text-xs font-bold text-slate-500">من تاريخ</span>
+              <input type="date" value={dueFromDate} onChange={(e) => setDueFromDate(e.target.value)} className="input-ui h-10 py-1 text-sm" />
+            </label>
+            <label className="block w-36 shrink-0">
+              <span className="mb-1 block text-xs font-bold text-slate-500">إلى تاريخ</span>
+              <input type="date" value={dueToDate} onChange={(e) => setDueToDate(e.target.value)} className="input-ui h-10 py-1 text-sm" />
+            </label>
+            <label className="block w-48 shrink-0">
+              <span className="mb-1 block text-xs font-bold text-slate-500">المندوب</span>
+              <select 
+                value={selectedSalesRepId} 
+                onChange={(e) => setSelectedSalesRepId(e.target.value)} 
+                className="input-ui h-10 py-1 text-sm font-bold"
+              >
+                <option value="all">كل المناديب</option>
+                {salesReps.map((rep) => (
+                  <option key={rep.id} value={rep.id}>
+                    {rep.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex-1"></div>
+            
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="bg-red-50 text-red-700 px-4 py-1.5 rounded-xl border border-red-100 font-bold text-sm shadow-sm flex items-center gap-2 h-10">
+                <span className="opacity-80 text-xs">المستحق:</span>
+                <span className="text-base">{formatCurrency(dueTotalInPeriod)}</span>
               </div>
-              <p className="text-gray-500">لا توجد نتائج</p>
+              <button onClick={() => window.print()} className="h-10 px-4 bg-slate-900 text-white rounded-xl hover:bg-slate-800 flex items-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
+                <Printer size={16} />
+                طباعة
+              </button>
             </div>
-          ) : (
-            statements.map(statement => (
-              <div key={statement.customerId} className="p-6">
-                {/* Customer Header */}
-                <div className="flex flex-wrap justify-between items-start gap-4 mb-4 pb-4 border-b border-gray-200">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
-                      <User size={24} className="text-indigo-600" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-gray-800 text-lg">{statement.customerName}</h3>
-                      <div className="flex items-center gap-4 text-sm text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <Phone size={14} />
-                          {statement.customerPhone}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-left">
-                    <div className="flex gap-4">
-                      <div>
-                        <p className="text-xs text-gray-500">إجمالي الفواتير</p>
-                        <p className="font-bold text-gray-800">{formatCurrency(statement.totalInvoice)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">المدفوع</p>
-                        <p className="font-bold text-green-600">{formatCurrency(statement.totalPaid)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">الباقي</p>
-                        <p className={`font-bold ${statement.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {formatCurrency(statement.remaining)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          </div>
 
-                {/* Invoices Table */}
-                {statement.invoices.length > 0 && (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">رقم الفاتورة</th>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">تاريخ الفاتورة</th>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">تاريخ الاستحقاق</th>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">مبلغ الفاتورة</th>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">المدفوع</th>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">الباقي</th>
-                          <th className="px-4 py-3 text-right text-xs font-bold text-gray-700">الحالة</th>
+          {dueFromDate > dueToDate && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              تاريخ البداية يجب أن يكون قبل تاريخ النهاية.
+            </div>
+          )}
+
+          {/* Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full bg-white">
+                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-5 text-right text-base font-bold">القسط</th>
+                    <th className="px-4 py-5 text-right text-base font-bold">تاريخ الاستحقاق</th>
+                    <th className="px-4 py-5 text-right text-base font-bold text-center">قيمة القسط</th>
+                    <th className="px-4 py-5 text-right text-base font-bold text-center">المتبقي</th>
+                    <th className="px-4 py-5 text-right text-base font-bold text-center">الحالة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {groupedDueRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
+                        <div className="flex flex-col items-center justify-center">
+                          <CheckCircle2 size={40} className="text-slate-300 mb-3" />
+                          <p>لا توجد أقساط مستحقة حالياً.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    groupedDueRows.map((group, gIdx) => (
+                      <React.Fragment key={group[0].saleId}>
+                        {/* Group Header for Customer Info - Professional & Clear UI, Compact Print */}
+                        <tr className="bg-slate-50/80 border-t-2 border-slate-200">
+                          <td colSpan={6} className="px-4 py-5 print:py-1.5">
+                            <div className="flex flex-col gap-2 print:gap-0.5">
+                              {/* Row 1: Name, Phone, Rep, Total Due */}
+                              <div className="flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-6 print:gap-4">
+                                  <div className="flex items-center gap-2">
+                                    <User size={18} className="text-sky-600 print:w-3 print:h-3" />
+                                    <span className="text-2xl font-black text-slate-900 print:text-xs">{group[0].customerName}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-slate-600 border-r border-slate-300 pr-6 print:pr-4 print:gap-1.5">
+                                    <Phone size={14} className="print:w-3 print:h-3" />
+                                    <span className="text-base font-bold text-slate-700 print:text-[10px]">{group[0].customerPhone}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-sky-600 border-r border-slate-300 pr-6 print:pr-4 print:gap-1.5">
+                                    <Briefcase size={14} className="print:w-3 print:h-3" />
+                                    <span className="text-base font-black text-sky-700 print:text-[10px]">{group[0].salesRepName || '---'}</span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-3 bg-red-50 px-4 py-2 rounded-xl border border-red-100 shadow-sm print:px-2 print:py-0.5 print:rounded print:gap-2">
+                                  <Wallet size={16} className="text-red-500 print:w-3 print:h-3" />
+                                  <span className="text-xs font-bold text-red-400 print:text-[9px]">إجمالي المستحق:</span>
+                                  <span className="text-lg font-black text-red-700 print:text-xs">
+                                    {formatCurrency(group.reduce((sum, r) => sum + r.remainingAmount, 0))}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Row 2: Address, Last Payment, Guarantors */}
+                              <div className="flex items-center justify-between text-sm text-slate-500 pr-10 print:text-[10px] print:pr-5">
+                                <div className="flex items-center gap-6 print:gap-4">
+                                  <div className="flex items-center gap-1.5 print:gap-1">
+                                    <MapPin size={14} className="print:w-2.5 print:h-2.5" />
+                                    <span className="max-w-[400px] truncate print:max-w-[250px]">{group[0].customerAddress}</span>
+                                  </div>
+                                  {group[0].guarantors.some(g => g && g.name) && (
+                                    <div className="flex items-center gap-2 border-r border-slate-200 pr-6 print:pr-4 print:gap-1">
+                                      <Shield size={14} className="text-amber-500 print:w-2.5 print:h-2.5" />
+                                      <span className="font-bold text-slate-600">الضامنين:</span>
+                                      <span className="truncate max-w-[300px] print:max-w-[250px]">
+                                        {group[0].guarantors.filter(g => g && g.name).map(g => `${g!.name} (${g!.phone})`).join(' - ')}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                <div className="flex items-center gap-1.5 font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-lg print:bg-emerald-50/50 print:px-2 print:py-0 print:rounded print:gap-1">
+                                  <Clock3 size={14} className="print:w-2.5 print:h-2.5" />
+                                  <span>أخر سداد: {group[0].lastPaymentDate || '---'}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {statement.invoices.map((invoice, idx) => (
-                          <tr key={idx} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 font-mono text-sm text-indigo-600">{invoice.invoiceNumber}</td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{formatDate(invoice.invoiceDate)}</td>
-                            <td className="px-4 py-3 text-sm text-gray-600">{invoice.dueDate ? formatDate(invoice.dueDate) : '-'}</td>
-                            <td className="px-4 py-3 text-sm font-medium text-gray-800">{formatCurrency(invoice.invoiceTotal)}</td>
-                            <td className="px-4 py-3 text-sm font-medium text-green-600">{formatCurrency(invoice.amountPaid)}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-red-600">{formatCurrency(invoice.remaining)}</td>
-                            <td className="px-4 py-3">{getStatusBadge(invoice.status)}</td>
+                        {group.map((row, rIdx) => (
+                          <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-sky-50/30 transition-colors border-b border-slate-100 last:border-b-0">
+                            <td className="px-4 py-5 text-base text-slate-700 font-medium">{row.installmentLabel}</td>
+                            <td className="px-4 py-5 text-base text-slate-700">{row.dueDate}</td>
+                            <td className="px-4 py-5 text-base text-slate-700 text-center">{formatCurrency(row.installmentAmount)}</td>
+                            <td className="px-4 py-5 text-base font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
+                            <td className="px-4 py-5 text-center">
+                              <MonthBadge status={row.status} />
+                            </td>
                           </tr>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {/* Customer Total */}
-                <div className="mt-4 pt-4 border-t border-gray-200 flex justify-end">
-                  <div className="bg-gray-50 px-6 py-3 rounded-lg">
-                    <span className="text-gray-600">إجمالي الباقي للعميل: </span>
-                    <span className={`font-bold text-lg ${statement.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {formatCurrency(statement.remaining)}
-                    </span>
-                  </div>
+                      </React.Fragment>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Improved Table Footer */}
+            <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-black text-slate-900">{dueRows.length}</span>
+                  <span className="text-sm font-bold text-slate-500">أقساط مستحقة</span>
+                </div>
+                <div className="w-px h-6 bg-slate-200"></div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-black text-slate-900">{groupedDueRows.length}</span>
+                  <span className="text-sm font-bold text-slate-500">عملاء مستحقين</span>
                 </div>
               </div>
-            ))
-          )}
-        </div>
 
-        {/* Report Footer */}
-        <div className="p-6 border-t border-gray-200 bg-gray-50">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-sm text-gray-500">
-                إجمالي المستحق: <span className="font-bold text-red-600">{formatCurrency(totalDue)}</span>
-              </p>
-              <p className="text-sm text-gray-500">
-                عدد العملاء: <span className="font-bold">{totalCustomers}</span>
-              </p>
+              <div className="flex items-center gap-4 bg-white px-5 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="text-left">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">إجمالي مبالغ الأقساط</div>
+                  <div className="text-xl font-black text-red-600">{formatCurrency(dueTotalInPeriod)}</div>
+                </div>
+                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
+                  <Wallet size={20} />
+                </div>
+              </div>
             </div>
-            {settings.invoiceFooter && (
-              <p className="text-sm text-gray-500">{settings.invoiceFooter}</p>
+          </div>
+        </div>
+      )}
+
+      {/* TAB CONTENT: INVOICES */}
+      {activeTab === 'invoices' && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {/* Toolbar for Invoices */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
+            <div className="relative w-full md:w-80">
+              <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="input-ui pr-10 h-10 text-sm"
+                placeholder="بحث برقم الفاتورة، اسم، رقم، أو عنوان..."
+              />
+            </div>
+            <select 
+              value={selectedCustomerId} 
+              onChange={(e) => setSelectedCustomerId(e.target.value)} 
+              className="w-full md:w-64 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm"
+            >
+              <option value="all">كل العملاء</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </select>
+
+            <label className="flex items-center gap-2 cursor-pointer mr-auto bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 transition-colors w-full md:w-auto justify-center">
+              <input
+                type="checkbox"
+                checked={showOnlyDue}
+                onChange={(e) => setShowOnlyDue(e.target.checked)}
+                className="h-4 w-4 rounded text-sky-600"
+              />
+              <span className="text-base font-bold text-slate-700">عرض المتبقي فقط</span>
+            </label>
+          </div>
+
+          {/* Invoice Cards */}
+          <div className="space-y-4">
+            {filteredRows.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-16 text-center shadow-sm">
+                <Search size={40} className="text-slate-300 mx-auto mb-4" />
+                <p className="text-slate-500 font-medium">لا توجد نتائج مطابقة للبحث الحالي.</p>
+              </div>
+            ) : (
+              filteredRows.map((row) => (
+                <section key={row.saleId} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
+                  <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <div className="rounded-xl bg-sky-50 text-sky-600 p-2.5">
+                          <UserRound size={20} />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-2xl text-slate-900">{row.customerName}</h3>
+                          <div className="flex items-center gap-2 text-sm text-slate-500 mt-0.5">
+                            <span>{row.customerPhone}</span>
+                            <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
+                            <span>{row.customerAddress}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs pt-1">
+                        <Badge>فاتورة: {row.invoiceNumber}</Badge>
+                        <Badge>تاريخ: {row.saleDate}</Badge>
+                        <Badge>{row.paymentMethod === 'installment' ? 'دفع بالتقسيط' : 'غير مقسط'}</Badge>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-4 items-end">
+                      <button
+                        onClick={() => handlePrint(row)}
+                        className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-base font-bold text-slate-700 hover:bg-slate-200 transition-colors"
+                      >
+                        <Printer size={16} /> طباعة الكشف
+                      </button>
+                      <div className="grid gap-2 sm:grid-cols-3 min-w-[320px]">
+                        <SmallStat label="الإجمالي" value={formatCurrency(row.total)} />
+                        <SmallStat label="المدفوع" value={formatCurrency(row.paid)} tone="green" />
+                        <SmallStat
+                          label="المتبقي"
+                          value={formatCurrency(row.remaining)}
+                          tone={row.remaining > 0 ? 'red' : 'green'}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {row.schedules.map((schedule) => (
+                      <div key={schedule.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4 transition-colors hover:border-sky-100 hover:bg-sky-50/30">
+                        <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200/60 pb-3">
+                          <div>
+                            <p className="font-bold text-slate-800">{schedule.label}</p>
+                            <p className="text-xs text-slate-500 mt-1">استحقاق: <span className="font-medium text-slate-700">{schedule.dueDate}</span></p>
+                          </div>
+                          <MonthBadge status={schedule.status} />
+                        </div>
+
+                        <div className="grid gap-2.5 text-sm">
+                          <MonthRow icon={<Wallet size={15} />} label="قيمة الشهر" value={formatCurrency(schedule.amount)} />
+                          <MonthRow icon={<CheckCircle2 size={15} />} label="المدفوع" value={formatCurrency(schedule.paidAmount)} />
+                          <MonthRow
+                            icon={<Clock3 size={15} />}
+                            label="المتبقي"
+                            value={formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
+                            highlightValue={Math.max(schedule.amount - schedule.paidAmount, 0) > 0}
+                          />
+                          <MonthRow icon={<CalendarRange size={15} />} label="تاريخ السداد" value={schedule.paidAt || '-'} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))
             )}
           </div>
         </div>
-      </div>
+      )}
+    </div>
 
-      {/* Print Styles */}
+    {/* PRINTABLE INVOICE STATEMENT */}
+    {printingInvoice && (
+      <PrintableView invoice={printingInvoice} settings={settings} />
+    )}
+    </>
+  );
+}
+
+function StatCard({ label, value, tone }: { label: string; value: string; tone: 'red' | 'amber' | 'slate' }) {
+  const toneClass = {
+    red: 'bg-red-50 text-red-700 border-red-100',
+    amber: 'bg-amber-50 text-amber-700 border-amber-100',
+    slate: 'bg-slate-50 text-slate-700 border-slate-200',
+  }[tone];
+
+  return (
+    <div className={`rounded-xl border px-5 py-4 shadow-sm ${toneClass}`}>
+      <p className="text-sm font-medium opacity-80">{label}</p>
+      <p className="mt-1 font-bold text-2xl">{value}</p>
+    </div>
+  );
+}
+
+function SmallStat({
+  label,
+  value,
+  tone = 'slate',
+}: {
+  label: string;
+  value: string;
+  tone?: 'slate' | 'green' | 'red';
+}) {
+  const toneClass = {
+    slate: 'bg-slate-50 text-slate-700 border border-slate-100',
+    green: 'bg-emerald-50 text-emerald-700 border border-emerald-100',
+    red: 'bg-red-50 text-red-700 border border-red-100',
+  }[tone];
+
+  return (
+    <div className={`rounded-xl px-4 py-3 text-center ${toneClass}`}>
+      <p className="text-sm opacity-80 font-medium mb-1">{label}</p>
+      <p className="font-bold text-base">{value}</p>
+    </div>
+  );
+}
+
+function Badge({ children }: { children: React.ReactNode }) {
+  return <span className="rounded-lg bg-slate-100 border border-slate-200 px-3 py-1.5 font-bold text-slate-700 shadow-sm text-xs">{children}</span>;
+}
+
+function MonthBadge({ status }: { status: InstallmentSchedule['status'] }) {
+  const labels = {
+    paid: 'مدفوع',
+    partial: 'جزئي',
+    unpaid: 'غير مدفوع',
+  };
+
+  const toneClass = {
+    paid: 'text-emerald-600',
+    partial: 'text-amber-600',
+    unpaid: 'text-red-600',
+  }[status];
+
+  return <span className={`text-sm font-bold ${toneClass}`}>{labels[status]}</span>;
+}
+
+function MonthRow({ icon, label, value, highlightValue }: { icon: React.ReactNode; label: string; value: string, highlightValue?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="flex items-center gap-2 text-slate-500">
+        {icon}
+        {label}
+      </span>
+      <span className={`font-bold text-base ${highlightValue ? 'text-red-600' : 'text-slate-700'}`}>{value}</span>
+    </div>
+  );
+}
+
+function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, settings: Setting }) {
+  const formatCurrency = (amount: number) =>
+    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+
+  const hasGuarantor = invoice.guarantors.some(g => g && g.name);
+
+  return (
+    <div className="hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
       <style>{`
+        @page {
+          size: auto;
+          margin: 10mm;
+        }
         @media print {
-          .no-print { display: none !important; }
-          body { background: white !important; }
-          .shadow-sm, .shadow-lg { box-shadow: none !important; }
-          .border { border: 1px solid #ddd !important; }
-          .bg-gray-50, .bg-gray-100 { background: #f5f5f5 !important; }
-          @page { margin: 1cm; }
+          body {
+            margin: 0;
+            padding: 0;
+            background: #fff;
+          }
+          .print-container {
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
         }
       `}</style>
+      
+      <div className="print-container">
+        {/* Header */}
+      <div className="flex justify-between items-start border-b-2 border-slate-800 pb-4 mb-4">
+        <div>
+          <h1 className="text-4xl font-black text-slate-900 mb-1">{settings.companyName}</h1>
+          <p className="text-slate-600 text-sm">{settings.companyAddress}</p>
+          <p className="text-slate-600 font-bold text-sm">{settings.companyPhone}</p>
+        </div>
+        <div className="text-left">
+          <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">كشف حساب عميل</h2>
+          <p className="text-slate-600 font-bold text-sm">تاريخ الطباعة: {new Date().toLocaleDateString('en-GB')}</p>
+          <p className="text-slate-600 font-bold text-sm">رقم الفاتورة: {invoice.invoiceNumber}</p>
+          {invoice.salesRepName && (
+            <p className="text-sky-700 font-bold text-sm">المندوب: {invoice.salesRepName}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Customer Info */}
+      <div className="flex flex-col gap-2 mb-4">
+        <div className="border border-slate-300 p-3 rounded-lg bg-slate-50">
+          <h3 className="font-bold text-base mb-2 text-slate-800 border-b border-slate-200 pb-1">بيانات العميل</h3>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <p><span className="font-semibold text-slate-600 w-20 inline-block">اسم العميل:</span> {invoice.customerName}</p>
+            <p><span className="font-semibold text-slate-600 w-20 inline-block">رقم الموبايل:</span> {invoice.customerPhone}</p>
+            <p className="col-span-2"><span className="font-semibold text-slate-600 w-20 inline-block">العنوان:</span> {invoice.customerAddress}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Financial Summary */}
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="border-2 border-slate-800 p-2 text-center rounded-lg">
+          <p className="text-slate-600 font-bold mb-1 text-sm">إجمالي الفاتورة</p>
+          <p className="text-xl font-black">{formatCurrency(invoice.total)}</p>
+        </div>
+        <div className="border-2 border-emerald-600 p-2 text-center rounded-lg bg-emerald-50">
+          <p className="text-emerald-700 font-bold mb-1 text-sm">إجمالي المدفوع</p>
+          <p className="text-xl font-black text-emerald-800">{formatCurrency(invoice.paid)}</p>
+        </div>
+        <div className="border-2 border-red-600 p-2 text-center rounded-lg bg-red-50">
+          <p className="text-red-700 font-bold mb-1 text-sm">إجمالي المتبقي</p>
+          <p className="text-xl font-black text-red-800">{formatCurrency(invoice.remaining)}</p>
+        </div>
+      </div>
+
+      {/* Installments Table */}
+      <div className="mb-4">
+        <h3 className="font-bold text-lg mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">سجل الأقساط والدفعات</h3>
+        <table className="w-full text-right border-collapse border border-slate-300 text-sm">
+          <thead>
+            <tr className="bg-slate-200">
+              <th className="border border-slate-300 px-1 py-1 font-bold">البيان</th>
+              <th className="border border-slate-300 px-1 py-1 font-bold">الاستحقاق</th>
+              <th className="border border-slate-300 px-1 py-1 font-bold">تاريخ الدفع</th>
+              <th className="border border-slate-300 px-1 py-1 font-bold text-center">المبلغ</th>
+              <th className="border border-slate-300 px-1 py-1 font-bold text-center">المدفوع</th>
+              <th className="border border-slate-300 px-1 py-1 font-bold text-center">المتبقي</th>
+              <th className="border border-slate-300 px-1 py-1 font-bold text-center">الحالة</th>
+            </tr>
+          </thead>
+          <tbody>
+            {invoice.schedules.map((schedule) => {
+              const remaining = Math.max(schedule.amount - schedule.paidAmount, 0);
+              const statusLabel = schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partial' ? 'جزئي' : 'غير مدفوع';
+              return (
+                <tr key={schedule.id} className="even:bg-slate-50">
+                  <td className="border border-slate-300 px-1 py-1 font-semibold text-xs">{schedule.label}</td>
+                  <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{schedule.dueDate}</td>
+                  <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{schedule.paidAt || '-'}</td>
+                  <td className="border border-slate-300 px-1 py-1 text-center text-xs">{formatCurrency(schedule.amount)}</td>
+                  <td className="border border-slate-300 px-1 py-1 text-center text-emerald-700 font-bold text-xs">{formatCurrency(schedule.paidAmount)}</td>
+                  <td className="border border-slate-300 px-1 py-1 text-center text-red-700 font-bold text-xs">{formatCurrency(remaining)}</td>
+                  <td className="border border-slate-300 px-1 py-1 text-center font-bold text-xs">{statusLabel}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      
+      {/* Footer */}
+      <div className="mt-6 text-center text-xs text-slate-500 border-t border-slate-300 pt-2 pb-2">
+        {settings.invoiceFooter && <p className="mb-1 font-bold">{settings.invoiceFooter}</p>}
+        <p>تم استخراج هذا الكشف من نظام {settings.companyName} للتقسيط</p>
+      </div>
+      </div>
     </div>
   );
 }

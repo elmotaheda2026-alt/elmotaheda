@@ -7,14 +7,20 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+    <div className="min-h-screen bg-slate-100 text-slate-900 print:bg-white print:min-h-0">
+      <div className="print:hidden">
+        <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      </div>
 
-      <div className="lg:mr-64">
-        <Header onMenuClick={() => setSidebarOpen(true)} />
+      <div className="lg:mr-72 print:m-0">
+        <div className="print:hidden">
+          <Header onMenuClick={() => setSidebarOpen(true)} />
+        </div>
 
-        <main className="p-4 md:p-6 lg:p-8">
-          <Outlet />
+        <main className="px-4 py-4 md:px-6 md:py-6 xl:px-8 print:p-0">
+          <div className="mx-auto w-full max-w-[1720px]">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

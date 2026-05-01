@@ -1,24 +1,25 @@
-import React from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard,
-  Users,
-  UserCircle,
-  Truck,
-  Package,
-  ShoppingCart,
-  Receipt,
-  Warehouse,
   Banknote,
   BarChart3,
-  Settings,
-  LogOut,
-  ShoppingBag,
-  ClipboardList,
-  UserCheck,
   Bell,
   Calculator,
+  ChevronDown,
+  ClipboardList,
   FileSearch,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  Receipt,
+  Settings,
+  ShoppingBag,
+  ShoppingCart,
+  Truck,
+  UserCheck,
+  UserCircle,
+  Users,
+  Warehouse,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -26,29 +27,56 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-const menuItems = [
-  { icon: LayoutDashboard, label: 'الرئيسية', path: '/' },
-  { icon: Users, label: 'المستخدمين', path: '/users' },
-  { icon: UserCircle, label: 'العملاء', path: '/customers' },
-  { icon: UserCheck, label: 'مناديب المبيعات', path: '/sales-reps' },
-  { icon: Truck, label: 'الموردين', path: '/suppliers' },
-  { icon: Package, label: 'الأصناف', path: '/products' },
-  { icon: Warehouse, label: 'المخزن', path: '/inventory' },
-  { icon: ShoppingCart, label: 'المشتريات', path: '/purchases' },
-  { icon: ShoppingBag, label: 'المبيعات', path: '/sales' },
-  { icon: Receipt, label: 'الفواتير', path: '/invoices' },
-  { icon: Banknote, label: 'المدفوعات', path: '/payments' },
-  { icon: ClipboardList, label: 'سندات الصرف', path: '/expenses' },
-  { icon: Calculator, label: 'الحسابات', path: '/accounts' },
-  { icon: FileSearch, label: 'كشف التحصيل', path: '/collection-statement' },
-  { icon: BarChart3, label: 'التقارير', path: '/reports' },
-  { icon: Bell, label: 'الإشعارات', path: '/notifications' },
-  { icon: Settings, label: 'الإعدادات', path: '/settings' },
+const menuGroups = [
+  {
+    title: 'مكتب المحاسب',
+    defaultOpen: true,
+    items: [
+      { icon: LayoutDashboard, label: 'الرئيسية', path: '/' },
+      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices' },
+      { icon: UserCircle, label: 'ملفات العملاء', path: '/customers' },
+      { icon: Package, label: 'دليل الأصناف', path: '/products' },
+      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases' },
+    ],
+  },
+  {
+    title: 'الخزينة والمتابعة',
+    defaultOpen: false,
+    items: [
+      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments' },
+      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement' },
+      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses' },
+      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts' },
+    ],
+  },
+  {
+    title: 'التشغيل التجاري',
+    defaultOpen: false,
+    items: [
+      { icon: ShoppingBag, label: 'حركة المبيعات', path: '/sales' },
+      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory' },
+      { icon: Truck, label: 'شركاء التوريد', path: '/suppliers' },
+      { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps' },
+    ],
+  },
+  {
+    title: 'الإدارة والتحكم',
+    defaultOpen: false,
+    items: [
+      { icon: Users, label: 'إدارة المستخدمين', path: '/users' },
+      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports' },
+      { icon: Bell, label: 'مركز التنبيهات', path: '/notifications' },
+      { icon: Settings, label: 'تهيئة النظام', path: '/settings' },
+    ],
+  },
 ];
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(menuGroups.map((group) => [group.title, Boolean(group.defaultOpen)])),
+  );
 
   const handleLogout = () => {
     if (confirm('هل تريد تسجيل الخروج؟')) {
@@ -56,59 +84,89 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     }
   };
 
+  const toggleGroup = (title: string) => {
+    setOpenGroups((current) => {
+      const isAlreadyOpen = !!current[title];
+      // Close all and only open the clicked one if it wasn't open
+      const newState: Record<string, boolean> = {};
+      menuGroups.forEach(g => {
+        newState[g.title] = false;
+      });
+      if (!isAlreadyOpen) {
+        newState[title] = true;
+      }
+      return newState;
+    });
+  };
+
   return (
     <>
-      {/* Mobile Overlay */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
-          onClick={onClose}
-        />
-      )}
+      {isOpen && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} />}
 
-      {/* Sidebar */}
       <aside
-        className={`fixed top-0 right-0 h-full w-64 bg-gradient-to-b from-indigo-900 to-purple-900 text-white z-50 transform transition-transform duration-300 lg:translate-x-0 ${
+        className={`fixed right-0 top-0 z-50 flex h-full w-72 transform flex-col border-l border-slate-200 bg-gradient-to-b from-slate-100 via-white to-slate-100 text-slate-800 shadow-xl transition-transform duration-300 lg:translate-x-0 ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
-        {/* Logo */}
-        <div className="p-6 border-b border-white/10">
-          <h1 className="text-xl font-bold text-center">شركة المتحدة</h1>
-          <p className="text-xs text-center text-white/70 mt-1">نظام إدارة متكامل</p>
+        <div className="border-b border-slate-200 px-6 py-8">
+          <h1 className="text-center text-3xl font-extrabold leading-tight text-slate-900">شركة المتحدة</h1>
+          <p className="mt-2 text-center text-sm text-slate-500">بوابات عمل متكاملة للمحاسبة والإدارة</p>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-4">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname === item.path;
-            return (
-              <button
-                key={item.path}
-                onClick={() => {
-                  navigate(item.path);
-                  onClose();
-                }}
-                className={`w-full flex items-center gap-3 px-6 py-3 hover:bg-white/10 transition-colors ${
-                  isActive ? 'bg-white/20 border-r-4 border-yellow-400' : ''
-                }`}
-              >
-                <Icon size={20} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+        <nav className="flex-1 overflow-y-auto px-5 py-3 no-scrollbar">
+          <div className="space-y-2">
+            {menuGroups.map((group) => (
+              <section key={group.title} className="border-b border-slate-200 pb-3 last:border-b-0">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.title)}
+                  className="flex w-full items-center justify-between py-2 text-right"
+                >
+                  <span className="text-sm font-bold text-slate-500">{group.title}</span>
+                  <ChevronDown
+                    size={18}
+                    className={`text-slate-500 transition-transform ${openGroups[group.title] ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {openGroups[group.title] && (
+                  <div className="mt-1 space-y-1">
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = location.pathname === item.path;
+
+                      return (
+                        <button
+                          key={item.path}
+                          onClick={() => {
+                            navigate(item.path);
+                            onClose();
+                          }}
+                          className={`flex w-full items-center justify-between rounded-2xl px-4 py-3.5 text-[1.03rem] font-semibold transition ${
+                            isActive
+                              ? 'bg-sky-600 text-white shadow-sm'
+                              : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900'
+                          }`}
+                        >
+                          <span>{item.label}</span>
+                          <Icon size={18} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
         </nav>
 
-        {/* Logout */}
-        <div className="p-4 border-t border-white/10">
+        <div className="border-t border-slate-200 p-5">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 bg-red-500/20 hover:bg-red-500/30 rounded-lg transition-colors text-red-300"
+            className="flex w-full items-center justify-between rounded-2xl bg-rose-100 px-4 py-3.5 text-base font-semibold text-rose-700 transition hover:bg-rose-200"
           >
-            <LogOut size={20} />
             <span>تسجيل الخروج</span>
+            <LogOut size={18} />
           </button>
         </div>
       </aside>

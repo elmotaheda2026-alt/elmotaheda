@@ -1,28 +1,33 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search, Package, Barcode, DollarSign } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Barcode, Edit, Package, Plus, Search, Trash2 } from 'lucide-react';
 import { Product } from '../types';
-import { getProducts, createProduct, updateProduct, deleteProduct } from '../lib/storage';
+import { createProduct, deleteProduct, getProducts, updateProduct } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 
+type ProductForm = Omit<Product, 'id' | 'createdAt' | 'updatedAt'>;
+
+const initialForm = (taxRate: number): ProductForm => ({
+  name: '',
+  barcode: '',
+  category: '',
+  fulfillmentType: 'stocked',
+  unit: 'قطعة',
+  purchasePrice: 0,
+  salePrice: 0,
+  discount: 0,
+  tax: taxRate,
+  quantity: 0,
+  minQuantity: 10,
+  description: '',
+});
+
 export default function Products() {
+  const { settings } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const { settings } = useAuth();
-  const [formData, setFormData] = useState({
-    name: '',
-    barcode: '',
-    category: '',
-    unit: 'قطعة',
-    purchasePrice: 0,
-    salePrice: 0,
-    discount: 0,
-    tax: settings.taxRate,
-    quantity: 0,
-    minQuantity: 10,
-    description: '',
-  });
+  const [formData, setFormData] = useState<ProductForm>(initialForm(settings.taxRate));
 
   useEffect(() => {
     loadProducts();
@@ -33,17 +38,27 @@ export default function Products() {
   };
 
   const generateBarcode = () => {
-    const barcode = Math.random().toString().substr(2, 12);
-    setFormData({ ...formData, barcode });
+    setFormData((current) => ({ ...current, barcode: Math.random().toString().slice(2, 14) }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const resetForm = () => {
+    setFormData(initialForm(settings.taxRate));
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+
+    const payload: ProductForm = {
+      ...formData,
+      minQuantity: formData.fulfillmentType === 'on_demand' ? 0 : formData.minQuantity,
+    };
+
     if (editingProduct) {
-      updateProduct(editingProduct.id, formData);
+      updateProduct(editingProduct.id, payload);
     } else {
-      createProduct(formData);
+      createProduct(payload);
     }
+
     loadProducts();
     setShowModal(false);
     setEditingProduct(null);
@@ -56,6 +71,7 @@ export default function Products() {
       name: product.name,
       barcode: product.barcode,
       category: product.category,
+      fulfillmentType: product.fulfillmentType || 'stocked',
       unit: product.unit,
       purchasePrice: product.purchasePrice,
       salePrice: product.salePrice,
@@ -68,107 +84,105 @@ export default function Products() {
     setShowModal(true);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('هل أنت متأكد من حذف هذا المنتج؟')) {
-      deleteProduct(id);
-      loadProducts();
-    }
-  };
+  const filteredProducts = products.filter((product) => {
+    const search = searchTerm.toLowerCase();
+    return (
+      product.name.toLowerCase().includes(search) ||
+      product.barcode.includes(searchTerm) ||
+      product.category.toLowerCase().includes(search)
+    );
+  });
 
-  const resetForm = () => {
-    setFormData({
-      name: '', barcode: '', category: '', unit: 'قطعة',
-      purchasePrice: 0, salePrice: 0, discount: 0, tax: settings.taxRate,
-      quantity: 0, minQuantity: 10, description: '',
-    });
-  };
-
-  const filteredProducts = products.filter(product =>
-    product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    product.barcode.includes(searchTerm) ||
-    product.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) =>
+    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-800">إدارة الأصناف</h2>
-          <p className="text-gray-500 text-sm mt-1">إجمالي {products.length} صنف</p>
+          <h2 className="text-2xl font-bold text-slate-900">إدارة الأصناف</h2>
+          <p className="mt-1 text-sm text-slate-500">فرّق بين الصنف المخزني والصنف حسب الطلب حتى يتعامل النظام مع مخزونك بشكل صحيح.</p>
         </div>
         <button
-          onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+          onClick={() => {
+            resetForm();
+            setEditingProduct(null);
+            setShowModal(true);
+          }}
+          className="inline-flex items-center gap-2 rounded-2xl bg-sky-600 px-4 py-2 text-white hover:bg-sky-700"
         >
-          <Plus size={20} />
-          <span>إضافة صنف</span>
+          <Plus size={18} />
+          إضافة صنف
         </button>
       </div>
 
-      {/* Search */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
         <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="بحث بالاسم أو الباركود أو التصنيف..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="ابحث بالاسم أو الباركود أو التصنيف"
+            className="input-ui pr-10"
           />
         </div>
       </div>
 
-      {/* Products Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-indigo-50">
+          <table className="w-full min-w-[920px]">
+            <thead className="bg-slate-100">
               <tr>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الصنف</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الباركود</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">التصنيف</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">السعر</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الكمية</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الإجراءات</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الصنف</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">النوع</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الباركود</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الكمية</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">سعر الشراء</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">سعر البيع</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الإجراءات</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredProducts.map(product => (
-                <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+            <tbody className="divide-y divide-slate-100">
+              {filteredProducts.map((product) => (
+                <tr key={product.id} className="hover:bg-slate-50">
                   <td className="px-4 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                        <Package size={20} className="text-indigo-600" />
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-100">
+                        <Package size={18} className="text-sky-600" />
                       </div>
                       <div>
-                        <p className="font-medium text-gray-800">{product.name}</p>
-                        <p className="text-xs text-gray-500">{product.unit}</p>
+                        <p className="font-semibold text-slate-800">{product.name}</p>
+                        <p className="text-xs text-slate-500">{product.category || 'عام'}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-4 font-mono text-sm text-gray-600">{product.barcode}</td>
                   <td className="px-4 py-4">
-                    <span className="px-3 py-1 bg-gray-100 rounded-full text-xs">{product.category || 'عام'}</span>
-                  </td>
-                  <td className="px-4 py-4 font-bold text-green-600">{formatCurrency(product.salePrice)}</td>
-                  <td className="px-4 py-4">
-                    <span className={`font-bold ${product.quantity <= product.minQuantity ? 'text-red-600' : 'text-gray-800'}`}>
-                      {product.quantity}
+                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${product.fulfillmentType === 'on_demand' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                      {product.fulfillmentType === 'on_demand' ? 'حسب الطلب' : 'مخزني'}
                     </span>
-                    <span className="text-xs text-gray-500 mr-1">{product.unit}</span>
                   </td>
+                  <td className="px-4 py-4 font-mono text-sm text-slate-600">{product.barcode}</td>
                   <td className="px-4 py-4">
-                    <div className="flex gap-1">
-                      <button onClick={() => handleEdit(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                    <span className="font-bold text-slate-800">{product.quantity}</span>
+                    <span className="mr-1 text-xs text-slate-500">{product.unit}</span>
+                  </td>
+                  <td className="px-4 py-4 text-slate-700">{formatCurrency(product.purchasePrice)}</td>
+                  <td className="px-4 py-4 font-bold text-emerald-700">{formatCurrency(product.salePrice)}</td>
+                  <td className="px-4 py-4">
+                    <div className="flex gap-2">
+                      <button onClick={() => handleEdit(product)} className="rounded-xl p-2 text-sky-600 hover:bg-sky-50">
                         <Edit size={18} />
                       </button>
-                      <button onClick={() => handleDelete(product.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                      <button
+                        onClick={() => {
+                          if (confirm('هل تريد حذف هذا الصنف؟')) {
+                            deleteProduct(product.id);
+                            loadProducts();
+                          }
+                        }}
+                        className="rounded-xl p-2 text-rose-600 hover:bg-rose-50"
+                      >
                         <Trash2 size={18} />
                       </button>
                     </div>
@@ -180,130 +194,103 @@ export default function Products() {
         </div>
       </div>
 
-      {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl my-8">
-            <div className="p-6 border-b border-gray-100">
-              <h3 className="text-xl font-bold text-gray-800">
-                {editingProduct ? 'تعديل صنف' : 'إضافة صنف جديد'}
-              </h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl">
+            <div className="border-b border-slate-100 p-6">
+              <h3 className="text-xl font-bold text-slate-900">{editingProduct ? 'تعديل الصنف' : 'إضافة صنف جديد'}</h3>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">اسم الصنف</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الباركود</label>
+
+            <form onSubmit={handleSubmit} className="space-y-5 p-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="اسم الصنف">
+                  <input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="input-ui" required />
+                </Field>
+
+                <Field label="نوع الصنف">
+                  <select
+                    value={formData.fulfillmentType}
+                    onChange={(e) =>
+                      setFormData((current) => ({
+                        ...current,
+                        fulfillmentType: e.target.value as Product['fulfillmentType'],
+                        minQuantity: e.target.value === 'on_demand' ? 0 : current.minQuantity || 10,
+                      }))
+                    }
+                    className="input-ui"
+                  >
+                    <option value="stocked">مخزني</option>
+                    <option value="on_demand">حسب الطلب</option>
+                  </select>
+                </Field>
+
+                <Field label="الباركود">
                   <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={formData.barcode}
-                      onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
-                      className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                      required
-                    />
-                    <button type="button" onClick={generateBarcode} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">
-                      <Barcode size={20} />
+                    <input value={formData.barcode} onChange={(e) => setFormData({ ...formData, barcode: e.target.value })} className="input-ui" required />
+                    <button type="button" onClick={generateBarcode} className="rounded-2xl bg-slate-100 px-3 hover:bg-slate-200">
+                      <Barcode size={18} />
                     </button>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">التصنيف</label>
-                  <input
-                    type="text"
-                    value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">وحدة القياس</label>
-                  <select
-                    value={formData.unit}
-                    onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  >
-                    <option value="قطعة">قطعة</option>
-                    <option value="كجم">كجم</option>
-                    <option value="لتر">لتر</option>
-                    <option value="متر">متر</option>
-                    <option value="علبة">علبة</option>
-                    <option value="كرتون">كرتون</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الكمية</label>
+                </Field>
+
+                <Field label="التصنيف">
+                  <input value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })} className="input-ui" />
+                </Field>
+
+                <Field label="الوحدة">
+                  <input value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} className="input-ui" />
+                </Field>
+
+                <Field label="الكمية الحالية">
+                  <input type="number" min="0" value={formData.quantity} onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) || 0 })} className="input-ui" required />
+                </Field>
+
+                <Field label="الحد الأدنى للمخزون">
                   <input
                     type="number"
-                    value={formData.quantity}
-                    onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 0 })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">حد أدنى للمخزون</label>
-                  <input
-                    type="number"
+                    min="0"
                     value={formData.minQuantity}
-                    onChange={(e) => setFormData({ ...formData, minQuantity: parseInt(e.target.value) || 0 })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    onChange={(e) => setFormData({ ...formData, minQuantity: Number(e.target.value) || 0 })}
+                    className="input-ui"
+                    disabled={formData.fulfillmentType === 'on_demand'}
                   />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">سعر الشراء</label>
-                  <input
-                    type="number"
-                    value={formData.purchasePrice}
-                    onChange={(e) => setFormData({ ...formData, purchasePrice: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">سعر البيع</label>
-                  <input
-                    type="number"
-                    value={formData.salePrice}
-                    onChange={(e) => setFormData({ ...formData, salePrice: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الخصم %</label>
-                  <input
-                    type="number"
-                    value={formData.discount}
-                    onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الضريبة %</label>
-                  <input
-                    type="number"
-                    value={formData.tax}
-                    onChange={(e) => setFormData({ ...formData, tax: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  />
+                </Field>
+
+                <Field label="سعر الشراء">
+                  <input type="number" min="0" step="0.01" value={formData.purchasePrice} onChange={(e) => setFormData({ ...formData, purchasePrice: Number(e.target.value) || 0 })} className="input-ui" required />
+                </Field>
+
+                <Field label="سعر البيع">
+                  <input type="number" min="0" step="0.01" value={formData.salePrice} onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) || 0 })} className="input-ui" required />
+                </Field>
+
+                <Field label="الخصم">
+                  <input type="number" min="0" step="0.01" value={formData.discount} onChange={(e) => setFormData({ ...formData, discount: Number(e.target.value) || 0 })} className="input-ui" />
+                </Field>
+
+                <Field label="الضريبة %">
+                  <input type="number" min="0" step="0.01" value={formData.tax} onChange={(e) => setFormData({ ...formData, tax: Number(e.target.value) || 0 })} className="input-ui" />
+                </Field>
+
+                <div className="md:col-span-2">
+                  <Field label="ملاحظات">
+                    <textarea value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} rows={3} className="input-ui resize-none" />
+                  </Field>
                 </div>
               </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => { setShowModal(false); setEditingProduct(null); }} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+
+              {formData.fulfillmentType === 'on_demand' && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  هذا الصنف يعتبر "حسب الطلب": لا يُعامل كنقص مخزون، والأفضل شراؤه أولًا من شاشة المشتريات ثم بيعه للعميل.
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => { setShowModal(false); setEditingProduct(null); }} className="flex-1 rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50">
                   إلغاء
                 </button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                  {editingProduct ? 'تحديث' : 'إضافة'}
+                <button type="submit" className="flex-1 rounded-2xl bg-sky-600 px-4 py-3 font-bold text-white hover:bg-sky-700">
+                  {editingProduct ? 'حفظ التعديل' : 'إضافة الصنف'}
                 </button>
               </div>
             </form>
@@ -311,5 +298,14 @@ export default function Products() {
         </div>
       )}
     </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-700">{label}</span>
+      {children}
+    </label>
   );
 }
