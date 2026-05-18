@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield } from 'lucide-react';
+import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +20,8 @@ interface CollectionInvoiceView {
   salesRepName?: string;
   schedules: InstallmentSchedule[];
   guarantors: (Guarantor | null)[];
+  isSued?: boolean;
+  lastPaymentDate?: string;
 }
 
 interface DueCustomerRow {
@@ -37,6 +39,8 @@ interface DueCustomerRow {
   guarantors: (Guarantor | null)[];
   salesRepId?: string;
   salesRepName?: string;
+  isSued?: boolean;
+  lastPaymentDate?: string;
 }
 
 const today = () => new Date().toISOString().split('T')[0];
@@ -51,11 +55,12 @@ export default function CollectionStatement() {
   const { settings } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
-  const [activeTab, setActiveTab] = useState<'due' | 'invoices'>('due');
+  const [activeTab, setActiveTab] = useState<'due' | 'invoices' | 'legal'>('due');
   
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState('all');
   const [showOnlyDue, setShowOnlyDue] = useState(true);
+  const [hideSuedCustomers, setHideSuedCustomers] = useState(false);
   
   const [dueFromDate, setDueFromDate] = useState(today());
   const [dueToDate, setDueToDate] = useState(addDays(today(), 30));
@@ -122,6 +127,7 @@ export default function CollectionStatement() {
           lastPaymentDate: schedules
             .filter((s) => s.paidAt)
             .reduce((latest, s) => (!latest || s.paidAt! > latest ? s.paidAt : latest), undefined as string | undefined),
+          isSued: customer?.isSued || false,
         };
       }),
     [customerMap, sales, salesRepMap],
@@ -130,6 +136,7 @@ export default function CollectionStatement() {
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       if (selectedCustomerId !== 'all' && row.customerId !== selectedCustomerId) return false;
+      if (hideSuedCustomers && row.isSued) return false;
       
       // Filter by sales rep removed from here as per user request to keep it only for Due tab
 
@@ -145,7 +152,7 @@ export default function CollectionStatement() {
         row.customerAddress.toLowerCase().includes(search)
       );
     });
-  }, [rows, searchTerm, selectedCustomerId, showOnlyDue]);
+  }, [rows, searchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
 
   const dueRows = useMemo<DueCustomerRow[]>(() => {
     if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) return [];
@@ -153,6 +160,8 @@ export default function CollectionStatement() {
     const result: DueCustomerRow[] = [];
 
     rows.forEach((row) => {
+      if (hideSuedCustomers && row.isSued) return;
+      
       row.schedules.forEach((schedule) => {
         if (schedule.status === 'paid') return;
         if (schedule.dueDate < dueFromDate || schedule.dueDate > dueToDate) return;
@@ -173,6 +182,7 @@ export default function CollectionStatement() {
           guarantors: customerMap.get(row.customerId)?.guarantors || [],
           salesRepId: row.salesRepId,
           salesRepName: row.salesRepName,
+          isSued: customerMap.get(row.customerId)?.isSued || false,
         });
       });
     });
@@ -195,6 +205,18 @@ export default function CollectionStatement() {
     });
     return Array.from(groupsMap.values());
   }, [dueRows]);
+
+  const suedCustomersList = useMemo(() => {
+    return customers.filter(c => c.isSued).map(c => {
+      const customerInvoices = rows.filter(r => r.customerId === c.id);
+      const totalDebt = customerInvoices.reduce((sum, r) => sum + r.remaining, 0);
+      return {
+        ...c,
+        totalDebt,
+        invoicesCount: customerInvoices.length
+      };
+    }).sort((a, b) => b.totalDebt - a.totalDebt);
+  }, [customers, rows]);
 
   const totalDue = filteredRows.reduce((sum, row) => sum + row.remaining, 0);
   const dueInvoices = filteredRows.filter((row) => row.remaining > 0).length;
@@ -275,27 +297,36 @@ export default function CollectionStatement() {
           <FileText size={18} />
           سجل فواتير العملاء
         </button>
+        <button
+          onClick={() => setActiveTab('legal')}
+          className={`flex items-center gap-2 px-5 py-3 font-semibold text-sm rounded-t-xl transition-colors ${
+            activeTab === 'legal' ? 'bg-red-50 text-red-700 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
+          }`}
+        >
+          <Gavel size={18} />
+          الشئون القانونية (النزاعات)
+        </button>
       </div>
 
       {/* TAB CONTENT: DUE */}
       {activeTab === 'due' && (
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
           {/* Filters for Due */}
-          <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex items-end gap-3 print:hidden overflow-x-auto no-scrollbar">
-            <label className="block w-36 shrink-0">
+          <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-end gap-4 print:hidden">
+            <label className="block flex-1 min-w-[140px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">من تاريخ</span>
-              <input type="date" value={dueFromDate} onChange={(e) => setDueFromDate(e.target.value)} className="input-ui h-10 py-1 text-sm" />
+              <input type="date" value={dueFromDate} onChange={(e) => setDueFromDate(e.target.value)} className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm" />
             </label>
-            <label className="block w-36 shrink-0">
+            <label className="block flex-1 min-w-[140px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">إلى تاريخ</span>
-              <input type="date" value={dueToDate} onChange={(e) => setDueToDate(e.target.value)} className="input-ui h-10 py-1 text-sm" />
+              <input type="date" value={dueToDate} onChange={(e) => setDueToDate(e.target.value)} className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm" />
             </label>
-            <label className="block w-48 shrink-0">
+            <label className="block flex-1 min-w-[160px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">المندوب</span>
               <select 
                 value={selectedSalesRepId} 
                 onChange={(e) => setSelectedSalesRepId(e.target.value)} 
-                className="input-ui h-10 py-1 text-sm font-bold"
+                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm"
               >
                 <option value="all">كل المناديب</option>
                 {salesReps.map((rep) => (
@@ -305,14 +336,27 @@ export default function CollectionStatement() {
                 ))}
               </select>
             </label>
-            <div className="flex-1"></div>
             
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="bg-red-50 text-red-700 px-4 py-1.5 rounded-xl border border-red-100 font-bold text-sm shadow-sm flex items-center gap-2 h-10">
+            <div className="flex items-center shrink-0 mb-1">
+              <label className="flex items-center gap-2 cursor-pointer bg-red-50 text-red-700 px-4 py-2 rounded-xl border border-red-100 hover:bg-red-100 transition-colors shadow-sm h-10">
+                <input
+                  type="checkbox"
+                  checked={hideSuedCustomers}
+                  onChange={(e) => setHideSuedCustomers(e.target.checked)}
+                  className="h-4 w-4 rounded text-red-600 accent-red-600"
+                />
+                <span className="text-sm font-bold whitespace-nowrap">إخفاء القضايا</span>
+              </label>
+            </div>
+            
+            <div className="w-full lg:w-auto flex-1"></div>
+            
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
+              <div className="flex-1 sm:flex-none bg-red-50 text-red-700 px-4 py-2 rounded-xl border border-red-100 font-bold text-sm shadow-sm flex items-center justify-center gap-2 h-10">
                 <span className="opacity-80 text-xs">المستحق:</span>
                 <span className="text-base">{formatCurrency(dueTotalInPeriod)}</span>
               </div>
-              <button onClick={() => window.print()} className="h-10 px-4 bg-slate-900 text-white rounded-xl hover:bg-slate-800 flex items-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
+              <button onClick={() => window.print()} className="flex-1 sm:flex-none h-10 px-6 bg-slate-900 text-white rounded-xl hover:bg-slate-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
                 <Printer size={16} />
                 طباعة
               </button>
@@ -359,8 +403,11 @@ export default function CollectionStatement() {
                               <div className="flex items-center justify-between gap-4">
                                 <div className="flex items-center gap-6 print:gap-4">
                                   <div className="flex items-center gap-2">
-                                    <User size={18} className="text-sky-600 print:w-3 print:h-3" />
-                                    <span className="text-2xl font-black text-slate-900 print:text-xs">{group[0].customerName}</span>
+                                    {group[0].isSued ? <Gavel size={18} className="text-red-600 print:w-3 print:h-3" /> : <User size={18} className="text-sky-600 print:w-3 print:h-3" />}
+                                    <div className="flex flex-col">
+                                      <span className={`text-2xl font-black print:text-xs ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>{group[0].customerName}</span>
+                                      {group[0].isSued && <span className="text-xs text-red-500 font-bold flex items-center gap-1 print:text-[8px]"><AlertTriangle size={10} /> محال للقضاء يمنع التعامل</span>}
+                                    </div>
                                   </div>
                                   <div className="flex items-center gap-2 text-slate-600 border-r border-slate-300 pr-6 print:pr-4 print:gap-1.5">
                                     <Phone size={14} className="print:w-3 print:h-3" />
@@ -480,15 +527,27 @@ export default function CollectionStatement() {
               ))}
             </select>
 
-            <label className="flex items-center gap-2 cursor-pointer mr-auto bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 transition-colors w-full md:w-auto justify-center">
-              <input
-                type="checkbox"
-                checked={showOnlyDue}
-                onChange={(e) => setShowOnlyDue(e.target.checked)}
-                className="h-4 w-4 rounded text-sky-600"
-              />
-              <span className="text-base font-bold text-slate-700">عرض المتبقي فقط</span>
-            </label>
+            <div className="flex gap-2 w-full md:w-auto justify-center mr-auto">
+              <label className="flex items-center gap-2 cursor-pointer bg-red-50 px-4 py-2 rounded-xl border border-red-100 hover:bg-red-100 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={hideSuedCustomers}
+                  onChange={(e) => setHideSuedCustomers(e.target.checked)}
+                  className="h-4 w-4 rounded text-red-600 accent-red-600"
+                />
+                <span className="text-sm font-bold text-red-800 whitespace-nowrap">إخفاء القضايا</span>
+              </label>
+              
+              <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={showOnlyDue}
+                  onChange={(e) => setShowOnlyDue(e.target.checked)}
+                  className="h-4 w-4 rounded text-sky-600"
+                />
+                <span className="text-sm font-bold text-slate-700 whitespace-nowrap">إظهار المتبقي فقط</span>
+              </label>
+            </div>
           </div>
 
           {/* Invoice Cards */}
@@ -504,11 +563,14 @@ export default function CollectionStatement() {
                   <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
                     <div className="space-y-2">
                       <div className="flex items-center gap-3">
-                        <div className="rounded-xl bg-sky-50 text-sky-600 p-2.5">
-                          <UserRound size={20} />
+                        <div className={`rounded-xl p-2.5 ${row.isSued ? 'bg-red-50 text-red-600' : 'bg-sky-50 text-sky-600'}`}>
+                          {row.isSued ? <Gavel size={20} /> : <UserRound size={20} />}
                         </div>
                         <div>
-                          <h3 className="font-bold text-2xl text-slate-900">{row.customerName}</h3>
+                          <div className="flex flex-col">
+                            <h3 className={`font-bold text-2xl ${row.isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>{row.customerName}</h3>
+                            {row.isSued && <span className="text-xs text-red-500 font-bold flex items-center gap-1"><AlertTriangle size={12} /> محال للقضاء يمنع التعامل</span>}
+                          </div>
                           <div className="flex items-center gap-2 text-sm text-slate-500 mt-0.5">
                             <span>{row.customerPhone}</span>
                             <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
@@ -569,6 +631,90 @@ export default function CollectionStatement() {
                   </div>
                 </section>
               ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB CONTENT: LEGAL */}
+      {activeTab === 'legal' && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-center justify-between print:hidden">
+            <div>
+               <h3 className="text-red-800 font-bold text-lg flex items-center gap-2"><Gavel size={20} /> سجل القضايا والنزاعات القانونية</h3>
+               <p className="text-red-600 text-sm mt-1">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
+            </div>
+            <button onClick={() => window.print()} className="h-10 px-6 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
+              <Printer size={16} />
+              طباعة كشف المحامي
+            </button>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full bg-white">
+                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-4 text-right text-base font-bold">اسم العميل</th>
+                    <th className="px-4 py-4 text-right text-base font-bold">رقم الهاتف</th>
+                    <th className="px-4 py-4 text-right text-base font-bold">العنوان</th>
+                    <th className="px-4 py-4 text-right text-base font-bold text-center">الفواتير</th>
+                    <th className="px-4 py-4 text-right text-base font-bold text-center">تاريخ الإحالة</th>
+                    <th className="px-4 py-4 text-right text-base font-bold text-center">المديونية</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {suedCustomersList.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
+                        <div className="flex flex-col items-center justify-center">
+                          <CheckCircle2 size={40} className="text-slate-300 mb-3" />
+                          <p>لا يوجد أي عملاء في الشئون القانونية حالياً.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    suedCustomersList.map((customer) => (
+                      <tr key={customer.id} className="hover:bg-red-50/50 transition-colors">
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                             <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+                               <Gavel size={14} />
+                             </div>
+                             <span className="font-bold text-slate-900">{customer.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-sm font-medium text-slate-700">{customer.phone}</td>
+                        <td className="px-4 py-4 text-sm text-slate-600 truncate max-w-[200px]">{customer.address}</td>
+                        <td className="px-4 py-4 text-center">
+                          <span className="bg-slate-100 text-slate-700 font-bold px-3 py-1 rounded-lg text-sm">{customer.invoicesCount}</span>
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                           {customer.suedDate ? (
+                             <div className="text-sm">
+                               <span className="font-bold text-slate-800">{new Date(customer.suedDate).toLocaleDateString('ar-EG')}</span>
+                             </div>
+                           ) : <span className="text-slate-400">-</span>}
+                        </td>
+                        <td className="px-4 py-4 text-center font-black text-red-600 text-lg">
+                          {formatCurrency(customer.totalDebt)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {suedCustomersList.length > 0 && (
+               <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">
+                 <div className="font-bold text-slate-600">
+                   إجمالي عملاء الشئون القانونية: <span className="text-slate-900 mx-1">{suedCustomersList.length}</span>
+                 </div>
+                 <div className="flex items-center gap-3">
+                   <span className="text-sm font-bold text-slate-500">إجمالي الديون المعلقة بالنزاعات:</span>
+                   <span className="text-xl font-black text-red-700">{formatCurrency(suedCustomersList.reduce((s, c) => s + c.totalDebt, 0))}</span>
+                 </div>
+               </div>
             )}
           </div>
         </div>

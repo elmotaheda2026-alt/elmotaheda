@@ -3,6 +3,7 @@ import { AlertTriangle, Plus, Printer, Search, ShoppingBag, Trash2 } from 'lucid
 import { Customer, Product, Sale, SaleItem } from '../types';
 import { createSale, getCustomers, getProducts, getSales } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 
 export default function Sales() {
   const { settings, user } = useAuth();
@@ -18,6 +19,7 @@ export default function Sales() {
     notes: '',
   });
   const [saleItems, setSaleItems] = useState<SaleItem[]>([]);
+  const [printingSale, setPrintingSale] = useState<Sale | null>(null);
 
   useEffect(() => {
     loadData();
@@ -232,7 +234,10 @@ export default function Sales() {
                     </span>
                   </td>
                   <td className="px-4 py-4">
-                    <button className="rounded-xl p-2 text-slate-600 hover:bg-slate-100">
+                    <button
+                      onClick={() => setPrintingSale(sale)}
+                      className="rounded-xl p-2 text-slate-600 hover:bg-slate-100"
+                    >
                       <Printer size={18} />
                     </button>
                   </td>
@@ -361,6 +366,14 @@ export default function Sales() {
             </form>
           </div>
         </div>
+      )}
+      
+      {printingSale && (
+        <LegalDocumentsPrintModal
+          isOpen={!!printingSale}
+          onClose={() => setPrintingSale(null)}
+          sale={printingSale}
+        />
       )}
     </div>
   );

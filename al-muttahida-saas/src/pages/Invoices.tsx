@@ -7,8 +7,12 @@ import {
   ShoppingCart,
   Sparkles,
   Trash2,
+  Search,
+  Printer,
+  FileSpreadsheet,
+  Edit3,
 } from 'lucide-react';
-import { Customer, Product, PurchaseItem, SaleItem, Supplier, SalesRep } from '../types';
+import { Customer, Product, PurchaseItem, SaleItem, Supplier, SalesRep, Sale } from '../types';
 import {
   createNotification,
   createPayment,
@@ -20,8 +24,11 @@ import {
   getProducts,
   getSuppliers,
   getSalesReps,
+  getSales,
+  updateSale,
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 
 type PaymentMethod = 'cash' | 'card' | 'transfer' | 'installment';
 
@@ -94,17 +101,52 @@ export default function Invoices() {
     supplierId: '',
   });
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [savedSaleForPrinting, setSavedSaleForPrinting] = useState<Sale | null>(null);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [modalSearchQuery, setModalSearchQuery] = useState('');
+  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+
+  const handleLoadForEdit = (sale: Sale) => {
+    setEditingSaleId(sale.id);
+    setSelectedCustomerId(sale.customerId);
+    setSelectedSalesRepId(sale.financing?.salesRepId || '');
+    setInvoiceNumber(sale.invoiceNumber);
+    setInvoiceDate(sale.date.substring(0, 10));
+    setPaymentMethod((sale.financing?.paymentMethod as any) || 'cash');
+    setPaidAmount(sale.financing?.upfrontAmount || sale.paid);
+    setInstallmentMonths(sale.financing?.installmentMonths || 12);
+    setInvoiceNotes(sale.notes || '');
+    
+    setDraftItems(
+      sale.items.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        discount: item.discount,
+        tax: item.tax,
+      }))
+    );
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setMessage({
+      type: 'success',
+      text: `تم تحميل بيانات التعاقد رقم ${sale.invoiceNumber} للتعديل والمراجعة بنجاح. يمكنك الآن تعديل أي خانات أو أصناف ثم الحفظ.`,
+    });
+  };
 
   useEffect(() => {
     const loadedCustomers = getCustomers();
     const loadedProducts = getProducts();
     const loadedSuppliers = getSuppliers();
     const loadedSalesReps = getSalesReps();
+    const loadedSales = getSales();
 
     setCustomers(loadedCustomers);
     setProducts(loadedProducts);
     setSuppliers(loadedSuppliers);
     setSalesReps(loadedSalesReps);
+    setSales(loadedSales.slice().reverse());
     setInvoiceNumber(getNextSaleInvoiceNumber());
 
     if (loadedCustomers.length > 0) {
@@ -194,7 +236,18 @@ export default function Invoices() {
   const formatCurrency = (amount: number) =>
     `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
 
+  const filteredModalContracts = useMemo(() => {
+    const query = modalSearchQuery.trim().toLowerCase();
+    if (!query) return sales.slice(0, 10);
+    return sales.filter(
+      (s) =>
+        s.invoiceNumber.toLowerCase().includes(query) ||
+        s.customerName.toLowerCase().includes(query)
+    );
+  }, [sales, modalSearchQuery]);
+
   const resetForm = () => {
+    setEditingSaleId(null);
     setInvoiceNumber(getNextSaleInvoiceNumber());
     setInvoiceDate(today());
     setPaymentDate(today());
@@ -321,6 +374,59 @@ export default function Invoices() {
       return;
     }
 
+    if (editingSaleId) {
+      try {
+        const updatedSale = updateSale(editingSaleId, {
+          customerId: selectedCustomer.id,
+          customerName: selectedCustomer.name,
+          items,
+          subtotal,
+          discount: discountAmount,
+          tax: taxAmount,
+          total,
+          paid,
+          remaining,
+          status: remaining > 0 ? 'pending' : 'completed',
+          date: invoiceDate,
+          notes: invoiceNotes,
+          createdBy: user?.name || 'مدير النظام',
+          financing: {
+            paymentMethod,
+            salesRepId: selectedSalesRepId || undefined,
+            salesRepName: salesReps.find((r) => r.id === selectedSalesRepId)?.name,
+            installmentMonths: paymentMethod === 'installment' ? effectiveMonths : 0,
+            installmentStartDate: paymentMethod === 'installment' ? firstInstallmentDate : undefined,
+            upfrontAmount: paid,
+            monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
+          },
+        });
+
+        createNotification({
+          type: 'success',
+          title: 'تعديل تعاقد سابقى',
+          message: `تم تعديل وحفظ التعاقد رقم ${updatedSale.invoiceNumber} للعميل ${selectedCustomer.name} بنجاح`,
+        });
+
+        const refreshedProducts = getProducts();
+        setProducts(refreshedProducts);
+
+        const refreshedSales = getSales();
+        setSales(refreshedSales.slice().reverse());
+
+        setMessage({
+          type: 'success',
+          text: `تم تعديل وحفظ التعاقد رقم ${updatedSale.invoiceNumber} بنجاح.`,
+        });
+
+        setSavedSaleForPrinting(updatedSale);
+        setEditingSaleId(null);
+        resetForm();
+      } catch (err: any) {
+        setMessage({ type: 'error', text: err.message || 'حدث خطأ أثناء تعديل التعاقد' });
+      }
+      return;
+    }
+
     if (procurementRows.length > 0 && !selectedProcurementSupplier) {
       setMessage({ type: 'error', text: 'اختر المورد ليتم إنشاء شراء تلقائي للأصناف غير المتوفرة.' });
       return;
@@ -428,6 +534,10 @@ export default function Invoices() {
 
     const refreshedProducts = getProducts();
     setProducts(refreshedProducts);
+
+    const refreshedSales = getSales();
+    setSales(refreshedSales.slice().reverse());
+
     setMessage({
       type: 'success',
       text:
@@ -435,7 +545,9 @@ export default function Invoices() {
           ? `تم حفظ الفاتورة ${createdSale.invoiceNumber} وإنشاء شراء تلقائي ${autoPurchaseNumber} من نفس الشاشة.`
           : `تم حفظ الفاتورة ${createdSale.invoiceNumber} بنجاح.`,
     });
-    resetForm();
+    
+    // Set for printing
+    setSavedSaleForPrinting(createdSale);
   };
 
   return (
@@ -443,10 +555,23 @@ export default function Invoices() {
       <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex-1">
-            <h2 className="text-2xl font-bold text-slate-900">فاتورة بيع ذكية</h2>
+            <h2 className="text-2xl font-bold text-slate-900">{editingSaleId ? 'تعديل تعاقد قائم' : 'فاتورة بيع ذكية'}</h2>
             <p className="mt-1 text-sm text-slate-500 leading-relaxed max-w-2xl">
-              شاشة واحدة تجمع العميل والصنف والتقسيط والشراء التلقائي عند الحاجة.
+              {editingSaleId ? 'أنت في وضع التعديل الآن. سيتم تحديث الكميات وحسابات العملاء تلقائياً عند الحفظ.' : 'شاشة واحدة تجمع العميل والصنف والتقسيط والشراء التلقائي عند الحاجة.'}
             </p>
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setModalSearchQuery('');
+                  setShowSearchModal(true);
+                }}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-extrabold rounded-2xl text-sm transition-all shadow-sm active:scale-95"
+              >
+                <Search size={16} />
+                البحث عن تعاقد سابق لتعديله أو طباعته 🔍
+              </button>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
             <QuickCard label="رقم الفاتورة" value={invoiceNumber || '-'} />
@@ -459,6 +584,22 @@ export default function Invoices() {
           </div>
         </div>
       </section>
+
+      {editingSaleId && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center justify-between shadow-sm animate-pulse">
+          <div className="flex items-center gap-2">
+            <span className="font-extrabold text-base">⚠️ وضع تعديل التعاقد:</span>
+            <span>أنت تقوم الآن بتعديل بيانات التعاقد رقم <b>{invoiceNumber}</b>. يمكنك تعديل العملاء أو الأصناف أو شروط الدفع والضغط على "تعديل وحفظ التغييرات" باليسار.</span>
+          </div>
+          <button
+            type="button"
+            onClick={resetForm}
+            className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+          >
+            إلغاء التعديل والعودة للإنشاء
+          </button>
+        </div>
+      )}
 
       {message && (
         <div
@@ -869,18 +1010,30 @@ export default function Invoices() {
             <div className="mt-5 grid gap-3">
               <button
                 onClick={saveInvoice}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 font-bold text-white hover:bg-emerald-700"
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all ${
+                  editingSaleId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
               >
                 <Save size={18} />
-                حفظ الفاتورة
+                {editingSaleId ? 'تعديل وحفظ التغييرات' : 'حفظ الفاتورة'}
               </button>
-              <button
-                onClick={resetForm}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-100 px-4 py-3 font-bold text-slate-700 hover:bg-slate-200"
-              >
-                <CalendarDays size={18} />
-                فاتورة جديدة
-              </button>
+              {editingSaleId ? (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-rose-50 hover:bg-rose-100 px-4 py-3 font-bold text-rose-700 border border-rose-200 transition-all"
+                >
+                  إلغاء التعديل والعودة للإنشاء
+                </button>
+              ) : (
+                <button
+                  onClick={resetForm}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-100 px-4 py-3 font-bold text-slate-700 hover:bg-slate-200"
+                >
+                  <CalendarDays size={18} />
+                  فاتورة جديدة
+                </button>
+              )}
             </div>
           </Panel>
 
@@ -913,6 +1066,129 @@ export default function Invoices() {
           </Panel>
         </div>
       </div>
+
+      {/* NEW: Gorgeous Advanced Floating Search Overlay Modal */}
+      {showSearchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-100 overflow-hidden transform transition-all duration-300 scale-100 flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-sky-600 to-sky-700 p-6 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-xl font-bold flex items-center gap-2 text-right">
+                  <Search size={22} />
+                  البحث الذكي عن تعاقد سابق
+                </h3>
+                <p className="text-xs text-sky-100 mt-1 text-right">اكتب اسم العميل أو رقم العقد، ثم اختر الإجراء (تعديل أو طباعة).</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSearchModal(false)}
+                className="text-white/80 hover:text-white text-3xl font-light p-1 leading-none transition-colors outline-none"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 overflow-y-auto flex-1">
+              {/* Big Search Input */}
+              <div className="relative mb-6">
+                <Search className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                <input
+                  type="text"
+                  autoFocus
+                  value={modalSearchQuery}
+                  onChange={(e) => setModalSearchQuery(e.target.value)}
+                  placeholder="اكتب اسم العميل المشتري أو رقم العقد للبحث الفوري..."
+                  className="w-full rounded-2xl border-2 border-sky-100 focus:border-sky-500 bg-slate-50 px-4 py-3.5 pr-12 text-base font-semibold outline-none transition-all shadow-inner"
+                />
+              </div>
+
+              {/* List of Results */}
+              <div className="space-y-3">
+                {filteredModalContracts.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 font-bold">
+                    لا توجد تعاقدات سابقة مسجلة أو مطابقة لبحثك الحالي.
+                  </div>
+                ) : (
+                  filteredModalContracts.map((sale) => (
+                    <div
+                      key={sale.id}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl border border-slate-100 hover:border-sky-200 hover:bg-sky-50/30 transition-all shadow-sm bg-white"
+                    >
+                      <div className="space-y-1 text-right">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono font-black text-sky-600">{sale.invoiceNumber}</span>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
+                            {new Date(sale.date).toLocaleDateString('ar-EG')}
+                          </span>
+                          <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
+                            sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700' : 'bg-emerald-50 text-emerald-700'
+                          }`}>
+                            {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
+                          </span>
+                        </div>
+                        <p className="font-bold text-slate-800 text-base">{sale.customerName}</p>
+                        <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
+                          <span>الإجمالي: <b className="text-emerald-700">{formatCurrency(sale.total)}</b></span>
+                          <span>المتبقي: <b className="text-red-600">{formatCurrency(sale.remaining)}</b></span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-2 shrink-0 justify-end sm:justify-start">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleLoadForEdit(sale);
+                            setShowSearchModal(false);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                        >
+                          <Edit3 size={13} />
+                          تعديل البيانات
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSavedSaleForPrinting(sale);
+                            setShowSearchModal(false);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                        >
+                          <Printer size={13} />
+                          طباعة المستندات
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowSearchModal(false)}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-sm transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {savedSaleForPrinting && (
+        <LegalDocumentsPrintModal
+          isOpen={!!savedSaleForPrinting}
+          onClose={() => {
+            setSavedSaleForPrinting(null);
+          }}
+          sale={savedSaleForPrinting}
+        />
+      )}
     </div>
   );
 }

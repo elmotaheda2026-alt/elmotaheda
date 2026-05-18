@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { UserPermissions } from '../types';
 import {
   Banknote,
   BarChart3,
@@ -11,6 +13,7 @@ import {
   LayoutDashboard,
   LogOut,
   Package,
+  PieChart,
   Receipt,
   Settings,
   ShoppingBag,
@@ -27,46 +30,53 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-const menuGroups = [
+type PermissionKey = keyof UserPermissions;
+
+const menuGroups: {
+  title: string;
+  defaultOpen: boolean;
+  items: { icon: any; label: string; path: string; permission?: PermissionKey }[];
+}[] = [
   {
     title: 'مكتب المحاسب',
     defaultOpen: true,
     items: [
-      { icon: LayoutDashboard, label: 'الرئيسية', path: '/' },
-      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices' },
-      { icon: UserCircle, label: 'ملفات العملاء', path: '/customers' },
-      { icon: Package, label: 'دليل الأصناف', path: '/products' },
-      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases' },
+      { icon: LayoutDashboard, label: 'الرئيسية', path: '/', permission: 'dashboard' },
+      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales' },
+      { icon: UserCircle, label: 'ملفات العملاء', path: '/customers', permission: 'customers' },
+      { icon: Package, label: 'دليل الأصناف', path: '/products', permission: 'inventory' },
+      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases', permission: 'purchases' },
     ],
   },
   {
     title: 'الخزينة والمتابعة',
     defaultOpen: false,
     items: [
-      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments' },
-      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement' },
-      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses' },
-      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts' },
+      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments', permission: 'treasury' },
+      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'treasury' },
+      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses', permission: 'treasury' },
+      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'treasury' },
+      { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders' },
     ],
   },
   {
     title: 'التشغيل التجاري',
     defaultOpen: false,
     items: [
-      { icon: ShoppingBag, label: 'حركة المبيعات', path: '/sales' },
-      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory' },
-      { icon: Truck, label: 'شركاء التوريد', path: '/suppliers' },
-      { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps' },
+      { icon: ShoppingBag, label: 'حركة المبيعات', path: '/sales', permission: 'sales' },
+      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory', permission: 'inventory' },
+      { icon: Truck, label: 'شركاء التوريد', path: '/suppliers', permission: 'suppliers' },
+      { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps', permission: 'sales' },
     ],
   },
   {
     title: 'الإدارة والتحكم',
     defaultOpen: false,
     items: [
-      { icon: Users, label: 'إدارة المستخدمين', path: '/users' },
-      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports' },
+      { icon: Users, label: 'إدارة المستخدمين', path: '/users', permission: 'users' },
+      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports' },
       { icon: Bell, label: 'مركز التنبيهات', path: '/notifications' },
-      { icon: Settings, label: 'تهيئة النظام', path: '/settings' },
+      { icon: Settings, label: 'تهيئة النظام', path: '/settings', permission: 'settings' },
     ],
   },
 ];
@@ -74,6 +84,15 @@ const menuGroups = [
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
+  
+  const hasPermission = (permission?: PermissionKey) => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    if (!permission) return true;
+    return !!user.permissions?.[permission];
+  };
+
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(
     () => Object.fromEntries(menuGroups.map((group) => [group.title, Boolean(group.defaultOpen)])),
   );
@@ -115,7 +134,12 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         <nav className="flex-1 overflow-y-auto px-5 py-3 no-scrollbar">
           <div className="space-y-2">
-            {menuGroups.map((group) => (
+            {menuGroups.map((group) => {
+              const allowedItems = group.items.filter(item => hasPermission(item.permission));
+              
+              if (allowedItems.length === 0) return null;
+
+              return (
               <section key={group.title} className="border-b border-slate-200 pb-3 last:border-b-0">
                 <button
                   type="button"
@@ -131,7 +155,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
                 {openGroups[group.title] && (
                   <div className="mt-1 space-y-1">
-                    {group.items.map((item) => {
+                    {allowedItems.map((item) => {
                       const Icon = item.icon;
                       const isActive = location.pathname === item.path;
 
@@ -156,7 +180,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                   </div>
                 )}
               </section>
-            ))}
+            )})}
           </div>
         </nav>
 

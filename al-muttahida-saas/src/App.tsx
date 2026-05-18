@@ -20,6 +20,7 @@ import Settings from './pages/Settings';
 import Notifications from './pages/Notifications';
 import SalesReps from './pages/SalesReps';
 import CollectionStatement from './pages/CollectionStatement';
+import Shareholders from './pages/Shareholders';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -51,6 +52,7 @@ function AppRoutes() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="sales-reps" element={<SalesReps />} />
         <Route path="collection-statement" element={<CollectionStatement />} />
+        <Route path="shareholders" element={<Shareholders />} />
       </Route>
     </Routes>
   );

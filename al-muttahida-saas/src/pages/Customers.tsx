@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Plus, Edit, Trash2, Search, Save, X, Camera, Upload, User,
-  MapPin, Phone, Calendar, FileText,
+  MapPin, Phone, Calendar, FileText, AlertTriangle, Gavel,
   Building, Users, DollarSign, FileUp, UserCircle, CreditCard
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
@@ -41,7 +41,9 @@ export default function Customers() {
     balance: '',
     balanceType: 'debtor' as 'debtor' | 'creditor',
     notes: '',
-    guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null]
+    guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null],
+    isSued: false,
+    suedDate: '',
   };
 
   const [formData, setFormData] = useState(emptyForm);
@@ -88,7 +90,9 @@ export default function Customers() {
       balance: parseFloat(formData.balance) || 0,
       balanceType: formData.balanceType,
       notes: formData.notes || undefined,
-      guarantors: formData.guarantors
+      guarantors: formData.guarantors,
+      isSued: formData.isSued,
+      suedDate: formData.isSued ? (formData.suedDate || new Date().toISOString()) : undefined
     };
 
     if (isEditing && selectedCustomer) {
@@ -123,7 +127,9 @@ export default function Customers() {
       balance: customer.balance?.toString() || '',
       balanceType: customer.balanceType || 'debtor',
       notes: customer.notes || '',
-      guarantors: customer.guarantors || [null, null, null]
+      guarantors: customer.guarantors || [null, null, null],
+      isSued: customer.isSued || false,
+      suedDate: customer.suedDate || '',
     });
     setIsEditing(true);
     setShowForm(true);
@@ -252,10 +258,13 @@ export default function Customers() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 bg-pink-100 rounded-full flex items-center justify-center">
-                              <User size={16} className="text-pink-600" />
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${customer.isSued ? 'bg-red-100' : 'bg-pink-100'}`}>
+                              {customer.isSued ? <Gavel size={16} className="text-red-600" /> : <User size={16} className="text-pink-600" />}
                             </div>
-                            <span className="font-medium text-gray-800">{customer.name}</span>
+                            <div className="flex flex-col">
+                               <span className={`font-medium ${customer.isSued ? 'text-red-600 line-through' : 'text-gray-800'}`}>{customer.name}</span>
+                               {customer.isSued && <span className="text-xs text-red-500 font-bold flex items-center gap-1"><AlertTriangle size={10} /> محال للقضاء</span>}
+                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-600">{customer.phone}</td>
@@ -444,6 +453,32 @@ export default function Customers() {
                           </div>
                         </div>
                       </div>
+
+                      {/* Legal Status Toggle */}
+                      <div className="mt-4 p-4 rounded-xl border border-red-200 bg-red-50 flex flex-col sm:flex-row items-center justify-between gap-4">
+                         <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-red-100 text-red-600 rounded-full flex items-center justify-center shrink-0">
+                               <Gavel size={20} />
+                            </div>
+                            <div>
+                               <h4 className="font-bold text-red-800">الشئون القانونية والنزاعات</h4>
+                               <p className="text-xs text-red-600">تفعيل هذا الخيار سيضع العميل في القائمة السوداء ويمنع التعامل معه.</p>
+                            </div>
+                         </div>
+                         <label className="flex items-center cursor-pointer">
+                            <div className="relative">
+                               <input 
+                                 type="checkbox" 
+                                 className="sr-only" 
+                                 checked={formData.isSued} 
+                                 onChange={(e) => setFormData({...formData, isSued: e.target.checked})} 
+                               />
+                               <div className={`block w-14 h-8 rounded-full transition-colors ${formData.isSued ? 'bg-red-500' : 'bg-gray-300'}`}></div>
+                               <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.isSued ? 'transform translate-x-6' : ''}`}></div>
+                            </div>
+                         </label>
+                      </div>
+
                     </div>
                   </div>
 

@@ -1,9 +1,24 @@
+export interface UserPermissions {
+  dashboard: boolean;
+  sales: boolean;
+  purchases: boolean;
+  inventory: boolean;
+  customers: boolean;
+  suppliers: boolean;
+  treasury: boolean;
+  reports: boolean;
+  settings: boolean;
+  users: boolean;
+  shareholders: boolean;
+}
+
 export interface User {
   id: string;
   name: string;
   email: string;
   password: string;
-  role: 'admin' | 'manager' | 'user';
+  role: 'admin' | 'manager' | 'accountant' | 'user';
+  permissions?: UserPermissions;
   phone?: string;
   avatar?: string;
   createdAt: string;
@@ -39,6 +54,8 @@ export interface Customer {
   notes?: string;
   image?: string;
   guarantors: [Guarantor | null, Guarantor | null, Guarantor | null];
+  isSued?: boolean;
+  suedDate?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -232,4 +249,29 @@ export interface DashboardStats {
   totalProducts: number;
   lowStockItems: number;
   pendingPayments: number;
+}
+
+export interface Shareholder {
+  id: string;
+  name: string;
+  phone: string;
+  sharePercentage: number;
+  managementFeePercentage?: number;
+  capital: number;
+  currentBalance: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShareholderTransaction {
+  id: string;
+  shareholderId: string;
+  shareholderName: string;
+  type: 'capital_deposit' | 'capital_withdrawal' | 'profit_distribution' | 'profit_withdrawal';
+  amount: number;
+  date: string;
+  description: string;
+  createdBy: string;
+  createdAt: string;
 }

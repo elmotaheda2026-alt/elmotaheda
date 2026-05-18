@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search, UserCheck, UserX } from 'lucide-react';
-import { User } from '../types';
+import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-react';
+import { User, UserPermissions } from '../types';
 import { getUsers, createUser, updateUser, deleteUser } from '../lib/storage';
 
 export default function Users() {
@@ -8,13 +8,28 @@ export default function Users() {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const defaultPermissions: UserPermissions = {
+    dashboard: true,
+    sales: false,
+    purchases: false,
+    inventory: false,
+    customers: false,
+    suppliers: false,
+    treasury: false,
+    reports: false,
+    settings: false,
+    users: false,
+    shareholders: false,
+  };
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     password: '',
-    role: 'user' as 'admin' | 'manager' | 'user',
+    role: 'user' as 'admin' | 'manager' | 'accountant' | 'user',
     phone: '',
     isActive: true,
+    permissions: defaultPermissions,
   });
 
   useEffect(() => {
@@ -47,6 +62,7 @@ export default function Users() {
       role: user.role,
       phone: user.phone || '',
       isActive: user.isActive,
+      permissions: user.permissions || defaultPermissions,
     });
     setShowModal(true);
   };
@@ -71,6 +87,7 @@ export default function Users() {
       role: 'user',
       phone: '',
       isActive: true,
+      permissions: defaultPermissions,
     });
   };
 
@@ -142,9 +159,10 @@ export default function Users() {
                     <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                       user.role === 'admin' ? 'bg-purple-100 text-purple-700' :
                       user.role === 'manager' ? 'bg-blue-100 text-blue-700' :
+                      user.role === 'accountant' ? 'bg-emerald-100 text-emerald-700' :
                       'bg-gray-100 text-gray-700'
                     }`}>
-                      {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : 'مستخدم'}
+                      {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : user.role === 'accountant' ? 'محاسب' : 'مستخدم'}
                     </span>
                   </td>
                   <td className="px-6 py-4">
@@ -183,14 +201,15 @@ export default function Users() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="p-6 border-b border-gray-100">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 sm:p-6">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-gray-100 shrink-0">
               <h3 className="text-xl font-bold text-gray-800">
                 {editingUser ? 'تعديل مستخدم' : 'إضافة مستخدم جديد'}
               </h3>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="flex flex-col overflow-hidden">
+              <div className="p-6 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">الاسم</label>
                 <input
@@ -238,21 +257,65 @@ export default function Users() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                 >
                   <option value="user">مستخدم</option>
+                  <option value="accountant">محاسب</option>
                   <option value="manager">مشرف</option>
                   <option value="admin">مدير</option>
                 </select>
               </div>
-              <div className="flex gap-3 pt-4">
+
+              {formData.role !== 'admin' && (
+                <div className="border-t border-slate-100 pt-4 mt-4">
+                  <h4 className="font-bold text-slate-800 mb-3 text-sm flex items-center gap-2">
+                    <Shield size={16} className="text-indigo-600" />
+                    تخصيص صلاحيات المستخدم الدقيقة
+                  </h4>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    {Object.entries({
+                      dashboard: 'لوحة التحكم',
+                      sales: 'المبيعات والفواتير',
+                      purchases: 'المشتريات',
+                      inventory: 'إدارة المخزون',
+                      customers: 'العملاء',
+                      suppliers: 'الموردين',
+                      treasury: 'الخزينة والحسابات',
+                      shareholders: 'حسابات الشركاء',
+                      reports: 'التقارير المالية',
+                      users: 'إدارة المستخدمين',
+                      settings: 'إعدادات النظام'
+                    }).map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions[key as keyof UserPermissions]}
+                          onChange={(e) => setFormData({
+                            ...formData,
+                            permissions: {
+                              ...formData.permissions,
+                              [key]: e.target.checked
+                            }
+                          })}
+                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-sm font-medium text-slate-700">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              </div>
+              
+              <div className="p-6 border-t border-slate-100 shrink-0 flex gap-3 bg-slate-50/50 rounded-b-2xl">
                 <button
                   type="button"
                   onClick={() => { setShowModal(false); setEditingUser(null); }}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors font-bold"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-bold"
                 >
                   {editingUser ? 'تحديث' : 'إضافة'}
                 </button>
