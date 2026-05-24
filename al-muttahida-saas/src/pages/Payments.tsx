@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
 import { createPayment, getCustomers, getPayments, getSales, getSuppliers } from '../lib/storage';
+import { api, hasApiToken } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 
 type PaymentType = 'in' | 'out';
@@ -63,9 +64,50 @@ export default function Payments() {
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const loadData = () => {
-    const nextPayments = getPayments().slice().reverse();
-    const nextSales = getSales().slice().reverse();
+  const mapApiSale = (row: any): Sale => ({
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    items: [],
+    subtotal: Number(row.total || 0),
+    discount: 0,
+    tax: 0,
+    total: Number(row.total || 0),
+    paid: Number(row.paid || 0),
+    remaining: Number(row.remaining || 0),
+    status: row.status,
+    date: row.date,
+    notes: undefined,
+    createdBy: row.created_by || 'system',
+    createdAt: row.created_at || new Date().toISOString(),
+    version: row.version,
+    locked: !!row.locked,
+    lastEditedBy: row.last_edited_by || undefined,
+    lastEditedAt: row.last_edited_at || undefined,
+  });
+
+  const mapApiPayment = (row: any): Payment => ({
+    id: row.id,
+    type: row.type,
+    amount: Number(row.amount || 0),
+    referenceId: row.sale_id || row.id,
+    referenceType: row.sale_id ? 'sale' : 'other',
+    description: row.description || '',
+    date: row.date,
+    createdBy: row.created_by || 'system',
+    createdAt: row.created_at || new Date().toISOString(),
+    saleId: row.sale_id || undefined,
+    installmentId: row.installment_id || undefined,
+    invoiceNumber: undefined,
+    receiptNumber: row.receipt_number || undefined,
+    status: row.status || 'posted',
+    channel: row.channel || 'cash',
+  });
+
+  const loadData = async () => {
+    const nextPayments = hasApiToken() ? (await api.listPayments()).map(mapApiPayment).reverse() : getPayments().slice().reverse();
+    const nextSales = hasApiToken() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse();
     const nextCustomers = getCustomers();
     const nextSuppliers = getSuppliers();
 
@@ -84,7 +126,7 @@ export default function Payments() {
   };
 
   useEffect(() => {
-    loadData();
+    void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -358,6 +400,7 @@ export default function Payments() {
       installmentId: selectedInstallment.id,
       invoiceNumber: selectedSale.invoiceNumber,
       affectsCustomerBalance: true,
+      channel: 'cash',
     });
 
     const updatedSale = getSales().find((sale) => sale.id === selectedSale.id) || selectedSale;
@@ -412,6 +455,7 @@ export default function Payments() {
       date: outgoingForm.date,
       createdBy: user?.name || 'مدير النظام',
       supplierId: outgoingForm.supplierId,
+      channel: 'cash',
     });
 
     loadData();

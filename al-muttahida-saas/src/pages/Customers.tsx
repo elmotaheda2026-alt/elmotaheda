@@ -40,6 +40,7 @@ export default function Customers() {
     pensionDate: '',
     balance: '',
     balanceType: 'debtor' as 'debtor' | 'creditor',
+    creditLimit: '',
     notes: '',
     guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null],
     isSued: false,
@@ -89,6 +90,7 @@ export default function Customers() {
       pensionDate: formData.pensionDate,
       balance: parseFloat(formData.balance) || 0,
       balanceType: formData.balanceType,
+      creditLimit: parseFloat(formData.creditLimit) || 0,
       notes: formData.notes || undefined,
       guarantors: formData.guarantors,
       isSued: formData.isSued,
@@ -126,6 +128,7 @@ export default function Customers() {
       pensionDate: customer.pensionDate || '',
       balance: customer.balance?.toString() || '',
       balanceType: customer.balanceType || 'debtor',
+      creditLimit: customer.creditLimit?.toString() || '',
       notes: customer.notes || '',
       guarantors: customer.guarantors || [null, null, null],
       isSued: customer.isSued || false,
@@ -610,6 +613,17 @@ export default function Customers() {
                           <option value="debtor">مدين</option>
                           <option value="creditor">دائن</option>
                         </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1 text-red-600">الحد الائتماني المسموح به</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.creditLimit}
+                          onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
+                          placeholder="مثال: 50000"
+                          className="w-full px-3 py-2 border border-red-300 bg-red-50 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                        />
                       </div>
                     </div>
                   </div>

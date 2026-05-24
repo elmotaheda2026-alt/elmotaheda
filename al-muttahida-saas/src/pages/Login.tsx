@@ -20,7 +20,7 @@ export default function Login() {
     // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    if (login(email, password)) {
+    if (await login(email, password)) {
       navigate('/');
     } else {
       setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');

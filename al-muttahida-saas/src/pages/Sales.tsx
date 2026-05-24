@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Plus, Printer, Search, ShoppingBag, Trash2 } from 'lucide-react';
 import { Customer, Product, Sale, SaleItem } from '../types';
 import { createSale, getCustomers, getProducts, getSales } from '../lib/storage';
+import { api, hasApiToken } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 
@@ -21,15 +22,38 @@ export default function Sales() {
   const [saleItems, setSaleItems] = useState<SaleItem[]>([]);
   const [printingSale, setPrintingSale] = useState<Sale | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const mapApiSale = (row: any): Sale => ({
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    items: [],
+    subtotal: Number(row.total || 0),
+    discount: 0,
+    tax: 0,
+    total: Number(row.total || 0),
+    paid: Number(row.paid || 0),
+    remaining: Number(row.remaining || 0),
+    status: row.status,
+    date: row.date,
+    notes: undefined,
+    createdBy: row.created_by || 'system',
+    createdAt: row.created_at || new Date().toISOString(),
+    version: row.version,
+    locked: !!row.locked,
+    lastEditedBy: row.last_edited_by || undefined,
+    lastEditedAt: row.last_edited_at || undefined,
+  });
 
-  const loadData = () => {
-    setSales(getSales().slice().reverse());
+  const loadData = async () => {
+    setSales(hasApiToken() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse());
     setCustomers(getCustomers());
     setProducts(getProducts());
   };
+
+  useEffect(() => {
+    void loadData();
+  }, []);
 
   const formatCurrency = (amount: number) =>
     `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
@@ -125,7 +149,7 @@ export default function Sales() {
     setMessage(null);
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
     if (!formData.customerId) {
@@ -149,6 +173,22 @@ export default function Sales() {
     }
 
     const totals = calculateTotals();
+    if (hasApiToken()) {
+      await api.createSale({
+        customerId: formData.customerId,
+        customerName: formData.customerName,
+        invoiceNumber: `INV-${Date.now()}`,
+        total: totals.total,
+        paid: 0,
+        date: new Date().toISOString().slice(0, 10),
+      });
+      await loadData();
+      setShowModal(false);
+      setSaleItems([]);
+      setFormData({ customerId: '', customerName: '', notes: '' });
+      setMessage({ type: 'success', text: 'تم حفظ عملية البيع بنجاح.' });
+      return;
+    }
     createSale({
       customerId: formData.customerId,
       customerName: formData.customerName,
@@ -165,7 +205,7 @@ export default function Sales() {
       createdBy: user?.name || 'مدير النظام',
     });
 
-    loadData();
+    await loadData();
     setShowModal(false);
     setSaleItems([]);
     setFormData({ customerId: '', customerName: '', notes: '' });

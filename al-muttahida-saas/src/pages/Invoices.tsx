@@ -374,6 +374,22 @@ export default function Invoices() {
       return;
     }
 
+    if (selectedCustomer && selectedCustomer.creditLimit && selectedCustomer.creditLimit > 0) {
+      const currentDebt = selectedCustomer.balanceType === 'debtor' ? selectedCustomer.balance : 0;
+      const totalProjectedDebt = currentDebt + remaining;
+      
+      if (totalProjectedDebt > selectedCustomer.creditLimit) {
+        if (user?.role === 'admin') {
+          if (!window.confirm(`تحذير: إجمالي المديونية (${formatCurrency(totalProjectedDebt)}) سيتخطى الحد الائتماني للعميل (${formatCurrency(selectedCustomer.creditLimit)}). هل تريد المتابعة وحفظ الفاتورة كمدير النظام؟`)) {
+            return;
+          }
+        } else {
+          setMessage({ type: 'error', text: `لا يمكن حفظ الفاتورة. إجمالي المديونية (${formatCurrency(totalProjectedDebt)}) سيتخطى الحد الائتماني المسموح به للعميل (${formatCurrency(selectedCustomer.creditLimit)}). يرجى الرجوع للإدارة.` });
+          return;
+        }
+      }
+    }
+
     if (editingSaleId) {
       try {
         const updatedSale = updateSale(editingSaleId, {
@@ -555,7 +571,7 @@ export default function Invoices() {
       <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex-1">
-            <h2 className="text-2xl font-bold text-slate-900">{editingSaleId ? 'تعديل تعاقد قائم' : 'فاتورة بيع ذكية'}</h2>
+            <h2 className="text-2xl font-bold text-slate-900">{editingSaleId ? 'تعديل تعاقد قائم' : 'إصدار فاتورة بيع'}</h2>
             <p className="mt-1 text-sm text-slate-500 leading-relaxed max-w-2xl">
               {editingSaleId ? 'أنت في وضع التعديل الآن. سيتم تحديث الكميات وحسابات العملاء تلقائياً عند الحفظ.' : 'شاشة واحدة تجمع العميل والصنف والتقسيط والشراء التلقائي عند الحاجة.'}
             </p>
@@ -566,10 +582,10 @@ export default function Invoices() {
                   setModalSearchQuery('');
                   setShowSearchModal(true);
                 }}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-extrabold rounded-2xl text-sm transition-all shadow-sm active:scale-95"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-2xl text-sm transition-all shadow-sm active:scale-95"
               >
                 <Search size={16} />
-                البحث عن تعاقد سابق لتعديله أو طباعته 🔍
+                البحث في سجل التعاقدات
               </button>
             </div>
           </div>
@@ -1076,7 +1092,7 @@ export default function Invoices() {
               <div>
                 <h3 className="text-xl font-bold flex items-center gap-2 text-right">
                   <Search size={22} />
-                  البحث الذكي عن تعاقد سابق
+                  البحث الذكي في سجل التعاقدات
                 </h3>
                 <p className="text-xs text-sky-100 mt-1 text-right">اكتب اسم العميل أو رقم العقد، ثم اختر الإجراء (تعديل أو طباعة).</p>
               </div>
@@ -1203,7 +1219,7 @@ function Panel({
   icon?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm transition-all focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-200 focus-within:shadow-md">
       <div className="mb-5 flex items-center gap-3">
         {icon}
         <h3 className="text-lg font-bold text-slate-800">{title}</h3>

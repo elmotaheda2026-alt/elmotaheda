@@ -30,30 +30,32 @@ export default function Dashboard() {
     return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
   };
 
-  const StatCard = ({ title, value, icon: Icon, trend, trendValue, color }: any) => (
-    <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+  const StatCard = ({ title, value, icon: Icon, trend, trendValue, color, iconColor }: any) => (
+    <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-md hover:border-sky-100 transition-all">
       <div className="flex items-center justify-between mb-4">
         <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${color}`}>
-          <Icon size={24} className="text-white" />
+          <Icon size={24} className={iconColor} />
         </div>
         {trend && (
-          <div className={`flex items-center gap-1 text-sm ${trend === 'up' ? 'text-green-600' : 'text-red-600'}`}>
+          <div className={`flex items-center gap-1 text-sm font-semibold ${trend === 'up' ? 'text-emerald-600' : 'text-rose-600'}`}>
             {trend === 'up' ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
             {trendValue}
           </div>
         )}
       </div>
-      <h3 className="text-gray-500 text-sm mb-1">{title}</h3>
-      <p className="text-2xl font-bold text-gray-800">{formatCurrency(value)}</p>
+      <h3 className="text-slate-500 font-medium text-sm mb-1">{title}</h3>
+      <p className="text-2xl font-bold text-slate-800">{formatCurrency(value)}</p>
     </div>
   );
 
   return (
     <div className="space-y-6">
       {/* Welcome Section */}
-      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl p-6 text-white">
-        <h2 className="text-2xl font-bold mb-2">مرحباً بك في {settings.companyName}</h2>
-        <p className="text-white/80">إليك ملخص نشاط شركتك اليوم</p>
+      <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-8 text-white shadow-lg relative overflow-hidden">
+        <div className="relative z-10">
+          <h2 className="text-2xl font-bold mb-2">مرحباً بك في {settings.companyName}</h2>
+          <p className="text-slate-300 font-medium">إليك ملخص نشاط شركتك اليوم</p>
+        </div>
       </div>
 
       {/* Stats Grid */}
@@ -65,7 +67,8 @@ export default function Dashboard() {
           icon={ShoppingBag}
           trend="up"
           trendValue="+12%"
-          color="bg-green-500"
+          color="bg-emerald-50"
+          iconColor="text-emerald-600"
         />
         <StatCard
           title="إجمالي المشتريات"
@@ -73,7 +76,8 @@ export default function Dashboard() {
           icon={ShoppingCart}
           trend="down"
           trendValue="-5%"
-          color="bg-orange-500"
+          color="bg-orange-50"
+          iconColor="text-orange-600"
         />
         <StatCard
           title="إجمالي الأرباح"
@@ -81,13 +85,15 @@ export default function Dashboard() {
           icon={DollarSign}
           trend="up"
           trendValue="+8%"
-          color="bg-blue-500"
+          color="bg-sky-50"
+          iconColor="text-sky-600"
         />
         <StatCard
           title="المدفوعات المستحقة"
           value={stats.pendingPayments}
           icon={Wallet}
-          color="bg-red-500"
+          color="bg-rose-50"
+          iconColor="text-rose-600"
         />
       </div>
 

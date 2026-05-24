@@ -26,7 +26,7 @@ export default function Users() {
     name: '',
     email: '',
     password: '',
-    role: 'user' as 'admin' | 'manager' | 'accountant' | 'user',
+    role: 'user' as User['role'],
     phone: '',
     isActive: true,
     permissions: defaultPermissions,

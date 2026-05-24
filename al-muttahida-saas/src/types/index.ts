@@ -17,7 +17,7 @@ export interface User {
   name: string;
   email: string;
   password: string;
-  role: 'admin' | 'manager' | 'accountant' | 'user';
+  role: 'admin' | 'manager' | 'accountant' | 'user' | 'collector' | 'reviewer' | 'finance_manager';
   permissions?: UserPermissions;
   phone?: string;
   avatar?: string;
@@ -51,6 +51,7 @@ export interface Customer {
   pensionDate: string;
   balance: number;
   balanceType: 'debtor' | 'creditor';
+  creditLimit?: number;
   notes?: string;
   image?: string;
   guarantors: [Guarantor | null, Guarantor | null, Guarantor | null];
@@ -144,6 +145,10 @@ export interface Sale {
   notes?: string;
   createdBy: string;
   createdAt: string;
+  version?: number;
+  locked?: boolean;
+  lastEditedBy?: string;
+  lastEditedAt?: string;
   financing?: SaleFinancing;
 }
 
@@ -193,6 +198,62 @@ export interface Payment {
   installmentId?: string;
   invoiceNumber?: string;
   affectsCustomerBalance?: boolean;
+  receiptNumber?: string;
+  voidRef?: string;
+  approvedBy?: string;
+  channel?: 'cash' | 'card' | 'transfer' | 'wallet' | 'other';
+  status?: 'posted' | 'voided';
+}
+
+export interface InstallmentCollectionTask {
+  id: string;
+  customerId: string;
+  customerName: string;
+  saleId: string;
+  installmentId: string;
+  dueDate: string;
+  amount: number;
+  status: 'open' | 'visited' | 'collected' | 'failed' | 'cancelled';
+  assignedToUserId?: string;
+  assignedToName?: string;
+  visitNotes?: string;
+  visitResult?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RescheduleRequest {
+  id: string;
+  saleId: string;
+  customerId: string;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  oldInstallmentMonths: number;
+  newInstallmentMonths: number;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  payload?: Record<string, any>;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ClosingPeriod {
+  id: string;
+  periodType: 'daily' | 'monthly';
+  periodDate: string;
+  status: 'open' | 'closed';
+  closedBy?: string;
+  closedAt?: string;
+  notes?: string;
 }
 
 export interface Expense {

@@ -17,7 +17,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-white/20 bg-white/70 backdrop-blur-xl shadow-sm">
       <div className="mx-auto flex w-full max-w-[1720px] items-center justify-between px-4 py-3 md:px-6 xl:px-8">
         <div className="flex items-center gap-4">
           <button onClick={onMenuClick} className="rounded-xl p-2 hover:bg-slate-100 lg:hidden">

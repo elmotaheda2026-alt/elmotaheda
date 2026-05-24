@@ -375,11 +375,11 @@ export default function CollectionStatement() {
               <table className="w-full bg-white">
                 <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                   <tr>
-                    <th className="px-4 py-5 text-right text-base font-bold">القسط</th>
-                    <th className="px-4 py-5 text-right text-base font-bold">تاريخ الاستحقاق</th>
-                    <th className="px-4 py-5 text-right text-base font-bold text-center">قيمة القسط</th>
-                    <th className="px-4 py-5 text-right text-base font-bold text-center">المتبقي</th>
-                    <th className="px-4 py-5 text-right text-base font-bold text-center">الحالة</th>
+                    <th className="px-4 py-3 text-right text-sm font-bold">القسط</th>
+                    <th className="px-4 py-3 text-right text-sm font-bold">تاريخ الاستحقاق</th>
+                    <th className="px-4 py-3 text-right text-sm font-bold text-center">قيمة القسط</th>
+                    <th className="px-4 py-3 text-right text-sm font-bold text-center">المتبقي</th>
+                    <th className="px-4 py-3 text-right text-sm font-bold text-center">الحالة</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -455,12 +455,12 @@ export default function CollectionStatement() {
                           </td>
                         </tr>
                         {group.map((row, rIdx) => (
-                          <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-sky-50/30 transition-colors border-b border-slate-100 last:border-b-0">
-                            <td className="px-4 py-5 text-base text-slate-700 font-medium">{row.installmentLabel}</td>
-                            <td className="px-4 py-5 text-base text-slate-700">{row.dueDate}</td>
-                            <td className="px-4 py-5 text-base text-slate-700 text-center">{formatCurrency(row.installmentAmount)}</td>
-                            <td className="px-4 py-5 text-base font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
-                            <td className="px-4 py-5 text-center">
+                          <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-sky-50/30 even:bg-slate-50/50 transition-colors border-b border-slate-100 last:border-b-0">
+                            <td className="px-4 py-3 text-sm text-slate-700 font-medium">{row.installmentLabel}</td>
+                            <td className="px-4 py-3 text-sm text-slate-700">{row.dueDate}</td>
+                            <td className="px-4 py-3 text-sm text-slate-700 text-center">{formatCurrency(row.installmentAmount)}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
+                            <td className="px-4 py-3 text-center">
                               <MonthBadge status={row.status} />
                             </td>
                           </tr>
@@ -778,13 +778,24 @@ function MonthBadge({ status }: { status: InstallmentSchedule['status'] }) {
     unpaid: 'غير مدفوع',
   };
 
-  const toneClass = {
-    paid: 'text-emerald-600',
-    partial: 'text-amber-600',
-    unpaid: 'text-red-600',
-  }[status];
+  const styles = {
+    paid: 'bg-emerald-100 text-emerald-700',
+    partial: 'bg-amber-100 text-amber-700',
+    unpaid: 'bg-rose-100 text-rose-700',
+  };
 
-  return <span className={`text-sm font-bold ${toneClass}`}>{labels[status]}</span>;
+  const icons = {
+    paid: <CheckCircle2 size={14} />,
+    partial: <Clock3 size={14} />,
+    unpaid: <AlertTriangle size={14} />,
+  };
+
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${styles[status]}`}>
+      {icons[status]}
+      {labels[status]}
+    </span>
+  );
 }
 
 function MonthRow({ icon, label, value, highlightValue }: { icon: React.ReactNode; label: string; value: string, highlightValue?: boolean }) {
