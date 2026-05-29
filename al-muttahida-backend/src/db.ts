@@ -66,7 +66,56 @@ export async function initDb() {
     password_hash NVARCHAR(255) NOT NULL,
     role NVARCHAR(50) NOT NULL,
     is_active BIT NOT NULL DEFAULT 1,
+    phone NVARCHAR(50),
+    permissions NVARCHAR(MAX),
     created_at NVARCHAR(40) NOT NULL
+  );
+
+  IF COL_LENGTH('users', 'phone') IS NULL
+  ALTER TABLE users ADD phone NVARCHAR(50);
+
+  IF COL_LENGTH('users', 'permissions') IS NULL
+  ALTER TABLE users ADD permissions NVARCHAR(MAX);
+
+  IF OBJECT_ID('customers', 'U') IS NULL
+  CREATE TABLE customers (
+    id NVARCHAR(64) PRIMARY KEY,
+    customer_number NVARCHAR(100) NOT NULL UNIQUE,
+    name NVARCHAR(200) NOT NULL,
+    phone NVARCHAR(50) NOT NULL,
+    email NVARCHAR(255),
+    address NVARCHAR(500) NOT NULL,
+    gender NVARCHAR(10) NOT NULL,
+    city NVARCHAR(100) NOT NULL,
+    governorate NVARCHAR(100) NOT NULL,
+    region NVARCHAR(100) NOT NULL,
+    date_of_birth NVARCHAR(20) NOT NULL,
+    national_id NVARCHAR(50) NOT NULL,
+    age INT NOT NULL,
+    pension_date NVARCHAR(20) NOT NULL,
+    balance DECIMAL(18,2) NOT NULL DEFAULT 0,
+    balance_type NVARCHAR(10) NOT NULL DEFAULT 'debtor',
+    credit_limit DECIMAL(18,2) DEFAULT 0,
+    notes NVARCHAR(1000),
+    image NVARCHAR(MAX),
+    guarantors NVARCHAR(MAX),
+    is_sued BIT NOT NULL DEFAULT 0,
+    sued_date NVARCHAR(40),
+    created_at NVARCHAR(40) NOT NULL,
+    updated_at NVARCHAR(40) NOT NULL
+  );
+
+  IF OBJECT_ID('suppliers', 'U') IS NULL
+  CREATE TABLE suppliers (
+    id NVARCHAR(64) PRIMARY KEY,
+    name NVARCHAR(200) NOT NULL,
+    phone NVARCHAR(50) NOT NULL,
+    email NVARCHAR(255),
+    address NVARCHAR(500) NOT NULL,
+    balance DECIMAL(18,2) NOT NULL DEFAULT 0,
+    notes NVARCHAR(1000),
+    created_at NVARCHAR(40) NOT NULL,
+    updated_at NVARCHAR(40) NOT NULL
   );
 
   IF OBJECT_ID('sales', 'U') IS NULL

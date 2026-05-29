@@ -3,12 +3,20 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { config } from './config.js';
+import rateLimit from 'express-rate-limit';
+import { requestLogger } from './middleware/logger.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
 import { initDb } from './db.js';
 import authRoutes from './routes/auth.js';
 import salesRoutes from './routes/sales.js';
 import paymentRoutes from './routes/payments.js';
 import reportRoutes from './routes/reports.js';
 import closingRoutes from './routes/closing.js';
+import customersRoutes from './routes/customers.js';
+import suppliersRoutes from './routes/suppliers.js';
+import usersRoutes from './routes/users.js';
 
 async function bootstrap() {
   await initDb();
@@ -18,13 +26,32 @@ async function bootstrap() {
   app.use(helmet());
   app.use(express.json({ limit: '1mb' }));
   app.use(morgan('dev'));
+  // Request logging
+  app.use(requestLogger);
+  // Rate limiting
+  app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'al-muttahida-backend' }));
+  // Swagger setup
+  const swaggerSpec = swaggerJsdoc({
+    definition: {
+      openapi: '3.0.0',
+      info: { title: 'Al‑Muttahida API', version: '1.0.0' },
+    },
+    apis: ['./src/routes/*.ts'],
+  });
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
   app.use('/auth', authRoutes);
   app.use('/sales', salesRoutes);
   app.use('/payments', paymentRoutes);
   app.use('/reports', reportRoutes);
   app.use('/closing', closingRoutes);
+  app.use('/customers', customersRoutes);
+  app.use('/suppliers', suppliersRoutes);
+  app.use('/users', usersRoutes);
+  // Central error handling
+  app.use(errorHandler);
 
   app.listen(config.port, () => {
     // eslint-disable-next-line no-console

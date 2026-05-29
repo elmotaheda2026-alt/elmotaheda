@@ -5,7 +5,7 @@ import {
   Building, Users, DollarSign, FileUp, UserCircle, CreditCard
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../lib/storage';
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer, syncCustomers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 
 const initialGuarantor: Guarantor = {
@@ -54,7 +54,8 @@ export default function Customers() {
     loadCustomers();
   }, []);
 
-  const loadCustomers = () => {
+  const loadCustomers = async () => {
+    await syncCustomers();
     const data = getCustomers();
     // Generate customer numbers for existing customers without one
     const updated = data.map((c, index) => ({
@@ -72,7 +73,7 @@ export default function Customers() {
     return `C-${String(maxNum + 1).padStart(4, '0')}`;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const customerData: Partial<Customer> = {
@@ -98,16 +99,16 @@ export default function Customers() {
     };
 
     if (isEditing && selectedCustomer) {
-      updateCustomer(selectedCustomer.id, customerData);
+      await updateCustomer(selectedCustomer.id, customerData);
     } else {
-      createCustomer({
+      await createCustomer({
         ...customerData,
         customerNumber: generateCustomerNumber(),
         balance: parseFloat(formData.balance) || 0
       } as Customer);
     }
 
-    loadCustomers();
+    await loadCustomers();
     handleClose();
   };
 
@@ -138,10 +139,10 @@ export default function Customers() {
     setShowForm(true);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('هل أنت متأكد من حذف هذا العميل؟')) {
-      deleteCustomer(id);
-      loadCustomers();
+      await deleteCustomer(id);
+      await loadCustomers();
       handleClose();
     }
   };

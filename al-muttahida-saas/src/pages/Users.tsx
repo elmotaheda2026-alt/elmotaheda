@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-react';
 import { User, UserPermissions } from '../types';
 import { getUsers, createUser, updateUser, deleteUser } from '../lib/storage';
+import { useAuth } from '../context/AuthContext';
+import { hasPermission } from '../lib/permissions';
 
 export default function Users() {
   const [users, setUsers] = useState<User[]>([]);
@@ -36,18 +38,19 @@ export default function Users() {
     loadUsers();
   }, []);
 
-  const loadUsers = () => {
-    setUsers(getUsers());
+  const loadUsers = async () => {
+    const data = await getUsers();
+    setUsers(data);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingUser) {
-      updateUser(editingUser.id, formData);
+      await updateUser(editingUser.id, formData);
     } else {
-      createUser({ ...formData });
+      await createUser({ ...formData });
     }
-    loadUsers();
+    await loadUsers();
     setShowModal(false);
     setEditingUser(null);
     resetForm();
@@ -67,16 +70,16 @@ export default function Users() {
     setShowModal(true);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('هل أنت متأكد من حذف هذا المستخدم؟')) {
-      deleteUser(id);
-      loadUsers();
+      await deleteUser(id);
+      await loadUsers();
     }
   };
 
-  const toggleUserStatus = (user: User) => {
-    updateUser(user.id, { isActive: !user.isActive });
-    loadUsers();
+  const toggleUserStatus = async (user: User) => {
+    await updateUser(user.id, { isActive: !user.isActive });
+    await loadUsers();
   };
 
   const resetForm = () => {
@@ -178,18 +181,22 @@ export default function Users() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleEdit(user)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                      >
-                        <Edit size={18} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(user.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                      {hasPermission(user, 'users:manage') && (
+                        <button
+                          onClick={() => handleEdit(user)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        >
+                          <Edit size={18} />
+                        </button>
+                      )}
+                      {user.role === 'admin' && (
+                        <button
+                          onClick={() => handleDelete(user.id)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

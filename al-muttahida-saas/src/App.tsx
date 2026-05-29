@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+// Removed HelmetProvider import (handled in main.tsx)
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -22,10 +23,7 @@ import SalesReps from './pages/SalesReps';
 import CollectionStatement from './pages/CollectionStatement';
 import Shareholders from './pages/Shareholders';
 
-function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
-}
+import ProtectedRoute from './components/ProtectedRoute';
 
 function AppRoutes() {
   const { isAuthenticated } = useAuth();
@@ -34,7 +32,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
 
-      <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
+      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         <Route path="users" element={<Users />} />
         <Route path="customers" element={<Customers />} />

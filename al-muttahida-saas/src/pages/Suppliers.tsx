@@ -3,6 +3,7 @@ import { Plus, Edit, Trash2, Search, Phone, MapPin, DollarSign, Truck } from 'lu
 import { Supplier } from '../types';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { hasPermission } from '../lib/permissions';
 
 export default function Suppliers() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -16,24 +17,25 @@ export default function Suppliers() {
     address: '',
     notes: '',
   });
-  const { settings } = useAuth();
+  const { settings, user } = useAuth();
 
   useEffect(() => {
     loadSuppliers();
   }, []);
 
-  const loadSuppliers = () => {
-    setSuppliers(getSuppliers());
+  const loadSuppliers = async () => {
+    const data = await getSuppliers();
+    setSuppliers(data);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingSupplier) {
-      updateSupplier(editingSupplier.id, formData);
+      await updateSupplier(editingSupplier.id, formData);
     } else {
-      createSupplier(formData);
+      await createSupplier(formData);
     }
-    loadSuppliers();
+    await loadSuppliers();
     setShowModal(false);
     setEditingSupplier(null);
     resetForm();
@@ -51,10 +53,10 @@ export default function Suppliers() {
     setShowModal(true);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('هل أنت متأكد من حذف هذا المورد؟')) {
-      deleteSupplier(id);
-      loadSuppliers();
+      await deleteSupplier(id);
+      await loadSuppliers();
     }
   };
 
@@ -145,12 +147,16 @@ export default function Suppliers() {
                 </div>
               </div>
               <div className="flex gap-1">
-                <button onClick={() => handleEdit(supplier)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                  <Edit size={16} />
-                </button>
-                <button onClick={() => handleDelete(supplier.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                  <Trash2 size={16} />
-                </button>
+{hasPermission(user, 'sales:write') && (
+                  <button onClick={() => handleEdit(supplier)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                    <Edit size={16} />
+                  </button>
+                )}
+                {hasPermission(user, 'users:manage') && (
+                  <button onClick={() => handleDelete(supplier.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                    <Trash2 size={16} />
+                  </button>
+                )}
               </div>
             </div>
 

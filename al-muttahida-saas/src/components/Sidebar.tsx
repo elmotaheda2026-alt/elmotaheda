@@ -84,7 +84,7 @@ const menuGroups: {
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+const { user, logout } = useAuth();
   
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
@@ -99,10 +99,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   const handleLogout = () => {
     if (confirm('هل تريد تسجيل الخروج؟')) {
+      logout();
       navigate('/login');
     }
   };
-
   const toggleGroup = (title: string) => {
     setOpenGroups((current) => {
       const isAlreadyOpen = !!current[title];
