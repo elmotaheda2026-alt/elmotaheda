@@ -1,16 +1,21 @@
-export interface UserPermissions {
-  dashboard: boolean;
-  sales: boolean;
-  purchases: boolean;
-  inventory: boolean;
-  customers: boolean;
-  suppliers: boolean;
-  treasury: boolean;
-  reports: boolean;
-  settings: boolean;
-  users: boolean;
-  shareholders: boolean;
-}
+export type Permission =
+  | 'dashboard:view'
+  | 'sales:read'
+  | 'sales:write'
+  | 'sales:reschedule'
+  | 'payments:read'
+  | 'payments:write'
+  | 'payments:reverse'
+  | 'reports:read'
+  | 'closing:write'
+  | 'users:manage'
+  | 'inventory:manage'
+  | 'purchases:manage'
+  | 'settings:manage'
+  | 'shareholders:manage'
+  | 'notifications:read';
+
+export type UserPermissions = Partial<Record<Permission, boolean>>;
 
 export interface User {
   id: string;

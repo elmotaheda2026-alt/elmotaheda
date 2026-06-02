@@ -1,9 +1,59 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
+import { Permission } from '../types.js';
 import { comparePassword, hashPassword, signToken, uid } from '../utils.js';
 
 const router = Router();
+
+const apiPermissions: Permission[] = [
+  'sales:read',
+  'sales:write',
+  'sales:reschedule',
+  'payments:read',
+  'payments:write',
+  'payments:reverse',
+  'reports:read',
+  'closing:write',
+  'users:manage',
+];
+
+const legacyPermissionMap: Record<string, Permission[]> = {
+  sales: ['sales:read', 'sales:write'],
+  customers: ['sales:read', 'sales:write'],
+  suppliers: ['sales:read', 'sales:write'],
+  treasury: ['payments:read', 'payments:write'],
+  reports: ['reports:read'],
+  users: ['users:manage'],
+};
+
+function parseApiPermissions(value?: string | null): Permission[] | undefined {
+  if (!value) return undefined;
+  try {
+    const permissions = JSON.parse(value) as Record<string, boolean>;
+    const parsedPermissions = new Set<Permission>();
+    apiPermissions.forEach((permission) => {
+      if (permissions[permission]) parsedPermissions.add(permission);
+    });
+    Object.entries(legacyPermissionMap).forEach(([legacyPermission, mappedPermissions]) => {
+      if (permissions[legacyPermission]) {
+        mappedPermissions.forEach((permission) => parsedPermissions.add(permission));
+      }
+    });
+    return [...parsedPermissions];
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStoredPermissions(value?: string | null): Record<string, boolean> | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as Record<string, boolean>;
+  } catch {
+    return undefined;
+  }
+}
 
 router.post('/seed-admin', async (_req, res) => {
   const db = await dbPromise;
@@ -31,16 +81,18 @@ router.post('/login', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });
 
   const db = await dbPromise;
-  const user = await db.get<{ id: string; name: string; role: string; password_hash: string; is_active: number }>(
-    'SELECT id, name, role, password_hash, is_active FROM users WHERE email = ?',
+  const user = await db.get<{ id: string; name: string; role: string; password_hash: string; is_active: number; permissions: string | null }>(
+    'SELECT id, name, role, password_hash, is_active, permissions FROM users WHERE email = ?',
     parsed.data.email,
   );
   if (!user || user.is_active !== 1) return res.status(401).json({ message: 'Invalid credentials' });
   const ok = await comparePassword(parsed.data.password, user.password_hash);
   if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
 
-  const token = signToken({ userId: user.id, role: user.role, name: user.name });
-  return res.json({ token, user: { id: user.id, name: user.name, role: user.role } });
+  const tokenPermissions = parseApiPermissions(user.permissions);
+  const userPermissions = parseStoredPermissions(user.permissions);
+  const token = signToken({ userId: user.id, role: user.role, name: user.name, permissions: tokenPermissions });
+  return res.json({ token, user: { id: user.id, name: user.name, role: user.role, permissions: userPermissions } });
 });
 
 export default router;

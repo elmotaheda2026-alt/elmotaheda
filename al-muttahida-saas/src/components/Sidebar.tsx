@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { UserPermissions } from '../types';
+import { Permission } from '../types';
+import { hasPermission as userHasPermission } from '../lib/permissions';
 import {
   Banknote,
   BarChart3,
@@ -30,7 +31,7 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-type PermissionKey = keyof UserPermissions;
+type PermissionKey = Permission;
 
 const menuGroups: {
   title: string;
@@ -41,42 +42,42 @@ const menuGroups: {
     title: 'مكتب المحاسب',
     defaultOpen: true,
     items: [
-      { icon: LayoutDashboard, label: 'الرئيسية', path: '/', permission: 'dashboard' },
-      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales' },
-      { icon: UserCircle, label: 'ملفات العملاء', path: '/customers', permission: 'customers' },
-      { icon: Package, label: 'دليل الأصناف', path: '/products', permission: 'inventory' },
-      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases', permission: 'purchases' },
+      { icon: LayoutDashboard, label: 'الرئيسية', path: '/', permission: 'dashboard:view' },
+      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales:read' },
+      { icon: UserCircle, label: 'ملفات العملاء', path: '/customers', permission: 'sales:read' },
+      { icon: Package, label: 'دليل الأصناف', path: '/products', permission: 'inventory:manage' },
+      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases', permission: 'purchases:manage' },
     ],
   },
   {
     title: 'الخزينة والمتابعة',
     defaultOpen: false,
     items: [
-      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments', permission: 'treasury' },
-      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'treasury' },
-      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses', permission: 'treasury' },
-      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'treasury' },
-      { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders' },
+      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments', permission: 'payments:read' },
+      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
+      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses', permission: 'payments:write' },
+      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
+      { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
     ],
   },
   {
     title: 'التشغيل التجاري',
     defaultOpen: false,
     items: [
-      { icon: ShoppingBag, label: 'حركة المبيعات', path: '/sales', permission: 'sales' },
-      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory', permission: 'inventory' },
-      { icon: Truck, label: 'شركاء التوريد', path: '/suppliers', permission: 'suppliers' },
-      { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps', permission: 'sales' },
+      { icon: ShoppingBag, label: 'حركة المبيعات', path: '/sales', permission: 'sales:read' },
+      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory', permission: 'inventory:manage' },
+      { icon: Truck, label: 'شركاء التوريد', path: '/suppliers', permission: 'sales:read' },
+      { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps', permission: 'sales:read' },
     ],
   },
   {
     title: 'الإدارة والتحكم',
     defaultOpen: false,
     items: [
-      { icon: Users, label: 'إدارة المستخدمين', path: '/users', permission: 'users' },
-      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports' },
-      { icon: Bell, label: 'مركز التنبيهات', path: '/notifications' },
-      { icon: Settings, label: 'تهيئة النظام', path: '/settings', permission: 'settings' },
+      { icon: Users, label: 'إدارة المستخدمين', path: '/users', permission: 'users:manage' },
+      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports:read' },
+      { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
+      { icon: Settings, label: 'تهيئة النظام', path: '/settings', permission: 'settings:manage' },
     ],
   },
 ];
@@ -88,9 +89,8 @@ const { user, logout } = useAuth();
   
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
-    if (user.role === 'admin') return true;
     if (!permission) return true;
-    return !!user.permissions?.[permission];
+    return userHasPermission(user, permission);
   };
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(

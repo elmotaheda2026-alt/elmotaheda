@@ -1,11 +1,16 @@
 import { Payment, Sale, Customer, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, applyPaymentToSale, createAuditLog, getNextReceiptNumber } from './core';
+import { isApiMode } from '../apiClient';
 
 export function getPayments(): Payment[] {
   return getStorage<Payment>(DB_KEYS.PAYMENTS);
 }
 
 export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payment {
+  if (isApiMode()) {
+    throw new Error('لا يمكن حفظ الدفعة محليًا أثناء تشغيل وضع API. استخدم مسار API أو فعّل VITE_DATA_MODE=local للديمو.');
+  }
+
   const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
   const newPayment: Payment = {
     ...payment,
@@ -69,6 +74,10 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
 }
 
 export function reversePayment(paymentId: string, reversedBy: string, reason = 'Reverse payment'): Payment {
+  if (isApiMode()) {
+    throw new Error('لا يمكن عكس الدفعة محليًا أثناء تشغيل وضع API.');
+  }
+
   const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
   const original = payments.find((p) => p.id === paymentId);
   if (!original) throw new Error('الدفعة غير موجودة');

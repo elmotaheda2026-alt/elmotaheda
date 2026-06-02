@@ -6,22 +6,27 @@ import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
 
 export default function Users() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const defaultPermissions: UserPermissions = {
-    dashboard: true,
-    sales: false,
-    purchases: false,
-    inventory: false,
-    customers: false,
-    suppliers: false,
-    treasury: false,
-    reports: false,
-    settings: false,
-    users: false,
-    shareholders: false,
+    'dashboard:view': true,
+    'sales:read': false,
+    'sales:write': false,
+    'sales:reschedule': false,
+    'payments:read': false,
+    'payments:write': false,
+    'payments:reverse': false,
+    'reports:read': false,
+    'closing:write': false,
+    'users:manage': false,
+    'inventory:manage': false,
+    'purchases:manage': false,
+    'settings:manage': false,
+    'shareholders:manage': false,
+    'notifications:read': false,
   };
 
   const [formData, setFormData] = useState({
@@ -181,7 +186,7 @@ export default function Users() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      {hasPermission(user, 'users:manage') && (
+                      {hasPermission(currentUser, 'users:manage') && (
                         <button
                           onClick={() => handleEdit(user)}
                           className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
@@ -278,17 +283,21 @@ export default function Users() {
                   </h4>
                   <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
                     {Object.entries({
-                      dashboard: 'لوحة التحكم',
-                      sales: 'المبيعات والفواتير',
-                      purchases: 'المشتريات',
-                      inventory: 'إدارة المخزون',
-                      customers: 'العملاء',
-                      suppliers: 'الموردين',
-                      treasury: 'الخزينة والحسابات',
-                      shareholders: 'حسابات الشركاء',
-                      reports: 'التقارير المالية',
-                      users: 'إدارة المستخدمين',
-                      settings: 'إعدادات النظام'
+                      'dashboard:view': 'لوحة التحكم',
+                      'sales:read': 'عرض العملاء والموردين والمبيعات',
+                      'sales:write': 'إنشاء وتعديل العملاء والمبيعات',
+                      'sales:reschedule': 'إعادة جدولة التعاقدات',
+                      'payments:read': 'عرض الخزينة والتحصيل',
+                      'payments:write': 'تسجيل المدفوعات',
+                      'payments:reverse': 'عكس المدفوعات',
+                      'reports:read': 'التقارير المالية',
+                      'closing:write': 'إقفال الفترات',
+                      'users:manage': 'إدارة المستخدمين',
+                      'inventory:manage': 'إدارة المخزون والأصناف',
+                      'purchases:manage': 'المشتريات',
+                      'settings:manage': 'إعدادات النظام',
+                      'shareholders:manage': 'حسابات الشركاء',
+                      'notifications:read': 'التنبيهات'
                     }).map(([key, label]) => (
                       <label key={key} className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
                         <input

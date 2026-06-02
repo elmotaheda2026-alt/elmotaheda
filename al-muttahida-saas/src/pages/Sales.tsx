@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Plus, Printer, Search, ShoppingBag, Trash2 } from 'lucide-react';
 import { Customer, Product, Sale, SaleItem } from '../types';
 import { createSale, getCustomers, getProducts, getSales } from '../lib/storage';
-import { api, hasApiToken } from '../lib/apiClient';
+import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 
@@ -46,7 +46,7 @@ export default function Sales() {
   });
 
   const loadData = async () => {
-    setSales(hasApiToken() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse());
+    setSales(isApiMode() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse());
     setCustomers(getCustomers());
     setProducts(getProducts());
   };
@@ -173,7 +173,7 @@ export default function Sales() {
     }
 
     const totals = calculateTotals();
-    if (hasApiToken()) {
+    if (isApiMode()) {
       await api.createSale({
         customerId: formData.customerId,
         customerName: formData.customerName,

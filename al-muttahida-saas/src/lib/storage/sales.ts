@@ -2,6 +2,7 @@ import { Customer, Sale } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, addMonths, buildInstallmentSchedule, syncSalePaymentStatus, createAuditLog } from './core';
 import { getSettings } from './settings';
 import { updateProductQuantity } from './products';
+import { isApiMode } from '../apiClient';
 
 export function getSales(): Sale[] {
   return getStorage<Sale>(DB_KEYS.SALES);
@@ -14,6 +15,10 @@ export function getNextSaleInvoiceNumber(): string {
 }
 
 export function createSale(sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>): Sale {
+  if (isApiMode()) {
+    throw new Error('لا يمكن حفظ البيع محليًا أثناء تشغيل وضع API. استخدم مسار API أو فعّل VITE_DATA_MODE=local للديمو.');
+  }
+
   const sales = getStorage<Sale>(DB_KEYS.SALES);
   const invoiceCounter = parseInt(localStorage.getItem(DB_KEYS.INVOICE_COUNTER) || '1000') + 1;
   localStorage.setItem(DB_KEYS.INVOICE_COUNTER, invoiceCounter.toString());
@@ -74,6 +79,10 @@ export function createSale(sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'
 }
 
 export function updateSale(saleId: string, updatedSaleData: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>): Sale {
+  if (isApiMode()) {
+    throw new Error('لا يمكن تعديل البيع محليًا أثناء تشغيل وضع API.');
+  }
+
   const sales = getStorage<Sale>(DB_KEYS.SALES);
   const saleIndex = sales.findIndex((s) => s.id === saleId);
   

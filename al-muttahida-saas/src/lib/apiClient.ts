@@ -1,4 +1,14 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
+const API_USER_KEY = 'api_user';
+
+export function isApiMode() {
+  return DATA_MODE === 'api';
+}
+
+export function isLocalMode() {
+  return DATA_MODE === 'local';
+}
 
 function getToken() {
   return localStorage.getItem('api_token');
@@ -10,6 +20,17 @@ export function hasApiToken() {
 
 export function clearApiToken() {
   localStorage.removeItem('api_token');
+  localStorage.removeItem(API_USER_KEY);
+}
+
+export function setApiSession(token: string, user: unknown) {
+  localStorage.setItem('api_token', token);
+  localStorage.setItem(API_USER_KEY, JSON.stringify(user));
+}
+
+export function getApiUser<T>() {
+  const user = localStorage.getItem(API_USER_KEY);
+  return user ? JSON.parse(user) as T : null;
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -32,7 +53,7 @@ export const api = {
   health: () => request<{ ok: boolean }>('/health'),
   seedAdmin: () => request<{ message: string }>('/auth/seed-admin', { method: 'POST' }),
   login: (email: string, password: string) =>
-    request<{ token: string; user: { id: string; name: string; role: string } }>('/auth/login', {
+    request<{ token: string; user: { id: string; name: string; role: string; permissions?: Record<string, boolean> | string[] } }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, Setting } from '../types';
+import { Permission, User, Setting, UserPermissions } from '../types';
 import * as db from '../lib/storage';
-import { api, clearApiToken } from '../lib/apiClient';
+import { api, clearApiToken, getApiUser, isApiMode, setApiSession } from '../lib/apiClient';
 
 interface AuthContextType {
   user: User | null;
@@ -19,28 +19,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Setting>(db.getSettings());
 
   useEffect(() => {
+    if (isApiMode()) {
+      setUser(getApiUser<User>());
+      return;
+    }
+
     db.initializeDatabase();
-    const currentUser = db.getCurrentUser();
-    setUser(currentUser);
+    setUser(db.getCurrentUser());
   }, []);
 
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
       const { token, user: apiUser } = await api.login(email, password);
-      localStorage.setItem('api_token', token);
+      const permissions = Array.isArray(apiUser.permissions)
+        ? apiUser.permissions.reduce<UserPermissions>((acc, permission) => {
+            acc[permission as Permission] = true;
+            return acc;
+          }, {})
+        : apiUser.permissions as UserPermissions | undefined;
       const mappedUser: User = {
         id: apiUser.id,
         name: apiUser.name,
         email,
         password: '',
         role: apiUser.role as User['role'],
+        permissions,
         createdAt: new Date().toISOString(),
         isActive: true,
       };
+      setApiSession(token, mappedUser);
       setUser(mappedUser);
       return true;
-    } catch {
-      // fallback to legacy local mode
+    } catch (e) {
+      // Attempt to fallback to local storage login regardless of mode
+      console.warn('API login failed, attempting local fallback', e);
+      // Ensure database is initialized for local fallback
+      db.initializeDatabase();
       const loggedInUser = db.login(email, password);
       if (loggedInUser) {
         setUser(loggedInUser);

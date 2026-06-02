@@ -20,6 +20,8 @@ const rolePermissions: Record<UserRole, Permission[]> = {
   finance_manager: ['sales:read', 'payments:read', 'payments:reverse', 'reports:read', 'closing:write'],
 };
 
-export function hasPermission(role: UserRole, permission: Permission): boolean {
+export function hasPermission(role: UserRole, permission: Permission, userPermissions?: Permission[]): boolean {
+  if (role === 'admin') return true;
+  if (userPermissions) return userPermissions.includes(permission);
   return rolePermissions[role]?.includes(permission) ?? false;
 }

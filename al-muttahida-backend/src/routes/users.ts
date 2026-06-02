@@ -9,18 +9,40 @@ const router = Router();
 router.use(requireAuth);
 
 const userPermissionsSchema = z.object({
-  dashboard: z.boolean().default(true),
-  sales: z.boolean().default(false),
-  purchases: z.boolean().default(false),
-  inventory: z.boolean().default(false),
-  customers: z.boolean().default(false),
-  suppliers: z.boolean().default(false),
-  treasury: z.boolean().default(false),
-  reports: z.boolean().default(false),
-  settings: z.boolean().default(false),
-  users: z.boolean().default(false),
-  shareholders: z.boolean().default(false),
+  'dashboard:view': z.boolean().default(true),
+  'sales:read': z.boolean().default(false),
+  'sales:write': z.boolean().default(false),
+  'sales:reschedule': z.boolean().default(false),
+  'payments:read': z.boolean().default(false),
+  'payments:write': z.boolean().default(false),
+  'payments:reverse': z.boolean().default(false),
+  'reports:read': z.boolean().default(false),
+  'closing:write': z.boolean().default(false),
+  'users:manage': z.boolean().default(false),
+  'inventory:manage': z.boolean().default(false),
+  'purchases:manage': z.boolean().default(false),
+  'settings:manage': z.boolean().default(false),
+  'shareholders:manage': z.boolean().default(false),
+  'notifications:read': z.boolean().default(false),
 });
+
+const defaultPermissions = {
+  'dashboard:view': true,
+  'sales:read': false,
+  'sales:write': false,
+  'sales:reschedule': false,
+  'payments:read': false,
+  'payments:write': false,
+  'payments:reverse': false,
+  'reports:read': false,
+  'closing:write': false,
+  'users:manage': false,
+  'inventory:manage': false,
+  'purchases:manage': false,
+  'settings:manage': false,
+  'shareholders:manage': false,
+  'notifications:read': false,
+};
 
 const userSchema = z.object({
   name: z.string().min(1),
@@ -45,19 +67,7 @@ router.get('/', requirePermission('users:manage'), async (_req, res) => {
       isActive: row.is_active === 1 || row.is_active === true,
       phone: row.phone || '',
       createdAt: row.created_at,
-      permissions: row.permissions ? JSON.parse(row.permissions) : {
-        dashboard: true,
-        sales: false,
-        purchases: false,
-        inventory: false,
-        customers: false,
-        suppliers: false,
-        treasury: false,
-        reports: false,
-        settings: false,
-        users: false,
-        shareholders: false,
-      },
+      permissions: row.permissions ? { ...defaultPermissions, ...JSON.parse(row.permissions) } : defaultPermissions,
     }));
     return res.json(mapped);
   } catch (error: any) {

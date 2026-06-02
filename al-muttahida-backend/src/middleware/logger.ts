@@ -1,6 +1,6 @@
 // src/middleware/logger.ts
 import winston from 'winston';
-import express, { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from 'express';
 
 // Configure Winston logger
 const logger = winston.createLogger({
@@ -13,7 +13,7 @@ const logger = winston.createLogger({
 });
 
 // Express middleware to log each request
-export const requestLogger = (req: Request, _res: Response, next: NextFunction) => {
+export const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   const { method, url } = req;
   res.on('finish', () => {

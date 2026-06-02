@@ -24,39 +24,30 @@ export function getCurrentUser(): User | null {
 }
 
 // Users CRUD
-import { api, hasApiToken } from '../apiClient';
+import { api, isApiMode } from '../apiClient';
 
 export function getUsers(): User[] {
   return getStorage<User>(DB_KEYS.USERS);
 }
 
 export async function syncUsers(): Promise<void> {
-  if (hasApiToken()) {
-    try {
-      const data = await api.listUsers();
-      setStorage(DB_KEYS.USERS, data);
-    } catch (e) {
-      console.error('Failed to sync users with API', e);
-    }
-  }
+  if (!isApiMode()) return;
+  const data = await api.listUsers();
+  setStorage(DB_KEYS.USERS, data);
 }
 
 export async function createUser(user: Omit<User, 'id' | 'createdAt'>): Promise<User> {
-  if (hasApiToken()) {
-    try {
-      const res = await api.createUser(user);
-      const newUser: User = {
-        ...user,
-        id: res.id,
-        createdAt: new Date().toISOString(),
-      };
-      const users = getStorage<User>(DB_KEYS.USERS);
-      users.push(newUser);
-      setStorage(DB_KEYS.USERS, users);
-      return newUser;
-    } catch (e) {
-      console.error('API createUser failed, falling back to localStorage', e);
-    }
+  if (isApiMode()) {
+    const res = await api.createUser(user);
+    const newUser: User = {
+      ...user,
+      id: res.id,
+      createdAt: new Date().toISOString(),
+    };
+    const users = getStorage<User>(DB_KEYS.USERS);
+    users.push(newUser);
+    setStorage(DB_KEYS.USERS, users);
+    return newUser;
   }
 
   const users = getStorage<User>(DB_KEYS.USERS);
@@ -71,19 +62,16 @@ export async function createUser(user: Omit<User, 'id' | 'createdAt'>): Promise<
 }
 
 export async function updateUser(id: string, updates: Partial<User>): Promise<User | null> {
-  if (hasApiToken()) {
-    try {
-      await api.updateUser(id, updates);
-      const users = getStorage<User>(DB_KEYS.USERS);
-      const index = users.findIndex((u) => u.id === id);
-      if (index !== -1) {
-        users[index] = { ...users[index], ...updates };
-        setStorage(DB_KEYS.USERS, users);
-        return users[index];
-      }
-    } catch (e) {
-      console.error('API updateUser failed, falling back to localStorage cache', e);
+  if (isApiMode()) {
+    await api.updateUser(id, updates);
+    const users = getStorage<User>(DB_KEYS.USERS);
+    const index = users.findIndex((u) => u.id === id);
+    if (index !== -1) {
+      users[index] = { ...users[index], ...updates };
+      setStorage(DB_KEYS.USERS, users);
+      return users[index];
     }
+    return null;
   }
 
   const users = getStorage<User>(DB_KEYS.USERS);
@@ -97,18 +85,15 @@ export async function updateUser(id: string, updates: Partial<User>): Promise<Us
 }
 
 export async function deleteUser(id: string): Promise<boolean> {
-  if (hasApiToken()) {
-    try {
-      await api.deleteUser(id);
-      const users = getStorage<User>(DB_KEYS.USERS);
-      const filtered = users.filter((u) => u.id !== id);
-      if (filtered.length !== users.length) {
-        setStorage(DB_KEYS.USERS, filtered);
-        return true;
-      }
-    } catch (e) {
-      console.error('API deleteUser failed, falling back to localStorage cache', e);
+  if (isApiMode()) {
+    await api.deleteUser(id);
+    const users = getStorage<User>(DB_KEYS.USERS);
+    const filtered = users.filter((u) => u.id !== id);
+    if (filtered.length !== users.length) {
+      setStorage(DB_KEYS.USERS, filtered);
+      return true;
     }
+    return false;
   }
 
   const users = getStorage<User>(DB_KEYS.USERS);

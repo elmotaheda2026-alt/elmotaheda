@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
 import { createPayment, getCustomers, getPayments, getSales, getSuppliers } from '../lib/storage';
-import { api, hasApiToken } from '../lib/apiClient';
+import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 
 type PaymentType = 'in' | 'out';
@@ -106,8 +106,8 @@ export default function Payments() {
   });
 
   const loadData = async () => {
-    const nextPayments = hasApiToken() ? (await api.listPayments()).map(mapApiPayment).reverse() : getPayments().slice().reverse();
-    const nextSales = hasApiToken() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse();
+    const nextPayments = isApiMode() ? (await api.listPayments()).map(mapApiPayment).reverse() : getPayments().slice().reverse();
+    const nextSales = isApiMode() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse();
     const nextCustomers = getCustomers();
     const nextSuppliers = getSuppliers();
 
@@ -359,7 +359,7 @@ export default function Payments() {
     };
   };
 
-  const handleIncomingSubmit = (event: React.FormEvent) => {
+  const handleIncomingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
     if (!incomingForm.customerId || !incomingForm.saleId || !incomingForm.installmentId) {
@@ -382,6 +382,34 @@ export default function Payments() {
         type: 'error',
         text: `المبلغ أكبر من المتبقي لهذا الشهر (${formatCurrency(selectedInstallmentRemaining)}).`,
       });
+      return;
+    }
+
+    if (isApiMode()) {
+      const created = await api.createPayment({
+        type: 'in',
+        amount: incomingForm.amount,
+        saleId: selectedSale.id,
+        installmentId: selectedInstallment.id,
+        description:
+          incomingForm.description.trim() ||
+          `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
+        date: incomingForm.date,
+        channel: 'cash',
+      });
+
+      await loadData();
+      closeModal();
+      setIncomingForm((current) => ({
+        customerId: current.customerId,
+        saleId: '',
+        installmentId: '',
+        amount: 0,
+        date: today(),
+        description: '',
+      }));
+      setIncomingSubmitMode('save');
+      setMessage({ type: 'success', text: `تم تسجيل السداد برقم إيصال ${created.receiptNumber}.` });
       return;
     }
 
@@ -438,11 +466,32 @@ export default function Payments() {
     });
   };
 
-  const handleOutgoingSubmit = (event: React.FormEvent) => {
+  const handleOutgoingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
     if (!outgoingForm.supplierId || outgoingForm.amount <= 0) {
       setMessage({ type: 'error', text: 'اختر المورد وأدخل مبلغًا صحيحًا.' });
+      return;
+    }
+
+    if (isApiMode()) {
+      await api.createPayment({
+        type: 'out',
+        amount: outgoingForm.amount,
+        description: outgoingForm.description.trim() || 'دفعة للمورد',
+        date: outgoingForm.date,
+        channel: 'cash',
+      });
+
+      await loadData();
+      closeModal();
+      setOutgoingForm((current) => ({
+        supplierId: current.supplierId,
+        amount: 0,
+        date: today(),
+        description: '',
+      }));
+      setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
       return;
     }
 
