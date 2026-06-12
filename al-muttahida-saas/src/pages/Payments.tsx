@@ -13,6 +13,7 @@ import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types
 import { createPayment, getCustomers, getPayments, getSales, getSuppliers } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -633,7 +634,7 @@ export default function Payments() {
                         <p className="text-xs text-slate-500">{linkedSchedule?.label || '-'}</p>
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-sm text-slate-600">{payment.date}</td>
+                    <td className="px-4 py-4 text-sm text-slate-600">{formatDateDisplay(payment.date)}</td>
                     <td className="px-4 py-4">
                       <span className={`font-bold ${payment.type === 'in' ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {payment.type === 'in' ? '+' : '-'} {formatCurrency(payment.amount)}

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid } from '../utils.js';
+import { uid, formatDate } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -52,12 +52,12 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
       guarantors: row.guarantors ? JSON.parse(row.guarantors) : [null, null, null],
       customerNumber: row.customer_number,
       balanceType: row.balance_type,
-      dateOfBirth: row.date_of_birth,
+      dateOfBirth: formatDate(row.date_of_birth),
       nationalId: row.national_id,
-      pensionDate: row.pension_date,
-      suedDate: row.sued_date,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      pensionDate: formatDate(row.pension_date),
+      suedDate: formatDate(row.sued_date),
+      createdAt: formatDate(row.created_at),
+      updatedAt: formatDate(row.updated_at),
     }));
     return res.json(mapped);
   } catch (error: any) {

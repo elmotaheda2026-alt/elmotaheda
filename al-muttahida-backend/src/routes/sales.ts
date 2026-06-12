@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid } from '../utils.js';
+import { uid, formatDate, parseDateInput } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -133,7 +133,7 @@ function mapSchedules(schedules: ScheduleRow[]) {
     id: sch.id,
     monthIndex: Number(sch.month_index),
     label: `القسط ${sch.month_index}`,
-    dueDate: sch.due_date,
+    dueDate: formatDate(sch.due_date),
     amount: Number(sch.amount),
     paidAmount: Number(sch.paid_amount),
     status: sch.status,
@@ -153,14 +153,14 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
     paid: Number(row.paid),
     remaining: Number(row.remaining),
     status: row.status,
-    date: row.date,
+    date: formatDate(row.date),
     notes: row.notes,
     version: row.version,
     locked: row.locked === 1 || row.locked === true,
     lastEditedBy: row.last_edited_by,
     lastEditedAt: row.last_edited_at,
     createdBy: row.created_by,
-    createdAt: row.created_at,
+    createdAt: formatDate(row.created_at),
     items,
     financing: {
       paymentMethod: row.payment_method || 'cash',
@@ -170,7 +170,7 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
       commissionRate: row.commission_rate ? Number(row.commission_rate) : undefined,
       commissionAmount: row.commission_amount ? Number(row.commission_amount) : undefined,
       installmentMonths: row.installment_months ? Number(row.installment_months) : undefined,
-      installmentStartDate: row.installment_start_date,
+      installmentStartDate: formatDate(row.installment_start_date),
       upfrontAmount: row.upfront_amount ? Number(row.upfront_amount) : undefined,
       monthlyInstallmentAmount: row.monthly_installment_amount ? Number(row.monthly_installment_amount) : undefined,
       schedules,
@@ -285,6 +285,15 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
   }
 
   const data = parsed.data;
+  // Parse date fields (DD/MM/YYYY) to ISO
+  try {
+    data.date = parseDateInput(data.date);
+    if (data.financing?.installmentStartDate) {
+      data.financing.installmentStartDate = parseDateInput(data.financing.installmentStartDate);
+    }
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'Invalid date format' });
+  }
   const id = uid();
   const now = new Date().toISOString();
   const remaining = Number((data.total - data.paid).toFixed(2));
@@ -369,6 +378,15 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
   }
 
   const data = parsed.data;
+  // Parse date fields (DD/MM/YYYY) to ISO
+  try {
+    data.date = parseDateInput(data.date);
+    if (data.financing?.installmentStartDate) {
+      data.financing.installmentStartDate = parseDateInput(data.financing.installmentStartDate);
+    }
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'Invalid date format' });
+  }
   const now = new Date().toISOString();
   const remaining = Number((data.total - data.paid).toFixed(2));
   const status = remaining <= 0 ? 'completed' : 'pending';

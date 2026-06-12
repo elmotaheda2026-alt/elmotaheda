@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { formatDate, parseDateInput } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
@@ -41,7 +42,7 @@ router.get('/', async (_req, res) => {
       capital: Number(row.capital),
       currentBalance: Number(row.current_balance),
       notes: row.notes,
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
       updatedAt: row.updated_at,
     }));
     return res.json(mapped);
@@ -153,10 +154,10 @@ router.get('/transactions', async (_req, res) => {
       shareholderName: row.shareholder_name,
       type: row.type,
       amount: Number(row.amount),
-      date: row.date,
+      date: formatDate(row.date),
       description: row.description,
       createdBy: row.created_by,
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
     }));
     return res.json(mapped);
   } catch (error: any) {
@@ -172,6 +173,12 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
   }
 
   const data = parsed.data;
+  // Parse date input (DD/MM/YYYY) to ISO
+  try {
+    data.date = parseDateInput(data.date);
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'Invalid date format' });
+  }
   const id = uid();
   const now = new Date().toISOString();
 

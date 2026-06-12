@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid } from '../utils.js';
+import { uid, formatDate, parseDateInput } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -50,10 +50,10 @@ router.get('/', requirePermission('purchases:manage'), async (_req, res) => {
       paid: Number(row.paid),
       remaining: Number(row.remaining),
       status: row.status,
-      date: row.date,
+      date: formatDate(row.date),
       notes: row.notes,
       createdBy: row.created_by,
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
     }));
     return res.json(mapped);
   } catch (error: any) {
@@ -94,10 +94,10 @@ router.get('/:id', requirePermission('purchases:manage'), async (req, res) => {
       paid: Number(purchase.paid),
       remaining: Number(purchase.remaining),
       status: purchase.status,
-      date: purchase.date,
+      date: formatDate(purchase.date),
       notes: purchase.notes,
       createdBy: purchase.created_by,
-      createdAt: purchase.created_at,
+      createdAt: formatDate(purchase.created_at),
       items: mappedItems,
     });
   } catch (error: any) {
@@ -113,6 +113,12 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
   }
 
   const data = parsed.data;
+  // Parse date input (DD/MM/YYYY) to ISO
+  try {
+    data.date = parseDateInput(data.date);
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'Invalid date format' });
+  }
   const id = uid();
   const now = new Date().toISOString();
   const remaining = Number((data.total - data.paid).toFixed(2));

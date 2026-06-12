@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
@@ -25,7 +26,7 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
     const mapped = rows.map((row: any) => ({
       ...row,
       balance: Number(row.balance),
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
       updatedAt: row.updated_at,
     }));
     return res.json(mapped);

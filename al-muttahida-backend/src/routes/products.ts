@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid } from '../utils.js';
+import { uid, formatDate } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -44,8 +44,8 @@ router.get('/', async (_req, res) => {
       minQuantity: Number(row.min_quantity),
       image: row.image,
       description: row.description,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: formatDate(row.created_at),
+      updatedAt: formatDate(row.updated_at),
     }));
     return res.json(mapped);
   } catch (error: any) {

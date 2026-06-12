@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
@@ -66,7 +67,7 @@ router.get('/', requirePermission('users:manage'), async (_req, res) => {
       role: row.role,
       isActive: row.is_active === 1 || row.is_active === true,
       phone: row.phone || '',
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
       permissions: row.permissions ? { ...defaultPermissions, ...JSON.parse(row.permissions) } : defaultPermissions,
     }));
     return res.json(mapped);
@@ -193,6 +194,20 @@ router.delete('/:id', requirePermission('users:manage'), async (req: AuthedReque
     await db.run('DELETE FROM users WHERE id = ?', req.params.id);
     await audit('user.delete', 'user', req.params.id, req.user?.name || 'system', { id: req.params.id });
     return res.json({ message: 'User deleted successfully' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+router.delete('/', requirePermission('users:manage'), async (req, res) => {
+  // Only enable in development/testing via ALLOW_BULK_DELETE env var
+  if (process.env.ALLOW_BULK_DELETE !== 'true') {
+    return res.status(403).json({ message: 'Bulk delete not allowed' });
+  }
+  try {
+    const db = await dbPromise;
+    await db.run('DELETE FROM users');
+    await audit('user.bulkDelete', 'user', '-', req.user?.name || 'system', {});
+    return res.json({ message: 'All users deleted successfully' });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

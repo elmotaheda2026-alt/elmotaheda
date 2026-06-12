@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
-import { uid } from '../utils.js';
+import { uid, formatDate } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -24,7 +24,7 @@ router.get('/', requirePermission('notifications:read'), async (_req, res) => {
       title: row.title,
       message: row.message,
       isRead: row.is_read === 1 || row.is_read === true,
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
     }));
     return res.json(mapped);
   } catch (error: any) {

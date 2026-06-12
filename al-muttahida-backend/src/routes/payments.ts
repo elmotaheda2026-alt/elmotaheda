@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid } from '../utils.js';
+import { uid, formatDate, parseDateInput } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -42,14 +42,14 @@ router.get('/', requirePermission('payments:read'), async (_req, res) => {
       saleId: row.sale_id,
       installmentId: row.installment_id,
       description: row.description,
-      date: row.date,
+      date: formatDate(row.date),
       receiptNumber: row.receipt_number,
       status: row.status,
       voidRef: row.void_ref,
       approvedBy: row.approved_by,
       channel: row.channel,
       createdBy: row.created_by,
-      createdAt: row.created_at,
+      createdAt: formatDate(row.created_at),
       customerId: row.customer_id,
       supplierId: row.supplier_id,
       referenceId: row.reference_id,
@@ -71,6 +71,12 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
   }
 
   const data = parsed.data;
+  // Parse date input (DD/MM/YYYY) to ISO
+  try {
+    data.date = parseDateInput(data.date);
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'Invalid date format' });
+  }
   const db = await dbPromise;
   const now = new Date().toISOString();
   const id = uid();
