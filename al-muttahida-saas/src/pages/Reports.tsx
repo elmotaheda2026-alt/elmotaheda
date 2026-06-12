@@ -125,13 +125,13 @@ export default function Reports() {
           <p className="text-slate-500 text-sm mt-1">تحليل الأداء التجاري والمبيعات والمشتريات</p>
         </div>
         
-        <div className="flex flex-wrap items-center gap-3 bg-indigo-50/50 p-2 rounded-xl border border-indigo-100/50">
-          <div className="flex items-center gap-2">
-            <label className="shrink-0 text-sm font-bold text-indigo-800">من:</label>
+        <div className="flex flex-wrap items-end gap-4 bg-indigo-50/50 p-2 rounded-xl border border-indigo-100/50">
+          <div className="flex flex-col gap-2">
+            <label className="text-center text-xs font-bold text-slate-500">من تاريخ</label>
             <DatePicker value={startDate} onChange={setStartDate} className="h-12 w-44 shrink-0 border-indigo-200" />
           </div>
-          <div className="flex items-center gap-2">
-            <label className="shrink-0 text-sm font-bold text-indigo-800">إلى:</label>
+          <div className="flex flex-col gap-2">
+            <label className="text-center text-xs font-bold text-slate-500">إلى تاريخ</label>
             <DatePicker value={endDate} onChange={setEndDate} className="h-12 w-44 shrink-0 border-indigo-200" />
           </div>
           {(startDate || endDate) && (
