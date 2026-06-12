@@ -5,6 +5,7 @@ import { createSale, getCustomers, getProducts, getSales } from '../lib/storage'
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 export default function Sales() {
   const { settings, user } = useAuth();
@@ -267,7 +268,7 @@ export default function Sales() {
                 <tr key={sale.id} className="hover:bg-slate-50">
                   <td className="px-4 py-4 font-mono font-bold text-sky-700">{sale.invoiceNumber}</td>
                   <td className="px-4 py-4 font-medium text-slate-800">{sale.customerName}</td>
-                  <td className="px-4 py-4 text-slate-600">{new Date(sale.date).toLocaleDateString('ar-EG')}</td>
+                  <td className="px-4 py-4 text-slate-600">{formatDateDisplay(sale.date)}</td>
                   <td className="px-4 py-4 font-bold text-emerald-700">{formatCurrency(sale.total)}</td>
                   <td className="px-4 py-4">
                     <span className={`rounded-full px-3 py-1 text-xs font-bold ${sale.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>

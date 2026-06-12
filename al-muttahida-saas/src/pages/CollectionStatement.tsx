@@ -3,6 +3,8 @@ import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutL
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { DatePicker } from '../components/DatePicker';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 interface CollectionInvoiceView {
   saleId: string;
@@ -315,11 +317,11 @@ export default function CollectionStatement() {
           <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-end gap-4 print:hidden">
             <label className="block flex-1 min-w-[140px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">من تاريخ</span>
-              <input type="date" value={dueFromDate} onChange={(e) => setDueFromDate(e.target.value)} className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm" />
+              <DatePicker value={dueFromDate} onChange={setDueFromDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
             </label>
             <label className="block flex-1 min-w-[140px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">إلى تاريخ</span>
-              <input type="date" value={dueToDate} onChange={(e) => setDueToDate(e.target.value)} className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm" />
+              <DatePicker value={dueToDate} onChange={setDueToDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
             </label>
             <label className="block flex-1 min-w-[160px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">المندوب</span>
@@ -457,7 +459,7 @@ export default function CollectionStatement() {
                         {group.map((row, rIdx) => (
                           <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-sky-50/30 even:bg-slate-50/50 transition-colors border-b border-slate-100 last:border-b-0">
                             <td className="px-4 py-3 text-sm text-slate-700 font-medium">{row.installmentLabel}</td>
-                            <td className="px-4 py-3 text-sm text-slate-700">{row.dueDate}</td>
+                            <td className="px-4 py-3 text-sm text-slate-700">{formatDateDisplay(row.dueDate)}</td>
                             <td className="px-4 py-3 text-sm text-slate-700 text-center">{formatCurrency(row.installmentAmount)}</td>
                             <td className="px-4 py-3 text-sm font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
                             <td className="px-4 py-3 text-center">
@@ -580,7 +582,7 @@ export default function CollectionStatement() {
                       </div>
                       <div className="flex flex-wrap gap-2 text-xs pt-1">
                         <Badge>فاتورة: {row.invoiceNumber}</Badge>
-                        <Badge>تاريخ: {row.saleDate}</Badge>
+                        <Badge>تاريخ: {formatDateDisplay(row.saleDate)}</Badge>
                         <Badge>{row.paymentMethod === 'installment' ? 'دفع بالتقسيط' : 'غير مقسط'}</Badge>
                       </div>
                     </div>
@@ -610,7 +612,7 @@ export default function CollectionStatement() {
                         <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200/60 pb-3">
                           <div>
                             <p className="font-bold text-slate-800">{schedule.label}</p>
-                            <p className="text-xs text-slate-500 mt-1">استحقاق: <span className="font-medium text-slate-700">{schedule.dueDate}</span></p>
+                            <p className="text-xs text-slate-500 mt-1">استحقاق: <span className="font-medium text-slate-700">{formatDateDisplay(schedule.dueDate)}</span></p>
                           </div>
                           <MonthBadge status={schedule.status} />
                         </div>
@@ -624,7 +626,7 @@ export default function CollectionStatement() {
                             value={formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                             highlightValue={Math.max(schedule.amount - schedule.paidAmount, 0) > 0}
                           />
-                          <MonthRow icon={<CalendarRange size={15} />} label="تاريخ السداد" value={schedule.paidAt || '-'} />
+                          <MonthRow icon={<CalendarRange size={15} />} label="تاريخ السداد" value={formatDateDisplay(schedule.paidAt)} />
                         </div>
                       </div>
                     ))}
@@ -692,7 +694,7 @@ export default function CollectionStatement() {
                         <td className="px-4 py-4 text-center">
                            {customer.suedDate ? (
                              <div className="text-sm">
-                               <span className="font-bold text-slate-800">{new Date(customer.suedDate).toLocaleDateString('ar-EG')}</span>
+                               <span className="font-bold text-slate-800">{formatDateDisplay(customer.suedDate)}</span>
                              </div>
                            ) : <span className="text-slate-400">-</span>}
                         </td>
@@ -847,7 +849,7 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
         </div>
         <div className="text-left">
           <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">كشف حساب عميل</h2>
-          <p className="text-slate-600 font-bold text-sm">تاريخ الطباعة: {new Date().toLocaleDateString('en-GB')}</p>
+          <p className="text-slate-600 font-bold text-sm">تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
           <p className="text-slate-600 font-bold text-sm">رقم الفاتورة: {invoice.invoiceNumber}</p>
           {invoice.salesRepName && (
             <p className="text-sky-700 font-bold text-sm">المندوب: {invoice.salesRepName}</p>
@@ -905,8 +907,8 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
               return (
                 <tr key={schedule.id} className="even:bg-slate-50">
                   <td className="border border-slate-300 px-1 py-1 font-semibold text-xs">{schedule.label}</td>
-                  <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{schedule.dueDate}</td>
-                  <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{schedule.paidAt || '-'}</td>
+                  <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{formatDateDisplay(schedule.dueDate)}</td>
+                  <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{formatDateDisplay(schedule.paidAt)}</td>
                   <td className="border border-slate-300 px-1 py-1 text-center text-xs">{formatCurrency(schedule.amount)}</td>
                   <td className="border border-slate-300 px-1 py-1 text-center text-emerald-700 font-bold text-xs">{formatCurrency(schedule.paidAmount)}</td>
                   <td className="border border-slate-300 px-1 py-1 text-center text-red-700 font-bold text-xs">{formatCurrency(remaining)}</td>

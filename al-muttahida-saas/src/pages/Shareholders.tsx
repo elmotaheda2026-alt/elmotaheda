@@ -4,6 +4,7 @@ import { Shareholder, ShareholderTransaction, Sale, Purchase, Expense } from '..
 import { getShareholders, createShareholder, updateShareholder, getShareholderTransactions, addShareholderTransaction, getSales, getPurchases, getExpenses } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 const TypedPieChart = PieChart as any;
 const TypedPie = Pie as any;
@@ -360,7 +361,7 @@ export default function Shareholders() {
                 <tbody className="divide-y divide-gray-100">
                   {transactions.map(tx => (
                     <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-4 py-3 text-sm text-gray-600">{new Date(tx.date).toLocaleDateString('ar-EG')}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{formatDateDisplay(tx.date)}</td>
                       <td className="px-4 py-3 text-sm font-medium text-gray-800">{tx.shareholderName}</td>
                       <td className="px-4 py-3 text-sm">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${

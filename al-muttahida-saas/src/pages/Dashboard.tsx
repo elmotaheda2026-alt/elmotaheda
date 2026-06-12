@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { getDashboardStats, getLowStockProducts, getSales, getPurchases } from '../lib/storage';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 export default function Dashboard() {
   const { settings } = useAuth();
@@ -169,7 +170,7 @@ export default function Dashboard() {
                   </div>
                   <div className="text-left">
                     <p className="font-black text-green-600 text-lg">{formatCurrency(sale.total)}</p>
-                    <p className="text-xs text-slate-400 font-bold">{new Date(sale.date).toLocaleDateString('ar-EG')}</p>
+                    <p className="text-xs text-slate-400 font-bold">{formatDateDisplay(sale.date)}</p>
                   </div>
                 </div>
               ))

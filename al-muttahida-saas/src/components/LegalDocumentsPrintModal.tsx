@@ -3,6 +3,7 @@ import { X, Printer, Settings, CheckSquare, Eye, Edit3, Users, FileText, Calenda
 import { Sale, Customer } from '../types';
 import { getCustomers } from '../lib/storage';
 import { tafqeet } from '../lib/tafqeet';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 interface LegalDocumentsPrintModalProps {
   isOpen: boolean;
@@ -629,8 +630,8 @@ export default function LegalDocumentsPrintModal({
               return `
                 <tr style="font-weight: bold; background-color: ${idx % 2 === 0 ? '#fff' : '#f8fafc'};">
                   <td style="border: 1.5px solid #000; padding: 5px 6px;">${schedule.label}</td>
-                  <td style="border: 1.5px solid #000; padding: 5px 6px; font-family: monospace;">${new Date(schedule.dueDate).toLocaleDateString('ar-EG')}</td>
-                  <td style="border: 1.5px solid #000; padding: 5px 6px;">${schedule.paidAt ? new Date(schedule.paidAt).toLocaleDateString('ar-EG') : '-'}</td>
+                  <td style="border: 1.5px solid #000; padding: 5px 6px; font-family: monospace;">${formatDateDisplay(schedule.dueDate)}</td>
+                  <td style="border: 1.5px solid #000; padding: 5px 6px;">${formatDateDisplay(schedule.paidAt)}</td>
                   <td style="border: 1.5px solid #000; padding: 5px 6px;">${schedule.amount.toLocaleString('ar-EG')}</td>
                   <td style="border: 1.5px solid #000; padding: 5px 6px; color: #047857;">${schedule.paidAmount.toLocaleString('ar-EG')}</td>
                   <td style="border: 1.5px solid #000; padding: 5px 6px; color: #b91c1c;">${rem.toLocaleString('ar-EG')}</td>
@@ -653,7 +654,7 @@ export default function LegalDocumentsPrintModal({
           return `
             <tr style="font-weight: bold; background-color: ${idx % 2 === 0 ? '#fff' : '#f8fafc'};">
               <td style="border: 1.5px solid #000; padding: 4px 5px;">${schedule.label}</td>
-              <td style="border: 1.5px solid #000; padding: 4px 5px; font-family: monospace;">${new Date(schedule.dueDate).toLocaleDateString('ar-EG')}</td>
+              <td style="border: 1.5px solid #000; padding: 4px 5px; font-family: monospace;">${formatDateDisplay(schedule.dueDate)}</td>
               <td style="border: 1.5px solid #000; padding: 4px 5px;">${schedule.amount.toLocaleString('ar-EG')}</td>
               <td style="border: 1.5px solid #000; padding: 4px 5px; color: ${statusColor};">${statusLabel}</td>
             </tr>
@@ -766,8 +767,8 @@ export default function LegalDocumentsPrintModal({
       return;
     }
 
-    const todayDate = new Date().toLocaleDateString('ar-EG');
-    const formattedInvoiceDate = new Date(sale.date).toLocaleDateString('ar-EG');
+    const todayDate = formatDateDisplay(new Date());
+    const formattedInvoiceDate = formatDateDisplay(sale.date);
 
     let printHtml = `
       <!DOCTYPE html>
@@ -1432,7 +1433,7 @@ export default function LegalDocumentsPrintModal({
                       </div>
 
                       <div className="flex justify-between pt-3 font-extrabold text-[8px]">
-                        <span>تحريراً فى: {new Date().toLocaleDateString('ar-EG')}</span>
+                        <span>تحريراً فى: {formatDateDisplay(new Date())}</span>
                         <span>توقيع مقدم الطلب: .........................</span>
                         <span>توقيع الاخصائى: .........................</span>
                       </div>
@@ -1455,7 +1456,7 @@ export default function LegalDocumentsPrintModal({
                     </div>
                     <div className="text-left">
                       <h2 className="border-b-2 border-black pb-0.5 font-extrabold text-md inline-block">كشف حساب أقساط العميل</h2>
-                      <p className="text-[10px] text-slate-500 font-bold">تاريخ الطباعة: {new Date().toLocaleDateString('ar-EG')}</p>
+                      <p className="text-[10px] text-slate-500 font-bold">تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
                       <p className="text-[10px] text-slate-500 font-bold">رقم الفاتورة: {sale.invoiceNumber}</p>
                     </div>
                   </div>
@@ -1515,8 +1516,8 @@ export default function LegalDocumentsPrintModal({
                             return (
                               <tr key={schedule.id} className="font-bold odd:bg-slate-50/30">
                                 <td className="border border-black p-1.5">{schedule.label}</td>
-                                <td className="border border-black p-1.5 font-mono">{new Date(schedule.dueDate).toLocaleDateString('ar-EG')}</td>
-                                <td className="border border-black p-1.5">{schedule.paidAt ? new Date(schedule.paidAt).toLocaleDateString('ar-EG') : '-'}</td>
+                                <td className="border border-black p-1.5 font-mono">{formatDateDisplay(schedule.dueDate)}</td>
+                                <td className="border border-black p-1.5">{formatDateDisplay(schedule.paidAt)}</td>
                                 <td className="border border-black p-1.5">{schedule.amount.toLocaleString('ar-EG')}</td>
                                 <td className="border border-black p-1.5 text-emerald-700">{schedule.paidAmount.toLocaleString('ar-EG')}</td>
                                 <td className="border border-black p-1.5 text-red-700">{rem.toLocaleString('ar-EG')}</td>
@@ -1588,7 +1589,7 @@ export default function LegalDocumentsPrintModal({
                         <td style={{ border: '1.5px solid #000', padding: '4px 6px', backgroundColor: '#f8fafc' }}>أشهر التقسيط:</td>
                         <td style={{ border: '1.5px solid #000', padding: '4px 6px', textAlign: 'center' }}>{sale.financing?.installmentMonths || '---'} شهر</td>
                         <td style={{ border: '1.5px solid #000', padding: '4px 6px', backgroundColor: '#f8fafc' }}>تاريخ التعاقد:</td>
-                        <td style={{ border: '1.5px solid #000', padding: '4px 6px', fontFamily: 'monospace', textAlign: 'center' }}>{new Date(sale.date).toLocaleDateString('ar-EG')}</td>
+                        <td style={{ border: '1.5px solid #000', padding: '4px 6px', fontFamily: 'monospace', textAlign: 'center' }}>{formatDateDisplay(sale.date)}</td>
                       </tr>
                     </tbody>
                   </table>

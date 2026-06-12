@@ -29,6 +29,8 @@ import {
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
+import { DatePicker } from '../components/DatePicker';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 type PaymentMethod = 'cash' | 'card' | 'transfer' | 'installment';
 
@@ -642,7 +644,7 @@ export default function Invoices() {
               </Field>
 
               <Field label="تاريخ الفاتورة">
-                <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="input-ui" />
+                <DatePicker value={invoiceDate} onChange={setInvoiceDate} className="w-full border-slate-200 px-4 py-2" />
               </Field>
 
               <Field label="طريقة الدفع">
@@ -677,12 +679,7 @@ export default function Invoices() {
                     />
                   </Field>
                   <Field label="تاريخ أول قسط">
-                    <input
-                      type="date"
-                      value={firstInstallmentDate}
-                      readOnly
-                      className="input-ui"
-                    />
+                    <div className="input-ui flex items-center">{formatDateDisplay(firstInstallmentDate)}</div>
                   </Field>
                 </>
               )}
@@ -1049,7 +1046,7 @@ export default function Invoices() {
                   >
                     <div>
                       <p className="font-semibold text-slate-800">القسط {entry.monthIndex}</p>
-                      <p className="text-xs text-slate-500">{entry.dueDate}</p>
+                      <p className="text-xs text-slate-500">{formatDateDisplay(entry.dueDate)}</p>
                     </div>
                     <span className="font-bold text-violet-700">{formatCurrency(entry.amount)}</span>
                   </div>
@@ -1122,7 +1119,7 @@ export default function Invoices() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-mono font-black text-sky-600">{sale.invoiceNumber}</span>
                           <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
-                            {new Date(sale.date).toLocaleDateString('ar-EG')}
+                            {formatDateDisplay(sale.date)}
                           </span>
                           <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
                             sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700' : 'bg-emerald-50 text-emerald-700'

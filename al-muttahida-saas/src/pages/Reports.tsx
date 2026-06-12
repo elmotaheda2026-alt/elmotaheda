@@ -3,6 +3,7 @@ import { TrendingUp, DollarSign, ShoppingBag, ShoppingCart, PieChart as PieChart
 import { getSales, getPurchases, getExpenses, getSettings, getCustomers } from '../lib/storage';
 import { DatePicker } from '../components/DatePicker';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 const TypedAreaChart = AreaChart as any;
 const TypedArea = Area as any;
@@ -92,14 +93,14 @@ export default function Reports() {
     
     // Just map the days from filtered items
     filteredSales.forEach(sale => {
-        const d = new Date(sale.date).toLocaleDateString('ar-EG', { month: 'short', day: 'numeric' });
+        const d = formatDateDisplay(sale.date);
         const current = datesMap.get(d) || { date: d, المبيعات: 0, المشتريات: 0 };
         current.المبيعات += sale.total;
         datesMap.set(d, current);
     });
     
     filteredPurchases.forEach(pur => {
-        const d = new Date(pur.date).toLocaleDateString('ar-EG', { month: 'short', day: 'numeric' });
+        const d = formatDateDisplay(pur.date);
         const current = datesMap.get(d) || { date: d, المبيعات: 0, المشتريات: 0 };
         current.المشتريات += pur.total;
         datesMap.set(d, current);
@@ -126,12 +127,12 @@ export default function Reports() {
         
         <div className="flex flex-wrap items-center gap-3 bg-indigo-50/50 p-2 rounded-xl border border-indigo-100/50">
           <div className="flex items-center gap-2">
-            <label className="text-sm font-bold text-indigo-800 px-2">من:</label>
-            <DatePicker value={startDate} onChange={setStartDate} className="w-36 border-indigo-200" />
+            <label className="shrink-0 text-sm font-bold text-indigo-800">من:</label>
+            <DatePicker value={startDate} onChange={setStartDate} className="h-12 w-44 shrink-0 border-indigo-200" />
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-sm font-bold text-indigo-800 px-2">إلى:</label>
-            <DatePicker value={endDate} onChange={setEndDate} className="w-36 border-indigo-200" />
+            <label className="shrink-0 text-sm font-bold text-indigo-800">إلى:</label>
+            <DatePicker value={endDate} onChange={setEndDate} className="h-12 w-44 shrink-0 border-indigo-200" />
           </div>
           {(startDate || endDate) && (
             <button onClick={() => { setStartDate(''); setEndDate(''); }} className="text-xs text-rose-500 font-bold px-2 hover:underline">

@@ -3,6 +3,8 @@ import { Plus, Edit, Trash2, Search, Receipt } from 'lucide-react';
 import { Expense } from '../types';
 import { getExpenses, createExpense } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { DatePicker } from '../components/DatePicker';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 export default function Expenses() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -92,7 +94,7 @@ export default function Expenses() {
             <tbody className="divide-y divide-gray-100">
               {filteredExpenses.map(expense => (
                 <tr key={expense.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-4 text-gray-600">{expense.date}</td>
+                  <td className="px-4 py-4 text-gray-600">{formatDateDisplay(expense.date)}</td>
                   <td className="px-4 py-4">
                     <span className="px-3 py-1 bg-gray-100 rounded-full text-xs">{expense.category}</span>
                   </td>
@@ -149,12 +151,10 @@ export default function Expenses() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">التاريخ</label>
-                <input
-                  type="date"
+                <DatePicker
                   value={formData.date}
-                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required
+                  onChange={(date) => setFormData({ ...formData, date })}
+                  className="w-full border-gray-300 px-4 py-2"
                 />
               </div>
               <div className="flex gap-3 pt-4">

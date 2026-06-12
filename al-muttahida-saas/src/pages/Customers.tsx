@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Plus, Edit, Trash2, Search, Save, X, Camera, Upload, User,
   MapPin, Phone, Calendar, FileText, AlertTriangle, Gavel,
-  Building, Users, DollarSign, FileUp, UserCircle, CreditCard
+  Building, Users, DollarSign, UserCircle, CreditCard
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, syncCustomers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { DatePicker } from '../components/DatePicker';
 
 const initialGuarantor: Guarantor = {
   name: '',
@@ -229,12 +230,6 @@ export default function Customers() {
             >
               <Search size={18} />
               <span>بحث</span>
-            </button>
-            <button
-              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-            >
-              <FileUp size={18} />
-              <span>استيراد من ملف اكسيل</span>
             </button>
           </div>
         </div>
@@ -590,12 +585,10 @@ export default function Customers() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-600 mb-1">تاريخ الميلاد *</label>
-                        <input
-                          type="date"
+                        <DatePicker
                           value={formData.dateOfBirth}
-                          onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
-                          required
+                          onChange={(date) => setFormData({ ...formData, dateOfBirth: date })}
+                          className="w-full border-gray-300 px-3 py-2"
                         />
                       </div>
                       <div>
@@ -610,11 +603,10 @@ export default function Customers() {
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-600 mb-1">تاريخ المعاش</label>
-                        <input
-                          type="date"
+                        <DatePicker
                           value={formData.pensionDate}
-                          onChange={(e) => setFormData({ ...formData, pensionDate: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          onChange={(date) => setFormData({ ...formData, pensionDate: date })}
+                          className="w-full border-gray-300 px-3 py-2"
                         />
                       </div>
                       <div>

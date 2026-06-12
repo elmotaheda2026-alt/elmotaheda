@@ -14,6 +14,7 @@ import { createPayment, getCustomers, getPayments, getSales, getSuppliers } from
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { DatePicker } from '../components/DatePicker';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -134,12 +135,7 @@ export default function Payments() {
   const formatCurrency = (amount: number) =>
     `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
 
-  const formatDate = (date: string) => {
-    if (!date) return '-';
-    const parsed = new Date(`${date}T00:00:00`);
-    if (Number.isNaN(parsed.getTime())) return date;
-    return parsed.toLocaleDateString('ar-EG');
-  };
+  const formatDate = formatDateDisplay;
 
   const customerSales = useMemo(
     () =>
@@ -738,7 +734,7 @@ export default function Payments() {
                               <option value="">اختر الشهر</option>
                               {pendingSchedules.map((schedule) => (
                                 <option key={schedule.id} value={schedule.id}>
-                                  {schedule.label} - {schedule.dueDate} - المتبقي{' '}
+                                  {schedule.label} - {formatDateDisplay(schedule.dueDate)} - المتبقي{' '}
                                   {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                                 </option>
                               ))}
@@ -746,11 +742,10 @@ export default function Payments() {
                           </Field>
 
                           <Field label="تاريخ السداد">
-                            <input
-                              type="date"
+                            <DatePicker
                               value={incomingForm.date}
-                              onChange={(event) => setIncomingForm((current) => ({ ...current, date: event.target.value }))}
-                              className="input-ui"
+                              onChange={(date) => setIncomingForm((current) => ({ ...current, date }))}
+                              className="w-full border-slate-200 px-4 py-2"
                             />
                           </Field>
 
@@ -803,7 +798,7 @@ export default function Payments() {
                             <QuickInfo label="العميل" value={selectedCustomer?.name || '-'} />
                             <QuickInfo label="الفاتورة" value={selectedSale?.invoiceNumber || '-'} />
                             <QuickInfo label="القسط" value={selectedInstallment?.label || '-'} />
-                            <QuickInfo label="تاريخ الاستحقاق" value={selectedInstallment?.dueDate || '-'} />
+                            <QuickInfo label="تاريخ الاستحقاق" value={formatDateDisplay(selectedInstallment?.dueDate)} />
                             <QuickInfo
                               label="المدفوع سابقًا"
                               value={selectedInstallment ? formatCurrency(selectedInstallment.paidAmount) : '-'}
@@ -839,7 +834,7 @@ export default function Payments() {
                                       className={incomingForm.installmentId === schedule.id ? 'bg-emerald-50/70' : 'bg-white'}
                                     >
                                       <td className="px-3 py-3 font-semibold text-slate-800">{schedule.label}</td>
-                                      <td className="px-3 py-3 text-slate-600">{schedule.dueDate}</td>
+                                      <td className="px-3 py-3 text-slate-600">{formatDateDisplay(schedule.dueDate)}</td>
                                       <td className="px-3 py-3 text-slate-600">
                                         {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                                       </td>
@@ -901,11 +896,10 @@ export default function Payments() {
                         </select>
                       </Field>
                       <Field label="تاريخ الدفع">
-                        <input
-                          type="date"
+                        <DatePicker
                           value={outgoingForm.date}
-                          onChange={(event) => setOutgoingForm((current) => ({ ...current, date: event.target.value }))}
-                          className="input-ui"
+                          onChange={(date) => setOutgoingForm((current) => ({ ...current, date }))}
+                          className="w-full border-slate-200 px-4 py-2"
                         />
                       </Field>
                       <Field label="المبلغ">

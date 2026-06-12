@@ -3,6 +3,7 @@ import { Calculator, DollarSign, Users, Truck, CreditCard, Banknote, Package, Re
 import { useAuth } from '../context/AuthContext';
 import { getCustomers, getSuppliers, getSales, getPurchases, getPayments, getProducts, getExpenses, getShareholders, getShareholderTransactions } from '../lib/storage';
 import { DatePicker } from '../components/DatePicker';
+import { formatDateTimeDisplay } from '../lib/dateUtils';
 
 export default function Accounts() {
   const { settings } = useAuth();
@@ -320,7 +321,7 @@ export default function Accounts() {
               {recentTransactions.map(tx => (
                 <tr key={tx.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {new Date(tx.date).toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    {formatDateTimeDisplay(tx.date)}
                   </td>
                   <td className="px-6 py-4 text-sm">
                     <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${

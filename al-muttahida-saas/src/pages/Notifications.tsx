@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bell, Check, Trash2, AlertTriangle, Info, CheckCircle } from 'lucide-react';
 import { Notification } from '../types';
 import { getNotifications, markNotificationRead, markAllNotificationsRead } from '../lib/storage';
+import { formatDateTimeDisplay } from '../lib/dateUtils';
 
 export default function Notifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -78,7 +79,7 @@ export default function Notifications() {
                         {notification.title}
                       </h4>
                       <span className="text-xs text-gray-500">
-                        {new Date(notification.createdAt).toLocaleString('ar-EG')}
+                        {formatDateTimeDisplay(notification.createdAt)}
                       </span>
                     </div>
                     <p className="text-gray-600 text-sm">{notification.message}</p>

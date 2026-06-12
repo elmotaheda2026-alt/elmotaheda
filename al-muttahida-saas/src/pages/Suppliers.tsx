@@ -4,6 +4,7 @@ import { Supplier } from '../types';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 export default function Suppliers() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -143,7 +144,7 @@ export default function Suppliers() {
                 </div>
                 <div>
                   <h3 className="font-bold text-gray-800">{supplier.name}</h3>
-                  <p className="text-xs text-gray-500">مورد منذ {new Date(supplier.createdAt).toLocaleDateString('ar-EG')}</p>
+                  <p className="text-xs text-gray-500">مورد منذ {formatDateDisplay(supplier.createdAt)}</p>
                 </div>
               </div>
               <div className="flex gap-1">

@@ -1,10 +1,6 @@
-import React, { useState } from 'react';
-import { format, parseISO } from 'date-fns';
-import { ar } from 'date-fns/locale';
+import React, { useEffect, useState } from 'react';
 import { Calendar as CalendarIcon } from 'lucide-react';
-import { DayPicker } from 'react-day-picker';
-import * as Popover from '@radix-ui/react-popover';
-import 'react-day-picker/dist/style.css';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 interface DatePickerProps {
   value: string;
@@ -13,51 +9,73 @@ interface DatePickerProps {
   className?: string;
 }
 
-export function DatePicker({ value, onChange, placeholder = "يوم-شهر-سنة", className }: DatePickerProps) {
-  const [open, setOpen] = useState(false);
-  
-  // Safely parse the value (expected format YYYY-MM-DD from state)
-  const date = value ? parseISO(value) : undefined;
+const pad = (value: number) => String(value).padStart(2, '0');
 
-  const handleSelect = (selectedDate: Date | undefined) => {
-    if (selectedDate) {
-      // Return YYYY-MM-DD format for internal state
-      const formatted = format(selectedDate, 'yyyy-MM-dd');
-      onChange(formatted);
-      setOpen(false);
-    } else {
-      onChange('');
+function normalizeTypedDate(input: string): string {
+  const digits = input.replace(/\D/g, '').slice(0, 8);
+  const day = digits.slice(0, 2);
+  const month = digits.slice(2, 4);
+  const year = digits.slice(4, 8);
+
+  return [day, month, year].filter(Boolean).join('/');
+}
+
+function parseDisplayDate(input: string): string {
+  const match = input.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return '';
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return '';
+  }
+
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+export function DatePicker({ value, onChange, placeholder = 'يوم/شهر/سنة', className }: DatePickerProps) {
+  const [typedValue, setTypedValue] = useState(value ? formatDateDisplay(value) : '');
+
+  useEffect(() => {
+    setTypedValue(value ? formatDateDisplay(value) : '');
+  }, [value]);
+
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextValue = normalizeTypedDate(event.target.value);
+    setTypedValue(nextValue);
+
+    const parsedDate = parseDisplayDate(nextValue);
+    if (parsedDate || !nextValue) {
+      onChange(parsedDate);
     }
   };
 
+  const handleBlur = () => {
+    const parsedDate = parseDisplayDate(typedValue);
+    setTypedValue(parsedDate ? formatDateDisplay(parsedDate) : value ? formatDateDisplay(value) : '');
+  };
+
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          className={`flex items-center justify-between px-3 py-1.5 border rounded-lg bg-white text-right text-sm ${!value ? 'text-slate-400' : 'text-slate-900'} ${className || 'w-full border-slate-200 focus:border-indigo-500'}`}
-        >
-          <span className="font-medium pt-0.5">{date ? format(date, 'dd-MM-yyyy') : placeholder}</span>
-          <CalendarIcon size={16} className="text-slate-400 mr-2" />
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content className="z-50 bg-white p-3 rounded-2xl shadow-xl border border-slate-100 mt-1" align="end" sideOffset={4}>
-          <DayPicker
-            mode="single"
-            selected={date}
-            onSelect={handleSelect}
-            locale={ar}
-            dir="rtl"
-            showOutsideDays
-            className="p-1 font-sans"
-            modifiersClassNames={{
-              selected: "bg-indigo-600 text-white rounded-lg hover:bg-indigo-700",
-              today: "font-bold text-indigo-600 bg-indigo-50 rounded-lg"
-            }}
-          />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+    <div
+      className={`relative flex items-center rounded-lg border bg-white text-right text-sm transition ${className || 'w-full border-slate-200 focus-within:border-indigo-500'}`}
+    >
+      <input
+        type="text"
+        inputMode="numeric"
+        value={typedValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        placeholder={placeholder}
+        className="h-full w-full rounded-[inherit] border-0 bg-transparent pl-9 pr-3 py-1.5 text-right text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
+      />
+      <CalendarIcon size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+    </div>
   );
 }

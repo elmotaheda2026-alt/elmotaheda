@@ -3,6 +3,7 @@ import { Plus, Search, ShoppingCart, Trash2, Printer } from 'lucide-react';
 import { Purchase, PurchaseItem, Supplier, Product } from '../types';
 import { getPurchases, createPurchase, getSuppliers, getProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { formatDateDisplay } from '../lib/dateUtils';
 
 export default function Purchases() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -174,7 +175,7 @@ export default function Purchases() {
                 <tr key={purchase.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-4 font-mono font-bold text-indigo-600">{purchase.invoiceNumber}</td>
                   <td className="px-4 py-4 font-medium text-gray-800">{purchase.supplierName}</td>
-                  <td className="px-4 py-4 text-gray-600">{new Date(purchase.date).toLocaleDateString('ar-EG')}</td>
+                  <td className="px-4 py-4 text-gray-600">{formatDateDisplay(purchase.date)}</td>
                   <td className="px-4 py-4 font-bold text-orange-600">{formatCurrency(purchase.total)}</td>
                   <td className="px-4 py-4">
                     <span className={`px-3 py-1 rounded-full text-xs font-medium ${
