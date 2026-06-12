@@ -11,9 +11,9 @@ router.use(requireAuth);
 const productSchema = z.object({
   name: z.string().min(1),
   barcode: z.string().min(1),
-  category: z.string().min(1),
+  category: z.string().default(''),
   fulfillmentType: z.enum(['stocked', 'on_demand']).default('stocked'),
-  unit: z.string().min(1),
+  unit: z.string().default(''),
   purchasePrice: z.number().nonnegative(),
   salePrice: z.number().nonnegative(),
   discount: z.number().nonnegative().default(0),

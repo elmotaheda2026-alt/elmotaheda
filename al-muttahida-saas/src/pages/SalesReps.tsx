@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, UserCheck } from 'lucide-react';
 import { SalesRep } from '../types';
-import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep } from '../lib/storage';
+import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSalesReps } from '../lib/storage';
+import { isApiMode } from '../lib/apiClient';
 
 export default function SalesReps() {
   const [reps, setReps] = useState<SalesRep[]>([]);
@@ -20,15 +21,19 @@ export default function SalesReps() {
   });
 
   useEffect(() => {
-    setReps(getSalesReps());
+    const load = async () => {
+      if (isApiMode()) await syncSalesReps();
+      setReps(getSalesReps());
+    };
+    load();
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingRep) {
-      updateSalesRep(editingRep.id, formData);
+      await updateSalesRep(editingRep.id, formData);
     } else {
-      createSalesRep(formData);
+      await createSalesRep(formData);
     }
     setReps(getSalesReps());
     setShowModal(false);

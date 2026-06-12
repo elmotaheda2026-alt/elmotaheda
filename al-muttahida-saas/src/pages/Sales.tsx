@@ -24,25 +24,26 @@ export default function Sales() {
 
   const mapApiSale = (row: any): Sale => ({
     id: row.id,
-    invoiceNumber: row.invoice_number,
-    customerId: row.customer_id,
-    customerName: row.customer_name,
-    items: [],
-    subtotal: Number(row.total || 0),
-    discount: 0,
-    tax: 0,
+    invoiceNumber: row.invoiceNumber || row.invoice_number,
+    customerId: row.customerId || row.customer_id,
+    customerName: row.customerName || row.customer_name,
+    items: row.items || [],
+    subtotal: Number(row.subtotal || row.total || 0),
+    discount: Number(row.discount || 0),
+    tax: Number(row.tax || 0),
     total: Number(row.total || 0),
     paid: Number(row.paid || 0),
     remaining: Number(row.remaining || 0),
     status: row.status,
     date: row.date,
-    notes: undefined,
-    createdBy: row.created_by || 'system',
-    createdAt: row.created_at || new Date().toISOString(),
+    notes: row.notes || undefined,
+    createdBy: row.createdBy || row.created_by || 'system',
+    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
     version: row.version,
     locked: !!row.locked,
-    lastEditedBy: row.last_edited_by || undefined,
-    lastEditedAt: row.last_edited_at || undefined,
+    lastEditedBy: row.lastEditedBy || row.last_edited_by || undefined,
+    lastEditedAt: row.lastEditedAt || row.last_edited_at || undefined,
+    financing: row.financing,
   });
 
   const loadData = async () => {
@@ -173,7 +174,7 @@ export default function Sales() {
     }
 
     const totals = calculateTotals();
-    if (isApiMode()) {
+    if (false && isApiMode()) {
       await api.createSale({
         customerId: formData.customerId,
         customerName: formData.customerName,
@@ -189,7 +190,7 @@ export default function Sales() {
       setMessage({ type: 'success', text: 'تم حفظ عملية البيع بنجاح.' });
       return;
     }
-    createSale({
+    await createSale({
       customerId: formData.customerId,
       customerName: formData.customerName,
       items: saleItems,

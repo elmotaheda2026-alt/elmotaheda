@@ -321,7 +321,7 @@ export default function Invoices() {
     setDraftItems((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...next } : item)));
   };
 
-  const handleQuickProductSave = () => {
+  const handleQuickProductSave = async () => {
     if (!quickProduct.name.trim()) {
       setMessage({ type: 'error', text: 'أدخل اسم الصنف السريع.' });
       return;
@@ -332,7 +332,7 @@ export default function Invoices() {
       return;
     }
 
-    const createdProduct = createProduct({
+    const createdProduct = await createProduct({
       name: quickProduct.name.trim(),
       barcode: quickProduct.barcode.trim() || `OD-${Date.now()}`,
       category: 'حسب الطلب',
@@ -363,7 +363,7 @@ export default function Invoices() {
     setMessage({ type: 'success', text: `تم إنشاء الصنف ${createdProduct.name} ويمكن إضافته مباشرة للفاتورة.` });
   };
 
-  const saveInvoice = () => {
+  const saveInvoice = async () => {
     if (!selectedCustomer) {
       setMessage({ type: 'error', text: 'اختر العميل قبل حفظ الفاتورة.' });
       return;
@@ -378,7 +378,7 @@ export default function Invoices() {
 
     if (editingSaleId) {
       try {
-        const updatedSale = updateSale(editingSaleId, {
+        const updatedSale = await updateSale(editingSaleId, {
           customerId: selectedCustomer.id,
           customerName: selectedCustomer.name,
           items,
@@ -459,7 +459,7 @@ export default function Invoices() {
       const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
       const purchaseTotal = purchaseSubtotal - purchaseDiscount + purchaseTax;
 
-      const createdPurchase = createPurchase({
+      const createdPurchase = await createPurchase({
         supplierId: selectedProcurementSupplier.id,
         supplierName: selectedProcurementSupplier.name,
         items: purchaseItems,
@@ -484,7 +484,7 @@ export default function Invoices() {
       });
     }
 
-    const createdSale = createSale({
+    const createdSale = await createSale({
       customerId: selectedCustomer.id,
       customerName: selectedCustomer.name,
       items,
@@ -510,7 +510,7 @@ export default function Invoices() {
     });
 
     if (paid > 0) {
-      createPayment({
+      await createPayment({
         type: 'in',
         amount: paid,
         referenceId: createdSale.id,

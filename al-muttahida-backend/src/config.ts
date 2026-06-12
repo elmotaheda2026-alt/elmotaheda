@@ -4,7 +4,14 @@ dotenv.config();
 
 export const config = {
   port: Number(process.env.PORT || 4000),
-  jwtSecret: process.env.JWT_SECRET || 'change_me_please',
+  // Ensure a strong JWT secret is provided via env var
+  jwtSecret: (() => {
+    const secret = process.env.JWT_SECRET;
+    if (!secret || secret === 'change_me_please') {
+      throw new Error('JWT_SECRET is not set or uses insecure default. Please set a strong secret in environment variables.');
+    }
+    return secret;
+  })(),
   sql: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 1433),

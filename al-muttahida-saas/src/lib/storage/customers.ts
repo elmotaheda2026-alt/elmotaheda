@@ -13,6 +13,12 @@ export async function syncCustomers(): Promise<void> {
 }
 
 export async function createCustomer(customer: Omit<Customer, 'id' | 'createdAt' | 'updatedAt' | 'balance'> & { balance?: number }): Promise<Customer> {
+  const requiredFields = ['name', 'phone', 'address', 'city', 'governorate', 'region', 'nationalId'];
+  const missing = requiredFields.filter((field) => !(field in customer) || !customer[field as keyof typeof customer]);
+  if (missing.length > 0) {
+    throw new Error(`الحقول المطلوبة مفقودة: ${missing.join(', ')}`);
+  }
+
   if (isApiMode()) {
     const res = await api.createCustomer(customer);
     const newCustomer: Customer = {
@@ -42,26 +48,27 @@ export async function createCustomer(customer: Omit<Customer, 'id' | 'createdAt'
 }
 
 export async function updateCustomer(id: string, updates: Partial<Customer>): Promise<Customer | null> {
-  if (isApiMode()) {
-    await api.updateCustomer(id, updates);
-    const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
-    const index = customers.findIndex(c => c.id === id);
-    if (index !== -1) {
-      customers[index] = { ...customers[index], ...updates, updatedAt: new Date().toISOString() };
-      setStorage(DB_KEYS.CUSTOMERS, customers);
-      return customers[index];
-    }
+  const requiredFields = ['name', 'phone', 'address', 'city', 'governorate', 'region', 'nationalId'];
+  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+  const index = customers.findIndex(c => c.id === id);
+
+  if (index === -1) {
     return null;
   }
 
-  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
-  const index = customers.findIndex(c => c.id === id);
-  if (index !== -1) {
-    customers[index] = { ...customers[index], ...updates, updatedAt: new Date().toISOString() };
-    setStorage(DB_KEYS.CUSTOMERS, customers);
-    return customers[index];
+  const merged = { ...customers[index], ...updates } as Customer;
+  const missing = requiredFields.filter((field) => !(field in merged) || !merged[field as keyof typeof merged]);
+  if (missing.length > 0) {
+    throw new Error(`الحقول المطلوبة مفقودة في تعديل العميل: ${missing.join(', ')}`);
   }
-  return null;
+
+  if (isApiMode()) {
+    await api.updateCustomer(id, merged);
+  }
+
+  customers[index] = { ...merged, updatedAt: new Date().toISOString() };
+  setStorage(DB_KEYS.CUSTOMERS, customers);
+  return customers[index];
 }
 
 export async function deleteCustomer(id: string): Promise<boolean> {

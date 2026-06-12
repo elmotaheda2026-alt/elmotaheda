@@ -57,7 +57,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
-  listSales: () => request<any[]>('/sales'),
+  listSales: () => request<any[]>('/sales?includeItems=true'),
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -114,6 +114,7 @@ export const api = {
   // Settings
   getSettings: () => request<any>('/settings'),
   updateSettings: (payload: any) => request<{ message: string }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  clearAllData: () => request<{ message: string }>('/settings/clear-data', { method: 'POST' }),
 
   // Notifications
   listNotifications: () => request<any[]>('/notifications'),

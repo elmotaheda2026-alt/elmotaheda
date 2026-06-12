@@ -17,11 +17,15 @@ export default function Settings() {
     setTimeout(() => setSaved(false), 3000);
   };
 
-  const handleClearData = () => {
-    clearAllData();
-    setShowDeleteConfirm(false);
-    // Reload page
-    window.location.reload();
+  const handleClearData = async () => {
+    try {
+      await clearAllData();
+      setShowDeleteConfirm(false);
+      // Reload page
+      window.location.reload();
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء حذف البيانات من قاعدة البيانات.');
+    }
   };
 
   return (

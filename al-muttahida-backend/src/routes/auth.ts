@@ -61,6 +61,9 @@ function parseStoredPermissions(value?: string | null): Record<string, boolean> 
 }
 
 router.post('/seed-admin', async (_req, res) => {
+  if (process.env.ALLOW_SEED !== 'true') {
+    return res.status(404).json({ message: 'Not found' });
+  }
   const db = await dbPromise;
   const existing = await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM users');
   if ((existing?.count || 0) > 0) return res.status(409).json({ message: 'Users already exist' });
@@ -68,8 +71,8 @@ router.post('/seed-admin', async (_req, res) => {
   const hashed = await hashPassword('admin123');
   const id = uid();
   await db.run(
-    `INSERT INTO users (id, name, email, password_hash, role, is_active, created_at)
-     VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    `INSERT INTO users (id, name, email, password_hash, role, is_active, created_at)` +
+    ` VALUES (?, ?, ?, ?, ?, 1, ?)`,
     id,
     'مدير النظام',
     'admin@almuttahida.com',
@@ -86,11 +89,11 @@ router.post('/login', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });
 
   const db = await dbPromise;
-  const user = await db.get<{ id: string; name: string; role: string; password_hash: string; is_active: number; permissions: string | null }>(
+  const user = await db.get<{ id: string; name: string; role: string; password_hash: string; is_active: number | boolean; permissions: string | null }>(
     'SELECT id, name, role, password_hash, is_active, permissions FROM users WHERE email = ?',
     parsed.data.email,
   );
-  if (!user || user.is_active !== 1) return res.status(401).json({ message: 'Invalid credentials' });
+  if (!user || !(user.is_active === 1 || user.is_active === true)) return res.status(401).json({ message: 'Invalid credentials' });
   const ok = await comparePassword(parsed.data.password, user.password_hash);
   if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
 

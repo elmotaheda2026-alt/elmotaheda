@@ -103,4 +103,37 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
   }
 });
 
+// POST /settings/clear-data
+router.post('/clear-data', requirePermission('settings:manage'), async (req: AuthedRequest, res) => {
+  try {
+    const db = await dbPromise;
+    
+    await db.run('DELETE FROM sale_items');
+    await db.run('DELETE FROM sales');
+    
+    await db.run('DELETE FROM purchase_items');
+    await db.run('DELETE FROM purchases');
+    
+    await db.run('DELETE FROM installment_schedules');
+    await db.run('DELETE FROM payments');
+    await db.run('DELETE FROM expenses');
+    await db.run('DELETE FROM notifications');
+    await db.run('DELETE FROM sales_reps');
+    await db.run('DELETE FROM shareholders');
+    await db.run('DELETE FROM shareholder_transactions');
+    await db.run('DELETE FROM collection_tasks');
+    await db.run('DELETE FROM audit_log');
+    await db.run('DELETE FROM closing_periods');
+    await db.run('DELETE FROM reschedule_requests');
+    await db.run('DELETE FROM customers');
+    await db.run('DELETE FROM suppliers');
+    await db.run('DELETE FROM products');
+    
+    await audit('database.clear', 'database', 'global', req.user?.name || 'system', {});
+    return res.json({ message: 'تم حذف جميع البيانات بنجاح' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 export default router;

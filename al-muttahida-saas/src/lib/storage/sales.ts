@@ -2,7 +2,9 @@ import { Customer, Sale } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, addMonths, buildInstallmentSchedule, syncSalePaymentStatus, createAuditLog } from './core';
 import { getSettings } from './settings';
 import { updateProductQuantity } from './products';
-import { isApiMode } from '../apiClient';
+import { api, isApiMode } from '../apiClient';
+
+type SaleDraft = Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>;
 
 export function getSales(): Sale[] {
   return getStorage<Sale>(DB_KEYS.SALES);
@@ -14,19 +16,16 @@ export function getNextSaleInvoiceNumber(): string {
   return `${settings.invoicePrefix}-${invoiceCounter}`;
 }
 
-export function createSale(sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>): Sale {
-  if (isApiMode()) {
-    throw new Error('لا يمكن حفظ البيع محليًا أثناء تشغيل وضع API. استخدم مسار API أو فعّل VITE_DATA_MODE=local للديمو.');
-  }
-
-  const sales = getStorage<Sale>(DB_KEYS.SALES);
-  const invoiceCounter = parseInt(localStorage.getItem(DB_KEYS.INVOICE_COUNTER) || '1000') + 1;
+function nextSaleInvoiceNumber(): string {
+  const invoiceCounter = parseInt(localStorage.getItem(DB_KEYS.INVOICE_COUNTER) || '1000', 10) + 1;
   localStorage.setItem(DB_KEYS.INVOICE_COUNTER, invoiceCounter.toString());
 
   const settings = getSettings();
-  const invoiceNumber = `${settings.invoicePrefix}-${invoiceCounter}`;
+  return `${settings.invoicePrefix}-${invoiceCounter}`;
+}
 
-  const financing = sale.financing
+function buildFinancing(sale: SaleDraft) {
+  return sale.financing
     ? {
         ...sale.financing,
         schedules:
@@ -39,6 +38,30 @@ export function createSale(sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'
             : sale.financing.schedules || [],
       }
     : undefined;
+}
+
+export async function createSale(sale: SaleDraft): Promise<Sale> {
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const invoiceNumber = nextSaleInvoiceNumber();
+  const financing = buildFinancing(sale);
+
+  if (isApiMode()) {
+    const res = await api.createSale({ ...sale, invoiceNumber, financing });
+    const newSale: Sale = {
+      ...sale,
+      id: res.id,
+      invoiceNumber,
+      createdAt: new Date().toISOString(),
+      version: 1,
+      locked: false,
+      lastEditedBy: sale.createdBy,
+      lastEditedAt: new Date().toISOString(),
+      financing,
+    };
+    sales.push(syncSalePaymentStatus(newSale));
+    setStorage(DB_KEYS.SALES, sales);
+    return newSale;
+  }
 
   const newSale: Sale = {
     ...sale,
@@ -54,12 +77,10 @@ export function createSale(sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'
   sales.push(syncSalePaymentStatus(newSale));
   setStorage(DB_KEYS.SALES, sales);
 
-  // Update product quantities
   sale.items.forEach((item) => {
     updateProductQuantity(item.productId, -item.quantity);
   });
 
-  // Update customer balance
   const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
   const customerIndex = customers.findIndex((c) => c.id === sale.customerId);
   if (customerIndex !== -1) {
@@ -78,54 +99,45 @@ export function createSale(sale: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'
   return newSale;
 }
 
-export function updateSale(saleId: string, updatedSaleData: Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>): Sale {
-  if (isApiMode()) {
-    throw new Error('لا يمكن تعديل البيع محليًا أثناء تشغيل وضع API.');
-  }
-
+export async function updateSale(saleId: string, updatedSaleData: SaleDraft): Promise<Sale> {
   const sales = getStorage<Sale>(DB_KEYS.SALES);
   const saleIndex = sales.findIndex((s) => s.id === saleId);
-  
+
   if (saleIndex === -1) {
-    throw new Error('التعاقد غير موجود في قاعدة البيانات');
+    throw new Error('Sale was not found');
   }
 
   const oldSale = sales[saleIndex];
   if ((oldSale.paid || 0) > 0 || (oldSale.financing?.schedules?.some((s) => s.paidAmount > 0) ?? false)) {
-    throw new Error('لا يمكن تعديل عقد تم عليه سداد. استخدم مسار التسوية/العكس المحاسبي.');
+    throw new Error('Cannot edit a sale that has payments.');
   }
   if (oldSale.locked) {
-    throw new Error('العقد مقفل ولا يمكن تعديله.');
+    throw new Error('Sale is locked and cannot be edited.');
   }
 
-  // 1. Revert old product quantities
-  oldSale.items.forEach((item) => {
-    updateProductQuantity(item.productId, item.quantity);
-  });
+  if (!isApiMode()) {
+    oldSale.items.forEach((item) => {
+      updateProductQuantity(item.productId, item.quantity);
+    });
 
-  // 2. Revert old customer balance
-  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
-  const oldCustomerIndex = customers.findIndex((c) => c.id === oldSale.customerId);
-  if (oldCustomerIndex !== -1) {
-    customers[oldCustomerIndex].balance -= oldSale.remaining;
+    const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+    const oldCustomerIndex = customers.findIndex((c) => c.id === oldSale.customerId);
+    if (oldCustomerIndex !== -1) {
+      customers[oldCustomerIndex].balance -= oldSale.remaining;
+    }
+
+    const newCustomerIndex = customers.findIndex((c) => c.id === updatedSaleData.customerId);
+    if (newCustomerIndex !== -1) {
+      customers[newCustomerIndex].balance += updatedSaleData.remaining;
+    }
+    setStorage(DB_KEYS.CUSTOMERS, customers);
+
+    updatedSaleData.items.forEach((item) => {
+      updateProductQuantity(item.productId, -item.quantity);
+    });
   }
 
-  // 3. Process new financing details and build schedules
-  const financing = updatedSaleData.financing
-    ? {
-        ...updatedSaleData.financing,
-        schedules:
-          updatedSaleData.financing.paymentMethod === 'installment'
-            ? buildInstallmentSchedule(
-                updatedSaleData.financing.installmentStartDate || addMonths(updatedSaleData.date, 1),
-                updatedSaleData.remaining,
-                updatedSaleData.financing.installmentMonths || 1,
-              )
-            : updatedSaleData.financing.schedules || [],
-      }
-    : undefined;
-
-  // 4. Construct the new sale object preserving identifiers
+  const financing = buildFinancing(updatedSaleData);
   const newSale: Sale = {
     ...oldSale,
     ...updatedSaleData,
@@ -139,20 +151,13 @@ export function updateSale(saleId: string, updatedSaleData: Omit<Sale, 'id' | 'i
   };
 
   const syncedSale = syncSalePaymentStatus(newSale);
+
+  if (isApiMode()) {
+    await api.updateSale(saleId, { ...updatedSaleData, invoiceNumber: oldSale.invoiceNumber, financing });
+  }
+
   sales[saleIndex] = syncedSale;
   setStorage(DB_KEYS.SALES, sales);
-
-  // 5. Update new product quantities
-  updatedSaleData.items.forEach((item) => {
-    updateProductQuantity(item.productId, -item.quantity);
-  });
-
-  // 6. Update new customer balance
-  const newCustomerIndex = customers.findIndex((c) => c.id === updatedSaleData.customerId);
-  if (newCustomerIndex !== -1) {
-    customers[newCustomerIndex].balance += syncedSale.remaining;
-  }
-  setStorage(DB_KEYS.CUSTOMERS, customers);
 
   createAuditLog({
     action: 'sale.update',

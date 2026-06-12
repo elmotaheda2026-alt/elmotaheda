@@ -16,6 +16,7 @@ import {
   User,
   InstallmentCollectionTask,
 } from '../../types';
+import { api, isApiMode } from '../apiClient';
 
 export const DB_KEYS = {
   USERS: 'almuttahida_users',
@@ -251,7 +252,16 @@ export function initializeDatabase(): void {
 }
 
 // Clear all business data (keep admin user and settings)
-export function clearAllData(): void {
+export async function clearAllData(): Promise<void> {
+  if (isApiMode()) {
+    try {
+      await api.clearAllData();
+    } catch (err) {
+      console.error('Failed to clear remote database:', err);
+      throw err;
+    }
+  }
+
   setStorage(DB_KEYS.CUSTOMERS, []);
   setStorage(DB_KEYS.SUPPLIERS, []);
   setStorage(DB_KEYS.PRODUCTS, []);

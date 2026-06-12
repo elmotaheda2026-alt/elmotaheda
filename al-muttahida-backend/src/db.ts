@@ -119,23 +119,26 @@ export async function initDb() {
 
   IF OBJECT_ID('products', 'U') IS NULL
   CREATE TABLE products (
-    id NVARCHAR(64) PRIMARY KEY,
-    name NVARCHAR(200) NOT NULL,
-    barcode NVARCHAR(100) NOT NULL UNIQUE,
-    category NVARCHAR(100) NOT NULL,
-    fulfillment_type NVARCHAR(20) NOT NULL DEFAULT 'stocked',
-    unit NVARCHAR(50) NOT NULL,
-    purchase_price DECIMAL(18,2) NOT NULL DEFAULT 0,
-    sale_price DECIMAL(18,2) NOT NULL DEFAULT 0,
-    discount DECIMAL(18,2) NOT NULL DEFAULT 0,
-    tax DECIMAL(18,2) NOT NULL DEFAULT 0,
-    quantity DECIMAL(18,2) NOT NULL DEFAULT 0,
-    min_quantity DECIMAL(18,2) NOT NULL DEFAULT 0,
-    image NVARCHAR(MAX),
-    description NVARCHAR(1000),
-    created_at NVARCHAR(40) NOT NULL,
-    updated_at NVARCHAR(40) NOT NULL
-  );
+      id NVARCHAR(64) PRIMARY KEY,
+      name NVARCHAR(200) NOT NULL,
+      barcode NVARCHAR(100) NOT NULL UNIQUE,
+      category NVARCHAR(100) NULL,
+      fulfillment_type NVARCHAR(20) NOT NULL DEFAULT 'stocked',
+      unit NVARCHAR(50) NULL,
+      purchase_price DECIMAL(18,2) NOT NULL DEFAULT 0,
+      sale_price DECIMAL(18,2) NOT NULL DEFAULT 0,
+      discount DECIMAL(18,2) NOT NULL DEFAULT 0,
+      tax DECIMAL(18,2) NOT NULL DEFAULT 0,
+      quantity DECIMAL(18,2) NOT NULL DEFAULT 0,
+      min_quantity DECIMAL(18,2) NOT NULL DEFAULT 0,
+      image NVARCHAR(MAX),
+      description NVARCHAR(1000),
+      created_at NVARCHAR(40) NOT NULL,
+      updated_at NVARCHAR(40) NOT NULL
+    );
+  
+  ALTER TABLE products ALTER COLUMN category NVARCHAR(100) NULL;
+  ALTER TABLE products ALTER COLUMN unit NVARCHAR(50) NULL;
 
   IF OBJECT_ID('sales', 'U') IS NULL
   CREATE TABLE sales (
@@ -164,6 +167,9 @@ export async function initDb() {
 
   IF COL_LENGTH('sales', 'tax') IS NULL
   ALTER TABLE sales ADD tax DECIMAL(18,2);
+
+  IF COL_LENGTH('sales', 'notes') IS NULL
+  ALTER TABLE sales ADD notes NVARCHAR(1000);
 
   IF COL_LENGTH('sales', 'payment_method') IS NULL
   ALTER TABLE sales ADD payment_method NVARCHAR(30);
@@ -325,18 +331,21 @@ export async function initDb() {
 
   IF OBJECT_ID('sales_reps', 'U') IS NULL
   CREATE TABLE sales_reps (
-    id NVARCHAR(64) PRIMARY KEY,
-    name NVARCHAR(200) NOT NULL,
-    phone NVARCHAR(50) NOT NULL,
-    email NVARCHAR(255),
-    address NVARCHAR(500) NOT NULL,
-    area NVARCHAR(100) NOT NULL,
-    target DECIMAL(18,2) NOT NULL DEFAULT 0,
-    achieved DECIMAL(18,2) NOT NULL DEFAULT 0,
-    commission DECIMAL(18,2) NOT NULL DEFAULT 0,
-    is_active BIT NOT NULL DEFAULT 1,
-    created_at NVARCHAR(40) NOT NULL
-  );
+      id NVARCHAR(64) PRIMARY KEY,
+      name NVARCHAR(200) NOT NULL,
+      phone NVARCHAR(50) NOT NULL,
+      email NVARCHAR(255),
+      address NVARCHAR(500) NULL,
+      area NVARCHAR(100) NULL,
+      target DECIMAL(18,2) NOT NULL DEFAULT 0,
+      achieved DECIMAL(18,2) NOT NULL DEFAULT 0,
+      commission DECIMAL(18,2) NOT NULL DEFAULT 0,
+      is_active BIT NOT NULL DEFAULT 1,
+      created_at NVARCHAR(40) NOT NULL
+    );
+
+  ALTER TABLE sales_reps ALTER COLUMN address NVARCHAR(500) NULL;
+  ALTER TABLE sales_reps ALTER COLUMN area NVARCHAR(100) NULL;
 
   IF OBJECT_ID('shareholders', 'U') IS NULL
   CREATE TABLE shareholders (

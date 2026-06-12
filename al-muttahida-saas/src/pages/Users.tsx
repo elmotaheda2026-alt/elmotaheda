@@ -194,7 +194,7 @@ export default function Users() {
                           <Edit size={18} />
                         </button>
                       )}
-                      {user.role === 'admin' && (
+                      {hasPermission(currentUser, 'users:manage') && currentUser?.id !== user.id && (
                         <button
                           onClick={() => handleDelete(user.id)}
                           className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
