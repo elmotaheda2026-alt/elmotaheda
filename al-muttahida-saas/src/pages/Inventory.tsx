@@ -101,7 +101,7 @@ export default function Inventory() {
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الصنف</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">النوع</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الكمية</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الحد الأدنى</th>
+                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">دنى</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">قيمة المخزون</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الحالة</th>
               </tr>

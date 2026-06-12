@@ -14,113 +14,346 @@ async function nextReceiptNumber() {
   return `RCPT-${5000 + (row?.c || 0) + 1}`;
 }
 
-router.get('/', requirePermission('payments:read'), async (_req, res) => {
-  const db = await dbPromise;
-  const rows = await db.all('SELECT * FROM payments ORDER BY created_at DESC');
-  return res.json(rows);
+const paymentSchema = z.object({
+  type: z.enum(['in', 'out']),
+  amount: z.number().positive(),
+  saleId: z.string().optional().nullable(),
+  installmentId: z.string().optional().nullable(),
+  customerId: z.string().optional().nullable(),
+  supplierId: z.string().optional().nullable(),
+  referenceId: z.string().optional().nullable(),
+  referenceType: z.enum(['customer', 'supplier', 'sale', 'purchase', 'other']).default('other'),
+  description: z.string().min(1),
+  date: z.string().min(8),
+  channel: z.enum(['cash', 'card', 'transfer', 'wallet', 'other']).default('cash'),
+  invoiceNumber: z.string().optional().nullable(),
+  affectsCustomerBalance: z.boolean().default(true),
 });
 
-router.post('/', requirePermission('payments:write'), async (req: AuthedRequest, res) => {
-  const schema = z.object({
-    type: z.enum(['in', 'out']),
-    amount: z.number().positive(),
-    saleId: z.string().optional(),
-    installmentId: z.string().optional(),
-    description: z.string().min(1),
-    date: z.string().min(8),
-    channel: z.enum(['cash', 'card', 'transfer', 'wallet', 'other']).default('cash'),
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });
-  const db = await dbPromise;
+// GET /payments
+router.get('/', requirePermission('payments:read'), async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    const rows = await db.all('SELECT * FROM payments ORDER BY created_at DESC');
+    const mapped = rows.map((row: any) => ({
+      id: row.id,
+      type: row.type,
+      amount: Number(row.amount),
+      saleId: row.sale_id,
+      installmentId: row.installment_id,
+      description: row.description,
+      date: row.date,
+      receiptNumber: row.receipt_number,
+      status: row.status,
+      voidRef: row.void_ref,
+      approvedBy: row.approved_by,
+      channel: row.channel,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      customerId: row.customer_id,
+      supplierId: row.supplier_id,
+      referenceId: row.reference_id,
+      referenceType: row.reference_type || 'other',
+      invoiceNumber: row.invoice_number,
+      affectsCustomerBalance: row.affects_customer_balance === 1 || row.affects_customer_balance === true,
+    }));
+    return res.json(mapped);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
 
-  if (parsed.data.type === 'in' && parsed.data.saleId) {
-    const sale = await db.get<{ id: string; paid: number; total: number }>('SELECT id, paid, total FROM sales WHERE id = ?', parsed.data.saleId);
-    if (!sale) return res.status(404).json({ message: 'Sale not found' });
-    await db.run(
-      `UPDATE sales
-       SET paid = paid + ?,
-           remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
-           locked = 1,
-           status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
-       WHERE id = ?`,
-      parsed.data.amount,
-      parsed.data.amount,
-      parsed.data.amount,
-      parsed.data.amount,
-      parsed.data.saleId,
-    );
+// POST /payments
+router.post('/', requirePermission('payments:write'), async (req: AuthedRequest, res) => {
+  const parsed = paymentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid payment payload', errors: parsed.error.format() });
   }
 
+  const data = parsed.data;
+  const db = await dbPromise;
+  const now = new Date().toISOString();
   const id = uid();
   const receiptNumber = await nextReceiptNumber();
-  await db.run(
-    `INSERT INTO payments (id, type, amount, sale_id, installment_id, description, date, receipt_number, status, channel, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?)`,
-    id,
-    parsed.data.type,
-    parsed.data.amount,
-    parsed.data.saleId || null,
-    parsed.data.installmentId || null,
-    parsed.data.description,
-    parsed.data.date,
-    receiptNumber,
-    parsed.data.channel,
-    req.user?.name || 'system',
-    new Date().toISOString(),
-  );
-  await audit('payment.create', 'payment', id, req.user?.name || 'system', parsed.data);
-  return res.status(201).json({ id, receiptNumber });
+
+  try {
+    let finalCustomerId = data.customerId || null;
+    let finalSupplierId = data.supplierId || null;
+
+    // 1. If paying for a sale
+    if (data.type === 'in' && data.saleId) {
+      const sale = await db.get<{ id: string; customer_id: string; paid: number; total: number }>(
+        'SELECT id, customer_id, paid, total FROM sales WHERE id = ?',
+        data.saleId,
+      );
+      if (!sale) return res.status(404).json({ message: 'Sale invoice not found' });
+      
+      finalCustomerId = sale.customer_id;
+
+      // Update sales table (increase paid amount, update status and remaining)
+      await db.run(
+        `UPDATE sales
+         SET paid = paid + ?,
+             remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
+             locked = 1,
+             status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
+         WHERE id = ?`,
+        data.amount,
+        data.amount,
+        data.amount,
+        data.amount,
+        data.saleId,
+      );
+
+      // Update installment schedules
+      if (data.installmentId) {
+        // Update the specific installment
+        const schedule = await db.get<{ id: string; amount: number; paid_amount: number }>(
+          'SELECT id, amount, paid_amount FROM installment_schedules WHERE id = ?',
+          data.installmentId,
+        );
+        if (schedule) {
+          const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
+          const scheduleStatus = nextPaid >= schedule.amount ? 'paid' : 'partial';
+          await db.run(
+            `UPDATE installment_schedules
+             SET paid_amount = ?,
+                 status = ?
+             WHERE id = ?`,
+            nextPaid,
+            scheduleStatus,
+            data.installmentId,
+          );
+        }
+      } else {
+        // Auto-allocate payment to unpaid schedules in order
+        const schedules = await db.all<{ id: string; amount: number; paid_amount: number }>(
+          'SELECT id, amount, paid_amount FROM installment_schedules WHERE sale_id = ? AND status <> \'paid\' ORDER BY month_index ASC',
+          data.saleId,
+        );
+        let remainingPayment = data.amount;
+        for (const sch of schedules) {
+          if (remainingPayment <= 0) break;
+          const schRemaining = Number((sch.amount - sch.paid_amount).toFixed(2));
+          const applied = Math.min(schRemaining, remainingPayment);
+          const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
+          remainingPayment = Number((remainingPayment - applied).toFixed(2));
+
+          await db.run(
+            `UPDATE installment_schedules
+             SET paid_amount = ?,
+                 status = ?
+             WHERE id = ?`,
+            nextPaidAmount,
+            nextPaidAmount >= sch.amount ? 'paid' : 'partial',
+            sch.id,
+          );
+        }
+      }
+    }
+
+    // 2. Update Customer Balance (incoming payment decreases debtor balance)
+    if (data.type === 'in' && finalCustomerId && data.affectsCustomerBalance) {
+      await db.run(
+        `UPDATE customers
+         SET balance = balance - ?,
+             updated_at = ?
+         WHERE id = ?`,
+        data.amount,
+        now,
+        finalCustomerId,
+      );
+    }
+
+    // 3. Update Supplier Balance (outgoing payment decreases creditor balance we owe them)
+    if (data.type === 'out' && finalSupplierId) {
+      await db.run(
+        `UPDATE suppliers
+         SET balance = balance - ?,
+             updated_at = ?
+         WHERE id = ?`,
+        data.amount,
+        now,
+        finalSupplierId,
+      );
+    }
+
+    // 4. Insert payment
+    await db.run(
+      `INSERT INTO payments (
+        id, type, amount, sale_id, installment_id, description, date, receipt_number, status, channel,
+        reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+        created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      data.type,
+      data.amount,
+      data.saleId || null,
+      data.installmentId || null,
+      data.description,
+      data.date,
+      receiptNumber,
+      data.channel,
+      data.referenceId || null,
+      data.referenceType,
+      finalCustomerId,
+      finalSupplierId,
+      data.invoiceNumber || null,
+      data.affectsCustomerBalance ? 1 : 0,
+      req.user?.name || 'system',
+      now,
+    );
+
+    await audit('payment.create', 'payment', id, req.user?.name || 'system', {
+      id,
+      receiptNumber,
+      amount: data.amount,
+      type: data.type,
+    });
+
+    return res.status(201).json({ id, receiptNumber });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
 });
 
+// POST /payments/:id/reverse
 router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: AuthedRequest, res) => {
   const db = await dbPromise;
-  const original = await db.get<{ id: string; type: 'in' | 'out'; amount: number; sale_id: string | null; status: string; description: string; date: string; channel: string | null }>(
-    'SELECT id, type, amount, sale_id, status, description, date, channel FROM payments WHERE id = ?',
+  const original = await db.get<any>(
+    'SELECT * FROM payments WHERE id = ?',
     req.params.id,
   );
   if (!original) return res.status(404).json({ message: 'Payment not found' });
-  if (original.status === 'voided') return res.status(409).json({ message: 'Already voided' });
+  if (original.status === 'voided') return res.status(409).json({ message: 'Payment is already voided' });
 
-  if (original.sale_id && original.type === 'in') {
-    await db.run(
-      `UPDATE sales
-       SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
-           remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
-           status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
-       WHERE id = ?`,
-      original.amount,
-      original.amount,
-      original.amount,
-      original.amount,
-      original.amount,
-      original.sale_id,
-    );
-  }
-
+  const now = new Date().toISOString();
   const reverseId = uid();
   const receiptNumber = await nextReceiptNumber();
   const reverseType = original.type === 'in' ? 'out' : 'in';
-  await db.run(
-    `INSERT INTO payments (id, type, amount, sale_id, description, date, receipt_number, status, void_ref, approved_by, channel, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?)`,
-    reverseId,
-    reverseType,
-    original.amount,
-    original.sale_id,
-    `Reverse of ${original.description}`,
-    new Date().toISOString().slice(0, 10),
-    receiptNumber,
-    original.id,
-    req.user?.name || 'system',
-    original.channel || 'other',
-    req.user?.name || 'system',
-    new Date().toISOString(),
-  );
 
-  await db.run('UPDATE payments SET status = "voided", void_ref = ?, approved_by = ? WHERE id = ?', reverseId, req.user?.name || 'system', original.id);
-  await audit('payment.reverse', 'payment', original.id, req.user?.name || 'system', { reverseId });
-  return res.json({ message: 'Reversed', reverseId });
+  try {
+    // 1. If reversing a sale payment, deduct from paid and add back to remaining
+    if (original.sale_id && original.type === 'in') {
+      await db.run(
+        `UPDATE sales
+         SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
+             remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
+             status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
+         WHERE id = ?`,
+        original.amount,
+        original.amount,
+        original.amount,
+        original.amount,
+        original.amount,
+        original.sale_id,
+      );
+
+      // Revert schedules
+      if (original.installment_id) {
+        await db.run(
+          `UPDATE installment_schedules
+           SET paid_amount = CASE WHEN paid_amount - ? < 0 THEN 0 ELSE paid_amount - ? END,
+               status = CASE WHEN paid_amount - ? <= 0 THEN 'unpaid' ELSE 'partial' END
+           WHERE id = ?`,
+          original.amount,
+          original.amount,
+          original.amount,
+          original.installment_id,
+        );
+      } else {
+        // Auto-revert schedules in reverse order (month_index DESC)
+        const schedules = await db.all<{ id: string; paid_amount: number }>(
+          'SELECT id, paid_amount FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
+          original.sale_id,
+        );
+        let remainingRevert = original.amount;
+        for (const sch of schedules) {
+          if (remainingRevert <= 0) break;
+          const applied = Math.min(sch.paid_amount, remainingRevert);
+          const nextPaidAmount = Number((sch.paid_amount - applied).toFixed(2));
+          remainingRevert = Number((remainingRevert - applied).toFixed(2));
+
+          await db.run(
+            `UPDATE installment_schedules
+             SET paid_amount = ?,
+                 status = ?
+             WHERE id = ?`,
+            nextPaidAmount,
+            nextPaidAmount <= 0 ? 'unpaid' : 'partial',
+            sch.id,
+          );
+        }
+      }
+    }
+
+    // 2. Revert Customer Balance (outgoing reverse payment increases debtor balance)
+    if (original.type === 'in' && original.customer_id && original.affects_customer_balance) {
+      await db.run(
+        `UPDATE customers
+         SET balance = balance + ?,
+             updated_at = ?
+         WHERE id = ?`,
+        original.amount,
+        now,
+        original.customer_id,
+      );
+    }
+
+    // 3. Revert Supplier Balance (incoming reverse payment increases creditor balance we owe them)
+    if (original.type === 'out' && original.supplier_id) {
+      await db.run(
+        `UPDATE suppliers
+         SET balance = balance + ?,
+             updated_at = ?
+         WHERE id = ?`,
+        original.amount,
+        now,
+        original.supplier_id,
+      );
+    }
+
+    // 4. Create void payment transaction
+    await db.run(
+      `INSERT INTO payments (
+        id, type, amount, sale_id, installment_id, description, date, receipt_number, status, void_ref, approved_by, channel,
+        reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+        created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      reverseId,
+      reverseType,
+      original.amount,
+      original.sale_id || null,
+      original.installment_id || null,
+      `Reverse of ${original.description}`,
+      now.slice(0, 10),
+      receiptNumber,
+      original.id,
+      req.user?.name || 'system',
+      original.channel || 'other',
+      original.reference_id || null,
+      original.reference_type || 'other',
+      original.customer_id || null,
+      original.supplier_id || null,
+      original.invoice_number || null,
+      original.affects_customer_balance === 1 ? 1 : 0,
+      req.user?.name || 'system',
+      now,
+    );
+
+    // 5. Update original payment status to voided
+    await db.run(
+      'UPDATE payments SET status = \'voided\', void_ref = ?, approved_by = ? WHERE id = ?',
+      reverseId,
+      req.user?.name || 'system',
+      original.id,
+    );
+
+    await audit('payment.reverse', 'payment', original.id, req.user?.name || 'system', { reverseId });
+    return res.json({ message: 'Reversed', reverseId });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
 });
 
 export default router;

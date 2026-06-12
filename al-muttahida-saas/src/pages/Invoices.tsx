@@ -374,21 +374,7 @@ export default function Invoices() {
       return;
     }
 
-    if (selectedCustomer && selectedCustomer.creditLimit && selectedCustomer.creditLimit > 0) {
-      const currentDebt = selectedCustomer.balanceType === 'debtor' ? selectedCustomer.balance : 0;
-      const totalProjectedDebt = currentDebt + remaining;
-      
-      if (totalProjectedDebt > selectedCustomer.creditLimit) {
-        if (user?.role === 'admin') {
-          if (!window.confirm(`تحذير: إجمالي المديونية (${formatCurrency(totalProjectedDebt)}) سيتخطى الحد الائتماني للعميل (${formatCurrency(selectedCustomer.creditLimit)}). هل تريد المتابعة وحفظ الفاتورة كمدير النظام؟`)) {
-            return;
-          }
-        } else {
-          setMessage({ type: 'error', text: `لا يمكن حفظ الفاتورة. إجمالي المديونية (${formatCurrency(totalProjectedDebt)}) سيتخطى الحد الائتماني المسموح به للعميل (${formatCurrency(selectedCustomer.creditLimit)}). يرجى الرجوع للإدارة.` });
-          return;
-        }
-      }
-    }
+
 
     if (editingSaleId) {
       try {

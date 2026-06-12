@@ -24,6 +24,7 @@ export default function Customers() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const emptyForm = {
     name: '',
@@ -40,7 +41,6 @@ export default function Customers() {
     pensionDate: '',
     balance: '',
     balanceType: 'debtor' as 'debtor' | 'creditor',
-    creditLimit: '',
     notes: '',
     guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null],
     isSued: false,
@@ -75,6 +75,7 @@ export default function Customers() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
 
     const customerData: Partial<Customer> = {
       name: formData.name,
@@ -91,25 +92,28 @@ export default function Customers() {
       pensionDate: formData.pensionDate,
       balance: parseFloat(formData.balance) || 0,
       balanceType: formData.balanceType,
-      creditLimit: parseFloat(formData.creditLimit) || 0,
       notes: formData.notes || undefined,
       guarantors: formData.guarantors,
       isSued: formData.isSued,
       suedDate: formData.isSued ? (formData.suedDate || new Date().toISOString()) : undefined
     };
 
-    if (isEditing && selectedCustomer) {
-      await updateCustomer(selectedCustomer.id, customerData);
-    } else {
-      await createCustomer({
-        ...customerData,
-        customerNumber: generateCustomerNumber(),
-        balance: parseFloat(formData.balance) || 0
-      } as Customer);
-    }
+    try {
+      if (isEditing && selectedCustomer) {
+        await updateCustomer(selectedCustomer.id, customerData);
+      } else {
+        await createCustomer({
+          ...customerData,
+          customerNumber: generateCustomerNumber(),
+          balance: parseFloat(formData.balance) || 0
+        } as Customer);
+      }
 
-    await loadCustomers();
-    handleClose();
+      await loadCustomers();
+      handleClose();
+    } catch (err: any) {
+      setError(err.message || 'حدث خطأ أثناء حفظ بيانات العميل. يرجى التحقق من صحة البيانات المدخلة.');
+    }
   };
 
   const handleEdit = (customer: Customer) => {
@@ -129,7 +133,6 @@ export default function Customers() {
       pensionDate: customer.pensionDate || '',
       balance: customer.balance?.toString() || '',
       balanceType: customer.balanceType || 'debtor',
-      creditLimit: customer.creditLimit?.toString() || '',
       notes: customer.notes || '',
       guarantors: customer.guarantors || [null, null, null],
       isSued: customer.isSued || false,
@@ -137,13 +140,18 @@ export default function Customers() {
     });
     setIsEditing(true);
     setShowForm(true);
+    setError(null);
   };
 
   const handleDelete = async (id: string) => {
     if (confirm('هل أنت متأكد من حذف هذا العميل؟')) {
-      await deleteCustomer(id);
-      await loadCustomers();
-      handleClose();
+      try {
+        await deleteCustomer(id);
+        await loadCustomers();
+        handleClose();
+      } catch (err: any) {
+        alert(err.message || 'حدث خطأ أثناء حذف العميل.');
+      }
     }
   };
 
@@ -152,6 +160,7 @@ export default function Customers() {
     setIsEditing(false);
     setSelectedCustomer(null);
     setFormData(emptyForm);
+    setError(null);
   };
 
   const handleNew = () => {
@@ -159,6 +168,7 @@ export default function Customers() {
     setSelectedCustomer(null);
     setIsEditing(false);
     setShowForm(true);
+    setError(null);
   };
 
   const updateGuarantor = (index: number, field: keyof Guarantor, value: string) => {
@@ -320,6 +330,12 @@ export default function Customers() {
             </div>
 
             <form onSubmit={handleSubmit} className="p-6">
+              {error && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium flex items-center gap-2">
+                  <AlertTriangle className="text-red-500 shrink-0" size={18} />
+                  <span>{error}</span>
+                </div>
+              )}
               <div className="flex gap-6">
                 {/* Right Side - Action Buttons */}
                 <div className="w-32 flex flex-col gap-3">
@@ -494,39 +510,43 @@ export default function Customers() {
                     </h3>
                     <div className="grid grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">العنوان</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">العنوان *</label>
                         <input
                           type="text"
                           value={formData.address}
                           onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">المدينة</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">المدينة *</label>
                         <input
                           type="text"
                           value={formData.city}
                           onChange={(e) => setFormData({ ...formData, city: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">المحافظة</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">المحافظة *</label>
                         <input
                           type="text"
                           value={formData.governorate}
                           onChange={(e) => setFormData({ ...formData, governorate: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">المنطقة</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">المنطقة *</label>
                         <input
                           type="text"
                           value={formData.region}
                           onChange={(e) => setFormData({ ...formData, region: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
@@ -559,30 +579,33 @@ export default function Customers() {
                     </h3>
                     <div className="grid grid-cols-4 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">الرقم القومى</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">الرقم القومى *</label>
                         <input
                           type="text"
                           value={formData.nationalId}
                           onChange={(e) => setFormData({ ...formData, nationalId: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">تاريخ الميلاد</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">تاريخ الميلاد *</label>
                         <input
                           type="date"
                           value={formData.dateOfBirth}
                           onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">العمر</label>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">العمر *</label>
                         <input
                           type="number"
                           value={formData.age}
                           onChange={(e) => setFormData({ ...formData, age: e.target.value })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          required
                         />
                       </div>
                       <div>
@@ -615,17 +638,7 @@ export default function Customers() {
                           <option value="creditor">دائن</option>
                         </select>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1 text-red-600">الحد الائتماني المسموح به</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={formData.creditLimit}
-                          onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
-                          placeholder="مثال: 50000"
-                          className="w-full px-3 py-2 border border-red-300 bg-red-50 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
-                        />
-                      </div>
+
                     </div>
                   </div>
 

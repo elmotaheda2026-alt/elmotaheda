@@ -17,6 +17,14 @@ import closingRoutes from './routes/closing.js';
 import customersRoutes from './routes/customers.js';
 import suppliersRoutes from './routes/suppliers.js';
 import usersRoutes from './routes/users.js';
+import productsRoutes from './routes/products.js';
+import purchasesRoutes from './routes/purchases.js';
+import expensesRoutes from './routes/expenses.js';
+import salesRepsRoutes from './routes/sales-reps.js';
+import shareholdersRoutes from './routes/shareholders.js';
+import settingsRoutes from './routes/settings.js';
+import notificationsRoutes from './routes/notifications.js';
+import collectionTasksRoutes from './routes/collection-tasks.js';
 
 async function bootstrap() {
   await initDb();
@@ -50,6 +58,14 @@ async function bootstrap() {
   app.use('/customers', customersRoutes);
   app.use('/suppliers', suppliersRoutes);
   app.use('/users', usersRoutes);
+  app.use('/products', productsRoutes);
+  app.use('/purchases', purchasesRoutes);
+  app.use('/expenses', expensesRoutes);
+  app.use('/sales-reps', salesRepsRoutes);
+  app.use('/shareholders', shareholdersRoutes);
+  app.use('/settings', settingsRoutes);
+  app.use('/notifications', notificationsRoutes);
+  app.use('/collection-tasks', collectionTasksRoutes);
   // Central error handling
   app.use(errorHandler);
 

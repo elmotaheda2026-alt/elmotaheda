@@ -79,4 +79,52 @@ export const api = {
   createUser: (payload: any) => request<{ id: string }>('/users', { method: 'POST', body: JSON.stringify(payload) }),
   updateUser: (id: string, payload: any) => request<{ message: string }>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteUser: (id: string) => request<{ message: string }>(`/users/${id}`, { method: 'DELETE' }),
+
+  // Products
+  listProducts: () => request<any[]>('/products'),
+  createProduct: (payload: any) => request<{ id: string }>('/products', { method: 'POST', body: JSON.stringify(payload) }),
+  updateProduct: (id: string, payload: any) => request<{ message: string }>(`/products/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteProduct: (id: string) => request<{ message: string }>(`/products/${id}`, { method: 'DELETE' }),
+
+  // Purchases
+  listPurchases: () => request<any[]>('/purchases'),
+  getPurchase: (id: string) => request<any>(`/purchases/${id}`),
+  createPurchase: (payload: any) => request<{ id: string }>('/purchases', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Expenses
+  listExpenses: () => request<any[]>('/expenses'),
+  createExpense: (payload: any) => request<{ id: string }>('/expenses', { method: 'POST', body: JSON.stringify(payload) }),
+  updateExpense: (id: string, payload: any) => request<{ message: string }>(`/expenses/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteExpense: (id: string) => request<{ message: string }>(`/expenses/${id}`, { method: 'DELETE' }),
+
+  // Sales Representatives
+  listSalesReps: () => request<any[]>('/sales-reps'),
+  createSalesRep: (payload: any) => request<{ id: string }>('/sales-reps', { method: 'POST', body: JSON.stringify(payload) }),
+  updateSalesRep: (id: string, payload: any) => request<{ message: string }>(`/sales-reps/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteSalesRep: (id: string) => request<{ message: string }>(`/sales-reps/${id}`, { method: 'DELETE' }),
+
+  // Shareholders
+  listShareholders: () => request<any[]>('/shareholders'),
+  createShareholder: (payload: any) => request<{ id: string }>('/shareholders', { method: 'POST', body: JSON.stringify(payload) }),
+  updateShareholder: (id: string, payload: any) => request<{ message: string }>(`/shareholders/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteShareholder: (id: string) => request<{ message: string }>(`/shareholders/${id}`, { method: 'DELETE' }),
+  listShareholderTransactions: () => request<any[]>('/shareholders/transactions'),
+  createShareholderTransaction: (payload: any) => request<{ id: string }>('/shareholders/transactions', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Settings
+  getSettings: () => request<any>('/settings'),
+  updateSettings: (payload: any) => request<{ message: string }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+
+  // Notifications
+  listNotifications: () => request<any[]>('/notifications'),
+  createNotification: (payload: any) => request<{ id: string }>('/notifications', { method: 'POST', body: JSON.stringify(payload) }),
+  markNotificationRead: (id: string) => request<{ message: string }>(`/notifications/${id}/read`, { method: 'PUT' }),
+  markAllNotificationsRead: () => request<{ message: string }>('/notifications/read-all', { method: 'PUT' }),
+  deleteNotification: (id: string) => request<{ message: string }>(`/notifications/${id}`, { method: 'DELETE' }),
+
+  // Collection Tasks
+  listCollectionTasks: () => request<any[]>('/collection-tasks'),
+  createCollectionTask: (payload: any) => request<{ id: string }>('/collection-tasks', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCollectionTask: (id: string, payload: any) => request<{ message: string }>(`/collection-tasks/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteCollectionTask: (id: string) => request<{ message: string }>(`/collection-tasks/${id}`, { method: 'DELETE' }),
 };

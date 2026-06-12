@@ -16,4 +16,9 @@ export type Permission =
   | 'payments:reverse'
   | 'reports:read'
   | 'closing:write'
-  | 'users:manage';
+  | 'users:manage'
+  | 'inventory:manage'
+  | 'purchases:manage'
+  | 'settings:manage'
+  | 'shareholders:manage'
+  | 'notifications:read';

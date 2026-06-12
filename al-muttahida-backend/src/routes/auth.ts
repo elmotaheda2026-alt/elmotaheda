@@ -16,6 +16,11 @@ const apiPermissions: Permission[] = [
   'reports:read',
   'closing:write',
   'users:manage',
+  'inventory:manage',
+  'purchases:manage',
+  'settings:manage',
+  'shareholders:manage',
+  'notifications:read',
 ];
 
 const legacyPermissionMap: Record<string, Permission[]> = {
