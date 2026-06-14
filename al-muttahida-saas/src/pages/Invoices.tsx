@@ -31,6 +31,7 @@ import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { formatWholeCurrency } from '../lib/utils';
 
 type PaymentMethod = 'cash' | 'card' | 'transfer' | 'installment';
 
@@ -235,8 +236,7 @@ export default function Invoices() {
     0,
   );
 
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const filteredModalContracts = useMemo(() => {
     const query = modalSearchQuery.trim().toLowerCase();

@@ -5,6 +5,7 @@ import { getExpenses, createExpense } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Expenses() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -22,9 +23,7 @@ export default function Expenses() {
     setExpenses(getExpenses().reverse());
   }, []);
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

@@ -5,6 +5,7 @@ import { getCustomers, getSales, getSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { formatWholeCurrency } from '../lib/utils';
 
 interface CollectionInvoiceView {
   saleId: string;
@@ -229,8 +230,7 @@ export default function CollectionStatement() {
 
   const dueTotalInPeriod = dueRows.reduce((sum, row) => sum + row.remainingAmount, 0);
 
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const handlePrint = (invoice: CollectionInvoiceView) => {
     setPrintingInvoice(invoice);
@@ -813,8 +813,7 @@ function MonthRow({ icon, label, value, highlightValue }: { icon: React.ReactNod
 }
 
 function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, settings: Setting }) {
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const hasGuarantor = invoice.guarantors.some(g => g && g.name);
 

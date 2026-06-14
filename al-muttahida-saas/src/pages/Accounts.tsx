@@ -5,6 +5,7 @@ import { getCustomers, getSuppliers, getSales, getPurchases, getPayments, getPro
 import { DatePicker } from '../components/DatePicker';
 import { formatDateTimeDisplay } from '../lib/dateUtils';
 import { calculateCostOfGoodsSold, calculateInventoryValue, calculateNetProfit } from '../lib/accounting';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Accounts() {
   const { settings } = useAuth();
@@ -117,9 +118,7 @@ export default function Accounts() {
     );
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const periodNetProfit = summary.periodSales - summary.periodCostOfGoodsSold - summary.periodExpenses;
 

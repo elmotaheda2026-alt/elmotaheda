@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { calculateNetProfit } from '../lib/accounting';
+import { formatWholeCurrency } from '../lib/utils';
 
 const TypedPieChart = PieChart as any;
 const TypedPie = Pie as any;
@@ -57,9 +58,7 @@ export default function Shareholders() {
     setProducts(getProducts());
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const handleShareholderSubmit = (e: React.FormEvent) => {
     e.preventDefault();

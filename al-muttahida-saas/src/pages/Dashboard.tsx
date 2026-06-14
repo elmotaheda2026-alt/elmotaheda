@@ -18,6 +18,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { getDashboardStats, getLowStockProducts, getSales, getPurchases } from '../lib/storage';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Dashboard() {
   const { settings } = useAuth();
@@ -27,9 +28,7 @@ export default function Dashboard() {
   const recentSales = getSales().slice(-5).reverse();
   const recentPurchases = getPurchases().slice(-5).reverse();
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const StatCard = ({ title, value, icon: Icon, trend, trendValue, color, iconColor }: any) => (
     <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-md hover:border-sky-100 transition-all">

@@ -3,6 +3,7 @@ import { AlertTriangle, Package, Search, ShoppingBasket, Warehouse } from 'lucid
 import { Product } from '../types';
 import { getProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Inventory() {
   const { settings } = useAuth();
@@ -30,8 +31,7 @@ export default function Inventory() {
   const onDemandProducts = products.filter((product) => product.fulfillmentType === 'on_demand');
   const lowStockProducts = stockedProducts.filter((product) => product.quantity <= product.minQuantity);
 
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const getStatus = (product: Product) => {
     if (product.fulfillmentType === 'on_demand') {

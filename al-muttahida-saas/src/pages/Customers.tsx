@@ -8,6 +8,7 @@ import { Customer, Guarantor } from '../types';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, syncCustomers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
+import { formatWholeCurrency } from '../lib/utils';
 
 const initialGuarantor: Guarantor = {
   name: '',
@@ -15,6 +16,43 @@ const initialGuarantor: Guarantor = {
   nationalId: '',
   phone: '',
   relationship: ''
+};
+
+const calculateAgeFromDate = (dateOfBirth: string): number => {
+  const [year, month, day] = dateOfBirth.split('-').map(Number);
+  const birthDate = new Date(year, month - 1, day);
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const hasHadBirthday =
+    today.getMonth() > birthDate.getMonth() ||
+    (today.getMonth() === birthDate.getMonth() && today.getDate() >= birthDate.getDate());
+
+  return hasHadBirthday ? age : age - 1;
+};
+
+const getBirthDateFromEgyptianNationalId = (nationalId: string): string => {
+  const digits = nationalId.replace(/\D/g, '');
+  if (digits.length !== 14) return '';
+
+  const centuryCode = digits[0];
+  const century = centuryCode === '2' ? 1900 : centuryCode === '3' ? 2000 : null;
+  if (!century) return '';
+
+  const year = century + Number(digits.slice(1, 3));
+  const month = Number(digits.slice(3, 5));
+  const day = Number(digits.slice(5, 7));
+  const birthDate = new Date(year, month - 1, day);
+
+  if (
+    birthDate.getFullYear() !== year ||
+    birthDate.getMonth() !== month - 1 ||
+    birthDate.getDate() !== day ||
+    birthDate > new Date()
+  ) {
+    return '';
+  }
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 };
 
 export default function Customers() {
@@ -90,9 +128,9 @@ export default function Customers() {
       dateOfBirth: formData.dateOfBirth,
       nationalId: formData.nationalId,
       age: parseInt(formData.age) || 0,
-      pensionDate: formData.pensionDate,
-      balance: parseFloat(formData.balance) || 0,
-      balanceType: formData.balanceType,
+      pensionDate: '',
+      balance: 0,
+      balanceType: 'debtor',
       notes: formData.notes || undefined,
       guarantors: formData.guarantors,
       isSued: formData.isSued,
@@ -106,7 +144,8 @@ export default function Customers() {
         await createCustomer({
           ...customerData,
           customerNumber: generateCustomerNumber(),
-          balance: parseFloat(formData.balance) || 0
+          balance: 0,
+          balanceType: 'debtor'
         } as Customer);
       }
 
@@ -181,15 +220,29 @@ export default function Customers() {
     setFormData({ ...formData, guarantors: newGuarantors });
   };
 
+  const handleNationalIdChange = (value: string) => {
+    const nationalId = value.replace(/\D/g, '').slice(0, 14);
+    const dateOfBirth = getBirthDateFromEgyptianNationalId(nationalId);
+
+    setFormData((current) => ({
+      ...current,
+      nationalId,
+      ...(dateOfBirth
+        ? {
+            dateOfBirth,
+            age: String(calculateAgeFromDate(dateOfBirth)),
+          }
+        : {}),
+    }));
+  };
+
   const filteredCustomers = customers.filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.phone.includes(searchTerm) ||
     c.customerNumber?.includes(searchTerm)
   );
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   // Get next customer number for display
   const nextCustomerNumber = selectedCustomer?.customerNumber || generateCustomerNumber();
@@ -577,8 +630,10 @@ export default function Customers() {
                         <label className="block text-sm font-medium text-gray-600 mb-1">الرقم القومى *</label>
                         <input
                           type="text"
+                          inputMode="numeric"
+                          maxLength={14}
                           value={formData.nationalId}
-                          onChange={(e) => setFormData({ ...formData, nationalId: e.target.value })}
+                          onChange={(e) => handleNationalIdChange(e.target.value)}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
                           required
                         />
@@ -587,7 +642,13 @@ export default function Customers() {
                         <label className="block text-sm font-medium text-gray-600 mb-1">تاريخ الميلاد *</label>
                         <DatePicker
                           value={formData.dateOfBirth}
-                          onChange={(date) => setFormData({ ...formData, dateOfBirth: date })}
+                          onChange={(date) =>
+                            setFormData({
+                              ...formData,
+                              dateOfBirth: date,
+                              age: date ? String(calculateAgeFromDate(date)) : '',
+                            })
+                          }
                           className="w-full border-gray-300 px-3 py-2"
                         />
                       </div>
@@ -596,41 +657,11 @@ export default function Customers() {
                         <input
                           type="number"
                           value={formData.age}
-                          onChange={(e) => setFormData({ ...formData, age: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          readOnly
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700 outline-none"
                           required
                         />
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">تاريخ المعاش</label>
-                        <DatePicker
-                          value={formData.pensionDate}
-                          onChange={(date) => setFormData({ ...formData, pensionDate: date })}
-                          className="w-full border-gray-300 px-3 py-2"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">الرصيد الافتتاحي</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={formData.balance}
-                          onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-600 mb-1">النوع</label>
-                        <select
-                          value={formData.balanceType}
-                          onChange={(e) => setFormData({ ...formData, balanceType: e.target.value as 'debtor' | 'creditor' })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
-                        >
-                          <option value="debtor">مدين</option>
-                          <option value="creditor">دائن</option>
-                        </select>
-                      </div>
-
                     </div>
                   </div>
 

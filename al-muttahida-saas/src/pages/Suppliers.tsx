@@ -5,6 +5,7 @@ import { getSuppliers, createSupplier, updateSupplier, deleteSupplier } from '..
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Suppliers() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -70,9 +71,7 @@ export default function Suppliers() {
     supplier.phone.includes(searchTerm)
   );
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   return (
     <div className="space-y-6">

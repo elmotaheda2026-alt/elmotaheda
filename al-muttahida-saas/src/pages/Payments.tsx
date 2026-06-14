@@ -15,6 +15,7 @@ import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { DatePicker } from '../components/DatePicker';
+import { formatWholeCurrency } from '../lib/utils';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -132,8 +133,7 @@ export default function Payments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const formatDate = formatDateDisplay;
 

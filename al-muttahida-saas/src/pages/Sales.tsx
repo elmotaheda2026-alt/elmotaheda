@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { calculateDocumentTotals, calculateLineTotal } from '../lib/accounting';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Sales() {
   const { settings, user } = useAuth();
@@ -58,8 +59,7 @@ export default function Sales() {
     void loadData();
   }, []);
 
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const calculateTotals = () => {
     const totals = calculateDocumentTotals(saleItems);

@@ -5,6 +5,7 @@ import { DatePicker } from '../components/DatePicker';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { calculateCostOfGoodsSold, calculateNetProfit } from '../lib/accounting';
+import { formatWholeCurrency } from '../lib/utils';
 
 const TypedAreaChart = AreaChart as any;
 const TypedArea = Area as any;
@@ -115,9 +116,7 @@ export default function Reports() {
     return Array.from(datesMap.values());
   }, [filteredSales, filteredPurchases]);
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   return (
     <div className="space-y-6 pb-10">

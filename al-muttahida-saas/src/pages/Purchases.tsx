@@ -5,6 +5,7 @@ import { getPurchases, createPurchase, getSuppliers, getProducts } from '../lib/
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { calculateDocumentTotals, calculateLineTotal } from '../lib/accounting';
+import { formatWholeCurrency } from '../lib/utils';
 
 export default function Purchases() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -30,9 +31,7 @@ export default function Purchases() {
     setProducts(getProducts());
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
-  };
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const calculateTotals = () => {
     const totals = calculateDocumentTotals(purchaseItems);
@@ -48,6 +47,7 @@ export default function Purchases() {
           : item
       ));
     } else {
+      const purchaseTax = 0;
       const newItem: PurchaseItem = {
         productId: product.id,
         productName: product.name,
@@ -55,8 +55,8 @@ export default function Purchases() {
         quantity: 1,
         unitPrice: product.purchasePrice,
         discount: product.discount,
-        tax: (product.purchasePrice - product.discount) * (product.tax / 100),
-        total: calculateLineTotal(1, product.purchasePrice, product.discount, (product.purchasePrice - product.discount) * (product.tax / 100)),
+        tax: purchaseTax,
+        total: calculateLineTotal(1, product.purchasePrice, product.discount, purchaseTax),
       };
       setPurchaseItems([...purchaseItems, newItem]);
     }

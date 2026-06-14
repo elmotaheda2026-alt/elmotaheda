@@ -3,6 +3,7 @@ import { Barcode, Edit, Package, Plus, Search, Trash2 } from 'lucide-react';
 import { Product } from '../types';
 import { createProduct, deleteProduct, getProducts, updateProduct } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { formatWholeCurrency } from '../lib/utils';
 
 type ProductForm = Omit<Product, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -93,8 +94,7 @@ export default function Products() {
     );
   });
 
-  const formatCurrency = (amount: number) =>
-    `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   return (
     <div className="space-y-6">
