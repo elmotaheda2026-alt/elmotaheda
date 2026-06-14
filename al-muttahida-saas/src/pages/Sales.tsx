@@ -6,6 +6,7 @@ import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { calculateDocumentTotals, calculateLineTotal } from '../lib/accounting';
 
 export default function Sales() {
   const { settings, user } = useAuth();
@@ -61,11 +62,8 @@ export default function Sales() {
     `${new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(amount)} ${settings.currency}`;
 
   const calculateTotals = () => {
-    const subtotal = saleItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    const totalDiscount = saleItems.reduce((sum, item) => sum + item.discount * item.quantity, 0);
-    const totalTax = saleItems.reduce((sum, item) => sum + item.tax * item.quantity, 0);
-    const total = subtotal - totalDiscount + totalTax;
-    return { subtotal, totalDiscount, totalTax, total };
+    const totals = calculateDocumentTotals(saleItems);
+    return { subtotal: totals.subtotal, totalDiscount: totals.discount, totalTax: totals.tax, total: totals.total };
   };
 
   const addItem = (product: Product) => {
@@ -95,7 +93,7 @@ export default function Sales() {
             ? {
                 ...item,
                 quantity: nextQuantity,
-                total: nextQuantity * item.unitPrice - nextQuantity * item.discount + nextQuantity * item.tax,
+                total: calculateLineTotal(nextQuantity, item.unitPrice, item.discount, item.tax),
               }
             : item,
         ),
@@ -112,7 +110,7 @@ export default function Sales() {
           unitPrice: product.salePrice,
           discount: product.discount,
           tax: taxValue,
-          total: product.salePrice - product.discount + taxValue,
+          total: calculateLineTotal(1, product.salePrice, product.discount, taxValue),
         },
       ]);
     }
@@ -143,7 +141,7 @@ export default function Sales() {
           ? {
               ...item,
               quantity,
-              total: quantity * item.unitPrice - quantity * item.discount + quantity * item.tax,
+              total: calculateLineTotal(quantity, item.unitPrice, item.discount, item.tax),
             }
           : item,
       ),

@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { TrendingUp, DollarSign, ShoppingBag, ShoppingCart, PieChart as PieChartIcon, Users, Activity, Award, Gavel } from 'lucide-react';
-import { getSales, getPurchases, getExpenses, getSettings, getCustomers } from '../lib/storage';
+import { getSales, getPurchases, getExpenses, getSettings, getCustomers, getProducts } from '../lib/storage';
 import { DatePicker } from '../components/DatePicker';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { calculateCostOfGoodsSold, calculateNetProfit } from '../lib/accounting';
 
 const TypedAreaChart = AreaChart as any;
 const TypedArea = Area as any;
@@ -28,6 +29,7 @@ export default function Reports() {
   const allPurchases = useMemo(() => getPurchases(), []);
   const allExpenses = useMemo(() => getExpenses(), []);
   const allCustomers = useMemo(() => getCustomers(), []);
+  const allProducts = useMemo(() => getProducts(), []);
   const suedCustomersCount = useMemo(() => allCustomers.filter(c => c.isSued).length, [allCustomers]);
 
   // Filter Data
@@ -46,7 +48,8 @@ export default function Reports() {
   const totalSales = filteredSales.reduce((sum, s) => sum + s.total, 0);
   const totalPurchases = filteredPurchases.reduce((sum, p) => sum + p.total, 0);
   const totalExpenses = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const netProfit = totalSales - totalPurchases - totalExpenses;
+  const costOfGoodsSold = calculateCostOfGoodsSold(filteredSales, allProducts);
+  const netProfit = calculateNetProfit(filteredSales, allProducts, filteredExpenses);
 
   // Top Products
   const topProducts = useMemo(() => {

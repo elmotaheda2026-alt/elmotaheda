@@ -63,6 +63,24 @@ const saleSchema = z.object({
 
 type SaleInput = z.infer<typeof saleSchema>;
 
+const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
+
+function validateSaleTotals(data: SaleInput): string | null {
+  const subtotal = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0));
+  const discount = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.discount, 0));
+  const tax = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.tax, 0));
+  const total = roundMoney(subtotal - discount + tax);
+  const itemsMismatch = data.items.some((item) => roundMoney(item.total) !== roundMoney(item.quantity * item.unitPrice - item.quantity * item.discount + item.quantity * item.tax));
+
+  if (itemsMismatch) return 'Sale item totals do not match quantity, unit price, discount, and tax.';
+  if (roundMoney(data.subtotal) !== subtotal) return 'Sale subtotal does not match item subtotal.';
+  if (roundMoney(data.discount) !== discount) return 'Sale discount does not match item discounts.';
+  if (roundMoney(data.tax) !== tax) return 'Sale tax does not match item taxes.';
+  if (roundMoney(data.total) !== total) return 'Sale total does not match subtotal - discount + tax.';
+  if (roundMoney(data.paid) > total) return 'Paid amount cannot exceed sale total.';
+  return null;
+}
+
 type SaleRow = {
   id: string;
   invoice_number: string;
@@ -170,7 +188,7 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
       commissionRate: row.commission_rate ? Number(row.commission_rate) : undefined,
       commissionAmount: row.commission_amount ? Number(row.commission_amount) : undefined,
       installmentMonths: row.installment_months ? Number(row.installment_months) : undefined,
-      installmentStartDate: formatDate(row.installment_start_date),
+      installmentStartDate: row.installment_start_date ? formatDate(row.installment_start_date) : undefined,
       upfrontAmount: row.upfront_amount ? Number(row.upfront_amount) : undefined,
       monthlyInstallmentAmount: row.monthly_installment_amount ? Number(row.monthly_installment_amount) : undefined,
       schedules,
@@ -285,6 +303,10 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
   }
 
   const data = parsed.data;
+  const totalsError = validateSaleTotals(data);
+  if (totalsError) {
+    return res.status(400).json({ message: totalsError });
+  }
   // Parse date fields (DD/MM/YYYY) to ISO
   try {
     data.date = parseDateInput(data.date);
@@ -378,6 +400,10 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
   }
 
   const data = parsed.data;
+  const totalsError = validateSaleTotals(data);
+  if (totalsError) {
+    return res.status(400).json({ message: totalsError });
+  }
   // Parse date fields (DD/MM/YYYY) to ISO
   try {
     data.date = parseDateInput(data.date);

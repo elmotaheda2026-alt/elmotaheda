@@ -11,6 +11,13 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
     throw new Error('لا يمكن حفظ الدفعة محليًا أثناء تشغيل وضع API. استخدم مسار API أو فعّل VITE_DATA_MODE=local للديمو.');
   }
 
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const saleId = payment.saleId || (payment.referenceType === 'sale' ? payment.referenceId : undefined);
+  const saleIndex = payment.type === 'in' && saleId ? sales.findIndex((sale) => sale.id === saleId) : -1;
+  if (saleIndex !== -1 && Number(payment.amount || 0) > Number(sales[saleIndex].remaining || 0)) {
+    throw new Error('Payment amount cannot exceed the remaining sale balance.');
+  }
+
   const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
   const newPayment: Payment = {
     ...payment,
@@ -23,10 +30,6 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
   setStorage(DB_KEYS.PAYMENTS, payments);
 
   if (payment.type === 'in') {
-    const sales = getStorage<Sale>(DB_KEYS.SALES);
-    const saleId = payment.saleId || (payment.referenceType === 'sale' ? payment.referenceId : undefined);
-    const saleIndex = saleId ? sales.findIndex((sale) => sale.id === saleId) : -1;
-
     if (saleIndex !== -1) {
       sales[saleIndex] = applyPaymentToSale(sales[saleIndex], newPayment);
       sales[saleIndex].locked = true;

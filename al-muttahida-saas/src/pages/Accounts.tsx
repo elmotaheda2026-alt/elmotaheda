@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { getCustomers, getSuppliers, getSales, getPurchases, getPayments, getProducts, getExpenses, getShareholders, getShareholderTransactions } from '../lib/storage';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateTimeDisplay } from '../lib/dateUtils';
+import { calculateCostOfGoodsSold, calculateInventoryValue, calculateNetProfit } from '../lib/accounting';
 
 export default function Accounts() {
   const { settings } = useAuth();
@@ -29,6 +30,7 @@ export default function Accounts() {
     // Period Performance
     periodSales: 0,
     periodPurchases: 0,
+    periodCostOfGoodsSold: 0,
     periodExpenses: 0,
     
     // Period Cash Flow
@@ -61,17 +63,14 @@ export default function Accounts() {
     const totalPaymentsOut = allPayments.filter(p => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
     const cashInSafe = totalPaymentsIn - totalPaymentsOut;
     
-    const inventoryValue = allProducts.reduce((sum, prod) => sum + (prod.quantity * prod.purchasePrice), 0);
+    const inventoryValue = calculateInventoryValue(allProducts);
     
     // Live shareholders equity calculation
     const allShareholderTx = getShareholderTransactions();
     const totalWithdrawnProfits = allShareholderTx
       .filter(tx => tx.type === 'profit_withdrawal')
       .reduce((sum, tx) => sum + tx.amount, 0);
-    const totalSalesRev = allSales.reduce((sum, s) => sum + s.total, 0);
-    const totalPurchasesCost = allPurchases.reduce((sum, p) => sum + p.total, 0);
-    const totalExpensesCost = allExpenses.reduce((sum, e) => sum + e.amount, 0);
-    const systemLiveNetProfit = totalSalesRev - totalPurchasesCost - totalExpensesCost;
+    const systemLiveNetProfit = calculateNetProfit(allSales, allProducts, allExpenses);
     const totalCapital = allShareholders.reduce((sum, sh) => sum + sh.capital, 0);
     const shareholdersEquity = totalCapital + systemLiveNetProfit - totalWithdrawnProfits;
 
@@ -85,9 +84,13 @@ export default function Accounts() {
       return date >= start && date <= (end + 86400000); 
     };
 
-    const periodSales = allSales.filter(s => isWithinDateRange(s.date)).reduce((sum, sale) => sum + sale.total, 0);
-    const periodPurchases = allPurchases.filter(p => isWithinDateRange(p.date)).reduce((sum, pur) => sum + pur.total, 0);
-    const periodExpenses = allExpenses.filter(e => isWithinDateRange(e.date)).reduce((sum, exp) => sum + exp.amount, 0);
+    const filteredSales = allSales.filter(s => isWithinDateRange(s.date));
+    const filteredPurchases = allPurchases.filter(p => isWithinDateRange(p.date));
+    const filteredExpenses = allExpenses.filter(e => isWithinDateRange(e.date));
+    const periodSales = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
+    const periodPurchases = filteredPurchases.reduce((sum, pur) => sum + pur.total, 0);
+    const periodCostOfGoodsSold = calculateCostOfGoodsSold(filteredSales, allProducts);
+    const periodExpenses = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
 
     const periodPaymentsIn = allPayments.filter(p => p.type === 'in' && isWithinDateRange(p.date)).reduce((sum, p) => sum + p.amount, 0);
     const periodPaymentsOut = allPayments.filter(p => p.type === 'out' && isWithinDateRange(p.date)).reduce((sum, p) => sum + p.amount, 0);
@@ -100,6 +103,7 @@ export default function Accounts() {
       shareholdersEquity,
       periodSales,
       periodPurchases,
+      periodCostOfGoodsSold,
       periodExpenses,
       periodPaymentsIn,
       periodPaymentsOut,
@@ -117,7 +121,7 @@ export default function Accounts() {
     return new Intl.NumberFormat('ar-EG').format(amount) + ' ' + settings.currency;
   };
 
-  const periodNetProfit = summary.periodSales - summary.periodPurchases - summary.periodExpenses;
+  const periodNetProfit = summary.periodSales - summary.periodCostOfGoodsSold - summary.periodExpenses;
 
   return (
     <div className="space-y-8 pb-10">
@@ -204,7 +208,7 @@ export default function Accounts() {
           <Activity size={20} className="text-indigo-600" />
           الأداء المالي {startDate || endDate ? '(للفترة المحددة)' : '(الإجمالي)'}
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
             <div className="bg-green-100 p-3 rounded-xl text-green-600"><DollarSign size={24} /></div>
             <div>
@@ -218,6 +222,14 @@ export default function Accounts() {
             <div>
               <p className="text-sm text-slate-500 font-medium">المشتريات</p>
               <p className="text-xl font-bold text-slate-800">{formatCurrency(summary.periodPurchases)}</p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
+            <div className="bg-sky-100 p-3 rounded-xl text-sky-600"><Package size={24} /></div>
+            <div>
+              <p className="text-sm text-slate-500 font-medium">تكلفة المباع</p>
+              <p className="text-xl font-bold text-slate-800">{formatCurrency(summary.periodCostOfGoodsSold)}</p>
             </div>
           </div>
 

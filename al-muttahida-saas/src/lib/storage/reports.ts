@@ -3,6 +3,7 @@ import { getPurchases } from './purchases';
 import { getProducts } from './products';
 import { getExpenses } from './expenses';
 import { getPayments } from './payments';
+import { calculateCostOfGoodsSold, calculateNetProfit } from '../accounting';
 
 export function getSalesReport(startDate?: string, endDate?: string) {
   const sales = getSales();
@@ -41,12 +42,14 @@ export function getProfitLossReport(startDate?: string, endDate?: string) {
 
   const totalSales = sales.reduce((sum, s) => sum + s.total, 0);
   const totalPurchases = purchases.reduce((sum, p) => sum + p.total, 0);
+  const costOfGoodsSold = calculateCostOfGoodsSold(sales, getProducts());
   const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
-  const profit = totalSales - totalPurchases - totalExpenses;
+  const profit = calculateNetProfit(sales, getProducts(), expenses);
 
   return {
     totalSales,
     totalPurchases,
+    costOfGoodsSold,
     totalExpenses,
     profit,
     salesCount: sales.length,

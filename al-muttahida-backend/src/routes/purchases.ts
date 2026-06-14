@@ -33,6 +33,26 @@ const purchaseSchema = z.object({
   notes: z.string().optional().nullable(),
 });
 
+type PurchaseInput = z.infer<typeof purchaseSchema>;
+
+const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
+
+function validatePurchaseTotals(data: PurchaseInput): string | null {
+  const subtotal = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0));
+  const discount = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.discount, 0));
+  const tax = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.tax, 0));
+  const total = roundMoney(subtotal - discount + tax);
+  const itemsMismatch = data.items.some((item) => roundMoney(item.total) !== roundMoney(item.quantity * item.unitPrice - item.quantity * item.discount + item.quantity * item.tax));
+
+  if (itemsMismatch) return 'Purchase item totals do not match quantity, unit price, discount, and tax.';
+  if (roundMoney(data.subtotal) !== subtotal) return 'Purchase subtotal does not match item subtotal.';
+  if (roundMoney(data.discount) !== discount) return 'Purchase discount does not match item discounts.';
+  if (roundMoney(data.tax) !== tax) return 'Purchase tax does not match item taxes.';
+  if (roundMoney(data.total) !== total) return 'Purchase total does not match subtotal - discount + tax.';
+  if (roundMoney(data.paid) > total) return 'Paid amount cannot exceed purchase total.';
+  return null;
+}
+
 // GET /purchases
 router.get('/', requirePermission('purchases:manage'), async (_req, res) => {
   try {
@@ -113,6 +133,10 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
   }
 
   const data = parsed.data;
+  const totalsError = validatePurchaseTotals(data);
+  if (totalsError) {
+    return res.status(400).json({ message: totalsError });
+  }
   // Parse date input (DD/MM/YYYY) to ISO
   try {
     data.date = parseDateInput(data.date);

@@ -4,6 +4,7 @@ import { Purchase, PurchaseItem, Supplier, Product } from '../types';
 import { getPurchases, createPurchase, getSuppliers, getProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { calculateDocumentTotals, calculateLineTotal } from '../lib/accounting';
 
 export default function Purchases() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -34,11 +35,8 @@ export default function Purchases() {
   };
 
   const calculateTotals = () => {
-    const subtotal = purchaseItems.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
-    const totalDiscount = purchaseItems.reduce((sum, item) => sum + (item.discount * item.quantity), 0);
-    const totalTax = purchaseItems.reduce((sum, item) => sum + (item.tax * item.quantity), 0);
-    const total = subtotal - totalDiscount + totalTax;
-    return { subtotal, totalDiscount, totalTax, total };
+    const totals = calculateDocumentTotals(purchaseItems);
+    return { subtotal: totals.subtotal, totalDiscount: totals.discount, totalTax: totals.tax, total: totals.total };
   };
 
   const addItem = (product: Product) => {
@@ -46,7 +44,7 @@ export default function Purchases() {
     if (existingItem) {
       setPurchaseItems(purchaseItems.map(item =>
         item.productId === product.id
-          ? { ...item, quantity: item.quantity + 1, total: (item.quantity + 1) * item.unitPrice - (item.quantity + 1) * item.discount + (item.quantity + 1) * item.tax }
+          ? { ...item, quantity: item.quantity + 1, total: calculateLineTotal(item.quantity + 1, item.unitPrice, item.discount, item.tax) }
           : item
       ));
     } else {
@@ -58,7 +56,7 @@ export default function Purchases() {
         unitPrice: product.purchasePrice,
         discount: product.discount,
         tax: (product.purchasePrice - product.discount) * (product.tax / 100),
-        total: product.purchasePrice - product.discount + (product.purchasePrice - product.discount) * (product.tax / 100),
+        total: calculateLineTotal(1, product.purchasePrice, product.discount, (product.purchasePrice - product.discount) * (product.tax / 100)),
       };
       setPurchaseItems([...purchaseItems, newItem]);
     }
@@ -74,7 +72,7 @@ export default function Purchases() {
         return {
           ...item,
           quantity,
-          total: quantity * item.unitPrice - quantity * item.discount + quantity * item.tax,
+          total: calculateLineTotal(quantity, item.unitPrice, item.discount, item.tax),
         };
       }
       return item;

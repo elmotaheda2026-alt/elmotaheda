@@ -14,6 +14,8 @@ async function nextReceiptNumber() {
   return `RCPT-${5000 + (row?.c || 0) + 1}`;
 }
 
+const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
+
 const paymentSchema = z.object({
   type: z.enum(['in', 'out']),
   amount: z.number().positive(),
@@ -88,11 +90,14 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
     // 1. If paying for a sale
     if (data.type === 'in' && data.saleId) {
-      const sale = await db.get<{ id: string; customer_id: string; paid: number; total: number }>(
-        'SELECT id, customer_id, paid, total FROM sales WHERE id = ?',
+      const sale = await db.get<{ id: string; customer_id: string; paid: number; remaining: number; total: number }>(
+        'SELECT id, customer_id, paid, remaining, total FROM sales WHERE id = ?',
         data.saleId,
       );
       if (!sale) return res.status(404).json({ message: 'Sale invoice not found' });
+      if (roundMoney(data.amount) > roundMoney(sale.remaining)) {
+        return res.status(400).json({ message: 'Payment amount cannot exceed the remaining sale balance' });
+      }
       
       finalCustomerId = sale.customer_id;
 
@@ -162,9 +167,10 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     if (data.type === 'in' && finalCustomerId && data.affectsCustomerBalance) {
       await db.run(
         `UPDATE customers
-         SET balance = balance - ?,
+         SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
              updated_at = ?
          WHERE id = ?`,
+        data.amount,
         data.amount,
         now,
         finalCustomerId,
@@ -175,9 +181,10 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     if (data.type === 'out' && finalSupplierId) {
       await db.run(
         `UPDATE suppliers
-         SET balance = balance - ?,
+         SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
              updated_at = ?
          WHERE id = ?`,
+        data.amount,
         data.amount,
         now,
         finalSupplierId,

@@ -198,7 +198,7 @@ router.delete('/:id', requirePermission('users:manage'), async (req: AuthedReque
     return res.status(500).json({ message: error.message || 'Database error' });
   }
 });
-router.delete('/', requirePermission('users:manage'), async (req, res) => {
+router.delete('/', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
   // Only enable in development/testing via ALLOW_BULK_DELETE env var
   if (process.env.ALLOW_BULK_DELETE !== 'true') {
     return res.status(403).json({ message: 'Bulk delete not allowed' });

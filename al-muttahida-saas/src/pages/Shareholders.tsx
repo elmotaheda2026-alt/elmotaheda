@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { PieChart as PieChartIcon, ArrowDownToLine, ArrowUpFromLine, Users, Plus, TrendingUp, Calculator, Wallet, Search, Edit } from 'lucide-react';
-import { Shareholder, ShareholderTransaction, Sale, Purchase, Expense } from '../types';
-import { getShareholders, createShareholder, updateShareholder, getShareholderTransactions, addShareholderTransaction, getSales, getPurchases, getExpenses } from '../lib/storage';
+import { Shareholder, ShareholderTransaction, Sale, Purchase, Expense, Product } from '../types';
+import { getShareholders, createShareholder, updateShareholder, getShareholderTransactions, addShareholderTransaction, getSales, getPurchases, getExpenses, getProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { calculateNetProfit } from '../lib/accounting';
 
 const TypedPieChart = PieChart as any;
 const TypedPie = Pie as any;
@@ -22,6 +23,7 @@ export default function Shareholders() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   
   const [activeTab, setActiveTab] = useState<'overview' | 'transactions'>('overview');
   
@@ -52,6 +54,7 @@ export default function Shareholders() {
     setSales(getSales());
     setPurchases(getPurchases());
     setExpenses(getExpenses());
+    setProducts(getProducts());
   };
 
   const formatCurrency = (amount: number) => {
@@ -91,10 +94,7 @@ export default function Shareholders() {
   };
 
   // Live Financial Calculation Engine
-  const totalSalesRev = sales.reduce((sum, s) => sum + s.total, 0);
-  const totalPurchasesCost = purchases.reduce((sum, p) => sum + p.total, 0);
-  const totalExpensesCost = expenses.reduce((sum, e) => sum + e.amount, 0);
-  const systemLiveNetProfit = totalSalesRev - totalPurchasesCost - totalExpensesCost;
+  const systemLiveNetProfit = calculateNetProfit(sales, products, expenses);
 
   const totalCapital = shareholders.reduce((sum, s) => sum + s.capital, 0);
   const systemLiveRoi = totalCapital > 0 ? (systemLiveNetProfit / totalCapital) : 0;

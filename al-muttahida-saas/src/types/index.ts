@@ -308,12 +308,14 @@ export interface SalesRep {
 export interface DashboardStats {
   totalSales: number;
   totalPurchases: number;
+  costOfGoodsSold?: number;
   totalProfit: number;
   totalCustomers: number;
   totalSuppliers: number;
   totalProducts: number;
   lowStockItems: number;
   pendingPayments: number;
+  supplierPayables?: number;
 }
 
 export interface Shareholder {

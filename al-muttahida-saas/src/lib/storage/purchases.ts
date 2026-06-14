@@ -37,19 +37,6 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
     purchases.push(newPurchase);
     setStorage(DB_KEYS.PURCHASES, purchases);
 
-    // Update product quantities locally
-    purchase.items.forEach((item) => {
-      updateProductQuantity(item.productId, item.quantity);
-    });
-
-    // Update supplier balance locally
-    const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
-    const supplierIndex = suppliers.findIndex((s) => s.id === purchase.supplierId);
-    if (supplierIndex !== -1) {
-      suppliers[supplierIndex].balance += purchase.remaining;
-      setStorage(DB_KEYS.SUPPLIERS, suppliers);
-    }
-
     return newPurchase;
   }
 
