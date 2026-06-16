@@ -83,6 +83,33 @@ export default function Shareholders() {
       description: transactionForm.description || (
         transactionType === 'capital_deposit' ? 'إيداع رأس مال' : 
         transactionType === 'capital_withdrawal' ? 'سحب رأس مال' : 'سحب أرباح'
+  };
+
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
+
+  const handleShareholderSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingShareholder) {
+      updateShareholder(editingShareholder.id, shareholderForm);
+    } else {
+      createShareholder(shareholderForm);
+    }
+    loadData();
+    setShowShareholderModal(false);
+  };
+
+  const handleTransactionSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedShareholderId || transactionForm.amount <= 0) return;
+    
+    addShareholderTransaction({
+      shareholderId: selectedShareholderId,
+      shareholderName: shareholders.find(s => s.id === selectedShareholderId)?.name || '',
+      type: transactionType,
+      amount: transactionForm.amount,
+      description: transactionForm.description || (
+        transactionType === 'capital_deposit' ? 'إيداع رأس مال' : 
+        transactionType === 'capital_withdrawal' ? 'سحب رأس مال' : 'سحب أرباح'
       ),
       createdBy: user?.name || 'النظام'
     });
@@ -94,29 +121,6 @@ export default function Shareholders() {
 
   // Live Financial Calculation Engine
   const systemLiveNetProfit = calculateNetProfit(sales, products, expenses);
-
-  const totalCapital = shareholders.reduce((sum, s) => sum + s.capital, 0);
-  const systemLiveRoi = totalCapital > 0 ? (systemLiveNetProfit / totalCapital) : 0;
-
-  // Process Shareholders Live Data
-  const liveShareholders = shareholders.map(s => {
-    // Calculate total withdrawn profits from transactions
-    const withdrawnProfits = transactions
-      .filter(tx => tx.shareholderId === s.id && tx.type === 'profit_withdrawal')
-      .reduce((sum, tx) => sum + tx.amount, 0);
-
-    const grossProfit = s.capital * systemLiveRoi;
-    const mgmtFee = grossProfit > 0 ? grossProfit * ((s.managementFeePercentage || 0) / 100) : 0;
-    const netProfit = grossProfit > 0 ? grossProfit - mgmtFee : 0;
-    
-    // Available to withdraw is their all-time net profit MINUS what they already withdrew
-    const availableProfit = Math.max(0, netProfit - withdrawnProfits);
-    const totalNetValue = s.capital + availableProfit;
-
-    return {
-      ...s,
-      grossProfit,
-      mgmtFee,
       netProfit,
       withdrawnProfits,
       availableProfit,
