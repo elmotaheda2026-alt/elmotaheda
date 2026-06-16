@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { PieChart as PieChartIcon, ArrowDownToLine, ArrowUpFromLine, Users, Plus, TrendingUp, Calculator, Wallet, Search, Edit } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { PieChart as PieChartIcon, ArrowDownToLine, ArrowUpFromLine, Users, Plus, TrendingUp, Calculator, Wallet, Search, Edit, Trash2 } from 'lucide-react';
 import { Shareholder, ShareholderTransaction, Sale, Purchase, Expense, Product } from '../types';
-import { getShareholders, createShareholder, updateShareholder, getShareholderTransactions, addShareholderTransaction, getSales, getPurchases, getExpenses, getProducts } from '../lib/storage';
+import { getShareholders, createShareholder, updateShareholder, getShareholderTransactions, addShareholderTransaction, deleteShareholderTransaction, getSales, getPurchases, getExpenses, getProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -18,6 +18,7 @@ const TypedLegend = Legend as any;
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#3b82f6', '#14b8a6'];
 
 export default function Shareholders() {
+  const AUTO_DISTRIBUTE_ENABLED = false; // temporary: disable auto-distribute until algorithm is hardened
   const { settings, user } = useAuth();
   const [shareholders, setShareholders] = useState<Shareholder[]>([]);
   const [transactions, setTransactions] = useState<ShareholderTransaction[]>([]);
@@ -36,6 +37,10 @@ export default function Shareholders() {
   const [transactionType, setTransactionType] = useState<'capital_deposit' | 'capital_withdrawal' | 'profit_withdrawal'>('capital_deposit');
   const [selectedShareholderId, setSelectedShareholderId] = useState<string>('');
 
+  // Period filter (YYYY-MM-DD)
+  const [periodFrom, setPeriodFrom] = useState<string>('');
+  const [periodTo, setPeriodTo] = useState<string>('');
+
   // Forms state
   const [shareholderForm, setShareholderForm] = useState({
     name: '', phone: '', sharePercentage: 0, managementFeePercentage: 50, capital: 0, notes: ''
@@ -44,10 +49,123 @@ export default function Shareholders() {
   const [transactionForm, setTransactionForm] = useState({
     amount: 0, description: ''
   });
+  const [showDebug, setShowDebug] = useState(false);
+
+  const toDayStart = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+  const toDayEnd = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+
+  const computeAllocations = () => {
+    const allocations: Array<{ id: string; amount: number }> = [];
+    for (const s of shareholders) {
+      const totalCapitalForAlloc = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
+      const shareRatioForAlloc = totalCapitalForAlloc ? (Number(s.capital || 0) / totalCapitalForAlloc) : ((s.sharePercentage || 0) / 100);
+      const toDayStart = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+      const toDayEnd = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+      const startDate = periodFrom ? toDayStart(new Date(periodFrom)) : (s.createdAt ? new Date(s.createdAt) : new Date(0));
+      const endDate = periodTo ? toDayEnd(new Date(periodTo)) : toDayEnd(new Date());
+      const periodSales = sales.filter(sale => {
+        const d = new Date(sale.date);
+        return d >= startDate && d <= endDate;
+      });
+      const periodExpenses = expenses.filter(exp => {
+        const d = new Date(exp.date);
+        return d >= startDate && d <= endDate;
+      });
+      const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
+      const grossProfit = netProfitSinceJoin * shareRatioForAlloc;
+      const mgmtFee = grossProfit * ((s.managementFeePercentage || 0) / 100);
+      const netEntitlement = grossProfit - mgmtFee;
+      const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
+      const totalDistributed = shareholderTxs
+        .filter(t => t.type === 'profit_distribution')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const undistributed = Math.max(0, netEntitlement - totalDistributed);
+      if (undistributed > 0.009) allocations.push({ id: s.id, amount: Number(undistributed.toFixed(2)) });
+    }
+    return allocations;
+  };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  // Auto-distribute once per session if there are undistributed amounts
+  const hasAutoDistributed = useRef(false);
+
+  useEffect(() => {
+    if (!AUTO_DISTRIBUTE_ENABLED) {
+      console.debug('[auto-distribute] disabled by feature flag');
+      return;
+    }
+    if (hasAutoDistributed.current) return;
+    // only run after initial data loaded
+    if (!shareholders.length && !sales.length && !expenses.length) return;
+
+    console.debug('[auto-distribute] starting check for undistributed profits', {
+      shareholdersCount: shareholders.length,
+      salesCount: sales.length,
+      expensesCount: expenses.length,
+      productsCount: products.length,
+      transactionsCount: transactions.length,
+      periodFrom,
+      periodTo
+    });
+
+    const allocations: Array<{ id: string; amount: number }> = [];
+    const totalCapitalForAuto = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
+    for (const s of shareholders) {
+      const shareRatioForAuto = totalCapitalForAuto ? (Number(s.capital || 0) / totalCapitalForAuto) : ((s.sharePercentage || 0) / 100);
+      const startDate = periodFrom ? toDayStart(new Date(periodFrom)) : (s.createdAt ? new Date(s.createdAt) : new Date(0));
+      const endDate = periodTo ? toDayEnd(new Date(periodTo)) : toDayEnd(new Date());
+      const periodSales = sales.filter(sale => {
+        const d = new Date(sale.date);
+        return d >= startDate && d <= endDate;
+      });
+      const periodExpenses = expenses.filter(exp => {
+        const d = new Date(exp.date);
+        return d >= startDate && d <= endDate;
+      });
+      const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
+      const grossProfit = netProfitSinceJoin * shareRatioForAuto;
+      const mgmtFee = grossProfit * ((s.managementFeePercentage || 0) / 100);
+      const netEntitlement = grossProfit - mgmtFee;
+      const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
+      const totalDistributed = shareholderTxs
+        .filter(t => t.type === 'profit_distribution')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const undistributed = Math.max(0, netEntitlement - totalDistributed);
+      console.debug('[auto-distribute] shareholder calc', { id: s.id, name: s.name, netEntitlement, totalDistributed, undistributed });
+      if (undistributed > 0.009) allocations.push({ id: s.id, amount: Number(undistributed.toFixed(2)) });
+    }
+
+    console.debug('[auto-distribute] computed allocations', allocations);
+    if (allocations.length > 0) {
+      // perform distributions silently
+      for (const a of allocations) {
+        try {
+          const tx = addShareholderTransaction({
+            shareholderId: a.id,
+            shareholderName: shareholders.find(s => s.id === a.id)?.name || '',
+            type: 'profit_distribution',
+            amount: a.amount,
+            description: 'توزيع أرباح تلقائي عند التحميل',
+            createdBy: user?.name || 'النظام'
+          });
+          console.debug('[auto-distribute] created tx', { shareholderId: a.id, tx });
+        } catch (err) {
+          console.error('[auto-distribute] failed to create tx for', a, err);
+        }
+      }
+      loadData();
+      console.debug('[auto-distribute] finished distributions and reloaded data');
+      alert(`Auto-distributed profits to ${allocations.length} shareholders.`);
+    } else {
+      console.debug('[auto-distribute] no allocations to process');
+    }
+
+    hasAutoDistributed.current = true;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareholders, sales, expenses, transactions, products, periodFrom, periodTo]);
 
   const loadData = () => {
     setShareholders(getShareholders());
@@ -74,61 +192,173 @@ export default function Shareholders() {
   const handleTransactionSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedShareholderId || transactionForm.amount <= 0) return;
-    
-    addShareholderTransaction({
-      shareholderId: selectedShareholderId,
-      shareholderName: shareholders.find(s => s.id === selectedShareholderId)?.name || '',
-      type: transactionType,
-      amount: transactionForm.amount,
-      description: transactionForm.description || (
-        transactionType === 'capital_deposit' ? 'إيداع رأس مال' : 
-        transactionType === 'capital_withdrawal' ? 'سحب رأس مال' : 'سحب أرباح'
-  };
+    const selectedShareholder = shareholders.find(s => s.id === selectedShareholderId);
+    if (!selectedShareholder) return;
 
-  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
+    // compute selected shareholder availability using current data
+    const computeAvailability = (s: Shareholder) => {
+    const totalCapitalForAvail = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
+    const shareRatioForAvail = totalCapitalForAvail ? (Number(s.capital || 0) / totalCapitalForAvail) : ((s.sharePercentage || 0) / 100);
+    const startDate = periodFrom ? toDayStart(new Date(periodFrom)) : (s.createdAt ? toDayStart(new Date(s.createdAt)) : new Date(0));
+    const endDate = periodTo ? toDayEnd(new Date(periodTo)) : toDayEnd(new Date());
+      const periodSales = sales.filter(sale => {
+        const d = new Date(sale.date);
+        return d >= startDate && d <= endDate;
+      });
+      const periodExpenses = expenses.filter(exp => {
+        const d = new Date(exp.date);
+        return d >= startDate && d <= endDate;
+      });
+      const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
+      const grossProfit = netProfitSinceJoin * shareRatioForAvail;
+      const mgmtFee = grossProfit * ((s.managementFeePercentage || 0) / 100);
+      const netEntitlement = grossProfit - mgmtFee;
+      const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
+      const totalDistributed = shareholderTxs
+        .filter(t => t.type === 'profit_distribution')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const totalWithdrawnProfits = shareholderTxs
+        .filter(t => t.type === 'profit_withdrawal')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const currentBalanceFromTx = totalDistributed - totalWithdrawnProfits;
+      const undistributedEntitlement = Math.max(0, netEntitlement - totalDistributed);
+      const availableProfit = Math.max(0, currentBalanceFromTx + undistributedEntitlement);
+      return { availableProfit, capital: Number(s.capital || 0), currentBalanceFromTx };
+    };
 
-  const handleShareholderSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editingShareholder) {
-      updateShareholder(editingShareholder.id, shareholderForm);
-    } else {
-      createShareholder(shareholderForm);
+    const availability = computeAvailability(selectedShareholder);
+
+    // Validation: prevent withdrawing more than available
+    if (transactionType === 'profit_withdrawal') {
+      if (availability.availableProfit <= 0) {
+        window.alert('لا توجد أرباح متاحة للسحب لهذا المساهم.');
+        return;
+      }
+      if (Number(transactionForm.amount) > availability.availableProfit) {
+        window.alert('المبلغ أكبر من الأرباح المتاحة. الرجاء إدخال مبلغ أقل أو مساوي.');
+        return;
+      }
     }
-    loadData();
-    setShowShareholderModal(false);
-  };
 
-  const handleTransactionSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedShareholderId || transactionForm.amount <= 0) return;
-    
-    addShareholderTransaction({
+    if (transactionType === 'capital_withdrawal') {
+      const requested = Number(transactionForm.amount || 0);
+      const maxCap = availability.capital;
+      const maxTotal = availability.capital + availability.availableProfit;
+      if (requested > maxTotal) {
+        window.alert('المبلغ أكبر من إجمالي الأموال المتاحة (رأس المال + الأرباح المتاحة). الرجاء إدخال مبلغ أقل أو مساوي.');
+        return;
+      }
+      // If requested <= capital, proceed as capital withdrawal.
+      // If requested > capital but <= capital+profits, we will withdraw available profits first, then withdraw remaining from capital.
+      if (requested > maxCap) {
+        const withdrawTotal = requested;
+        let remaining = withdrawTotal;
+        // Withdraw profits first
+        const profitPart = Math.min(availability.availableProfit, remaining);
+        if (profitPart > 0) {
+          addShareholderTransaction({
+            shareholderId: selectedShareholderId,
+            shareholderName: selectedShareholder.name,
+            type: 'profit_withdrawal',
+            amount: Number(profitPart),
+            description: transactionForm.description || 'سحب أرباح أثناء سحب رأس مال',
+            createdBy: user?.name || 'النظام'
+          });
+          remaining = Number((remaining - profitPart).toFixed(2));
+        }
+        // Withdraw remaining from capital
+        if (remaining > 0) {
+          addShareholderTransaction({
+            shareholderId: selectedShareholderId,
+            shareholderName: selectedShareholder.name,
+            type: 'capital_withdrawal',
+            amount: Number(remaining),
+            description: transactionForm.description || 'سحب رأس مال (بجزء من سحب إجمالي)',
+            createdBy: user?.name || 'النظام'
+          });
+        }
+
+        loadData();
+        setShowTransactionModal(false);
+        setTransactionForm({ amount: 0, description: '' });
+        return;
+      }
+      // else requested <= maxCap -> allow single capital withdrawal
+    }
+
+    const txPayload = {
       shareholderId: selectedShareholderId,
       shareholderName: shareholders.find(s => s.id === selectedShareholderId)?.name || '',
       type: transactionType,
-      amount: transactionForm.amount,
+      amount: Number(transactionForm.amount || 0),
       description: transactionForm.description || (
-        transactionType === 'capital_deposit' ? 'إيداع رأس مال' : 
+        transactionType === 'capital_deposit' ? 'إيداع رأس مال' :
         transactionType === 'capital_withdrawal' ? 'سحب رأس مال' : 'سحب أرباح'
       ),
       createdBy: user?.name || 'النظام'
-    });
-    
+    };
+
+    console.debug('[ui] addShareholderTransaction payload:', txPayload);
+
+    addShareholderTransaction(txPayload);
+
     loadData();
     setShowTransactionModal(false);
     setTransactionForm({ amount: 0, description: '' });
   };
 
-  // Live Financial Calculation Engine
-  const systemLiveNetProfit = calculateNetProfit(sales, products, expenses);
-      netProfit,
-      withdrawnProfits,
-      availableProfit,
-      totalNetValue
-    };
-  });
+    // Live Financial Calculation Engine
+    const systemLiveNetProfit = calculateNetProfit(sales, products, expenses);
+    const totalCapital = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
+    const systemLiveRoi = totalCapital ? systemLiveNetProfit / totalCapital : 0;
+    const liveShareholders = shareholders.map(s => {
+      const shareRatio = totalCapital ? (Number(s.capital || 0) / totalCapital) : ((s.sharePercentage || 0) / 100);
+      // Determine period used for this shareholder: either the selected filter or their join date
+      const startDate = periodFrom ? toDayStart(new Date(periodFrom)) : (s.createdAt ? toDayStart(new Date(s.createdAt)) : new Date(0));
+      const endDate = periodTo ? toDayEnd(new Date(periodTo)) : toDayEnd(new Date());
 
-  const totalAvailableProfits = liveShareholders.reduce((sum, s) => sum + s.availableProfit, 0);
+      const periodSales = sales.filter(sale => {
+        const d = new Date(sale.date);
+        return d >= startDate && d <= endDate;
+      });
+      const periodExpenses = expenses.filter(exp => {
+        const d = new Date(exp.date);
+        return d >= startDate && d <= endDate;
+      });
+
+      // Net profit for the period assigned to shareholders
+      const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
+
+      // Shareholder's entitlement before fees (based on current capital share)
+      const grossProfit = Number((netProfitSinceJoin * shareRatio) || 0);
+      const mgmtFee = Number((grossProfit * ((s.managementFeePercentage || 0) / 100)) || 0);
+      const netEntitlement = Number((grossProfit - mgmtFee) || 0);
+
+      // Transactions summary for this shareholder (use transactions as the source of truth)
+      const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
+      const totalDistributed = shareholderTxs
+        .filter(t => t.type === 'profit_distribution')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const totalWithdrawnProfits = shareholderTxs
+        .filter(t => t.type === 'profit_withdrawal')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+      // current balance derived from distributions minus withdrawals
+      const currentBalanceFromTx = totalDistributed - totalWithdrawnProfits;
+
+      // undistributed entitlement = net entitlement not yet allocated to currentBalance
+      const undistributedEntitlement = Math.max(0, netEntitlement - totalDistributed);
+
+      // available profit = funds that can be withdrawn now
+      const availableProfit = Math.max(0, currentBalanceFromTx + undistributedEntitlement);
+
+      const totalNetValue = Number(s.capital || 0) + availableProfit;
+
+      console.debug('[liveShareholder] calc', { id: s.id, name: s.name, grossProfit, mgmtFee, netEntitlement, totalDistributed, totalWithdrawnProfits, currentBalanceFromTx, availableProfit });
+      return { ...s, grossProfit: Number(grossProfit || 0), mgmtFee: Number(mgmtFee || 0), netEntitlement, totalDistributed, totalWithdrawnProfits, currentBalanceFromTx, availableProfit, totalNetValue };
+    });
+
+    const totalAvailableProfits = liveShareholders.reduce((sum, s) => sum + (s.availableProfit || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -148,6 +378,57 @@ export default function Shareholders() {
           >
             <Plus size={20} />
             <span>إضافة مساهم</span>
+          </button>
+          <button
+            onClick={async () => {
+              if (!confirm('تأكيد: توزيع الأرباح غير الموزعة لكل المساهمين للفترة الحالية؟')) return;
+              // compute and distribute
+              const allocations: Array<{ id: string; amount: number }> = [];
+              for (const s of shareholders) {
+                const startDate = periodFrom ? new Date(periodFrom) : (s.createdAt ? new Date(s.createdAt) : new Date(0));
+                const endDate = periodTo ? new Date(periodTo) : new Date();
+                const periodSales = sales.filter(sale => {
+                  const d = new Date(sale.date);
+                  return d >= startDate && d <= endDate;
+                });
+                const periodExpenses = expenses.filter(exp => {
+                  const d = new Date(exp.date);
+                  return d >= startDate && d <= endDate;
+                });
+                const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
+                const grossProfit = netProfitSinceJoin * ((s.sharePercentage || 0) / 100);
+                const mgmtFee = grossProfit * ((s.managementFeePercentage || 0) / 100);
+                const netEntitlement = grossProfit - mgmtFee;
+                const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
+                const totalDistributed = shareholderTxs
+                  .filter(t => t.type === 'profit_distribution')
+                  .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+                const undistributed = Math.max(0, netEntitlement - totalDistributed);
+                if (undistributed > 0.009) {
+                  allocations.push({ id: s.id, amount: Number(undistributed.toFixed(2)) });
+                }
+              }
+              for (const a of allocations) {
+                addShareholderTransaction({
+                  shareholderId: a.id,
+                  shareholderName: shareholders.find(s => s.id === a.id)?.name || '',
+                  type: 'profit_distribution',
+                  amount: a.amount,
+                  description: 'توزيع أرباح تلقائي للفترة',
+                  createdBy: user?.name || 'النظام'
+                });
+              }
+              if (allocations.length > 0) {
+                loadData();
+                alert(`تم توزيع الأرباح على ${allocations.length} مساهمين.`);
+              } else {
+                alert('لا يوجد مبالغ غير موزعة حالياً.');
+              }
+            }}
+            className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors"
+          >
+            <TrendingUp size={18} />
+            <span>توزيع الأرباح الآن</span>
           </button>
         </div>
       </div>
@@ -234,7 +515,7 @@ export default function Shareholders() {
                   <h3 className="text-lg font-bold text-slate-800">توزيع حصص رأس المال</h3>
                   <p className="text-xs text-slate-500 mt-1">يظهر هذا الرسم البياني نسبة مساهمة كل شريك بناءً على رأس المال الفعلي المدفوع حالياً في الشركة.</p>
                 </div>
-                <div className="w-full md:w-2/3 h-48">
+                  <div className="w-full md:w-2/3 h-48">
                   <TypedResponsiveContainer width="100%" height="100%">
                     <TypedPieChart>
                       <TypedPie
@@ -257,6 +538,14 @@ export default function Shareholders() {
                   </TypedResponsiveContainer>
                 </div>
               </div>
+              {/* Period filter (from / to) */}
+              <div className="flex items-center justify-end gap-2">
+                <label className="text-xs text-gray-600">من</label>
+                <input type="date" value={periodFrom} onChange={e => setPeriodFrom(e.target.value)} className="px-2 py-1 border rounded text-sm" />
+                <label className="text-xs text-gray-600">إلى</label>
+                <input type="date" value={periodTo} onChange={e => setPeriodTo(e.target.value)} className="px-2 py-1 border rounded text-sm" />
+                <button onClick={() => { setPeriodFrom(''); setPeriodTo(''); }} className="text-sm text-indigo-600 hover:underline">إعادة</button>
+              </div>
               
               {/* Spacious 3-Column Shareholders Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -273,6 +562,7 @@ export default function Shareholders() {
                         <div>
                           <h4 className="font-bold text-gray-800">{shareholder.name}</h4>
                           <p className="text-xs text-gray-500 font-medium">الربح: {shareholder.sharePercentage}% | الإدارة: {shareholder.managementFeePercentage || 0}%</p>
+                          <p className="text-xs text-gray-400">انضم: {formatDateDisplay(shareholder.createdAt)}</p>
                         </div>
                       </div>
                       <button
@@ -295,12 +585,12 @@ export default function Shareholders() {
                         <span className="font-bold text-gray-900">{formatCurrency(shareholder.capital)}</span>
                       </div>
                       <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
-                        <span className="text-gray-500">إجمالي الربح اللحظي:</span>
-                        <span className="font-bold text-slate-700">{formatCurrency(shareholder.grossProfit)}</span>
+                        <span className="text-gray-500">الأرباح اللحظية (بعد خصم الإدارة):</span>
+                        <span className="font-bold text-slate-700">{formatCurrency(shareholder.netEntitlement)}</span>
                       </div>
                       <div className="flex justify-between text-xs">
-                        <span className="text-gray-500">رسوم الإدارة ({shareholder.managementFeePercentage || 0}%):</span>
-                        <span className="font-bold text-rose-500">-{formatCurrency(shareholder.mgmtFee)}</span>
+                        <span className="text-gray-500">تفصيل: إجمالي الربح / رسوم الإدارة</span>
+                        <span className="font-bold text-rose-500">{formatCurrency(shareholder.grossProfit)} / -{formatCurrency(shareholder.mgmtFee)}</span>
                       </div>
                       {shareholder.withdrawnProfits > 0 && (
                         <div className="flex justify-between text-xs border-t border-slate-100 pt-1 mt-1">
@@ -318,7 +608,7 @@ export default function Shareholders() {
                       </div>
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-2 pt-3 border-t border-gray-50">
+                    <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-50">
                       <button
                         onClick={() => {
                           setSelectedShareholderId(shareholder.id);
@@ -329,6 +619,17 @@ export default function Shareholders() {
                       >
                         <ArrowDownToLine size={14} />
                         <span>إيداع رأسمال</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedShareholderId(shareholder.id);
+                          setTransactionType('capital_withdrawal');
+                          setShowTransactionModal(true);
+                        }}
+                        className="flex items-center justify-center gap-1 py-1.5 bg-slate-50 hover:bg-rose-50 text-rose-700 rounded text-xs font-semibold transition-colors"
+                      >
+                        <ArrowUpFromLine size={14} />
+                        <span>سحب رأس مال</span>
                       </button>
                       <button
                         onClick={() => {
@@ -344,6 +645,41 @@ export default function Shareholders() {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* Debug panel for beginners (toggle) */}
+              <div className="mt-6">
+                <button onClick={() => setShowDebug(v => !v)} className="text-xs text-gray-600 underline">
+                  {showDebug ? 'إخفاء معلومات التصحيح' : 'إظهار معلومات التصحيح'}
+                </button>
+                {showDebug && (
+                  <div className="mt-2 p-3 bg-black/5 rounded text-xs font-mono max-h-64 overflow-auto">
+                    <div className="mb-2">
+                      <strong>liveShareholders:</strong>
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(liveShareholders, null, 2)}</pre>
+                    </div>
+                    <div className="mb-2">
+                      <strong>computed allocations (undistributed):</strong>
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(computeAllocations(), null, 2)}</pre>
+                    </div>
+                    <div className="mb-2">
+                      <strong>transactions (recent 20):</strong>
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(transactions.slice(0,20), null, 2)}</pre>
+                    </div>
+                    <div className="mb-2">
+                      <strong>sales (recent 20):</strong>
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(sales.slice(0,20), null, 2)}</pre>
+                    </div>
+                    <div className="mb-2">
+                      <strong>products (all):</strong>
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(products, null, 2)}</pre>
+                    </div>
+                    <div>
+                      <strong>sales / expenses counts:</strong>
+                      <div>sales: {sales.length} | expenses: {expenses.length} | products: {products.length}</div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -385,6 +721,24 @@ export default function Shareholders() {
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500">{tx.description}</td>
                       <td className="px-4 py-3 text-sm text-gray-500">{tx.createdBy}</td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        <button
+                          onClick={() => {
+                            if (!confirm('تأكيد: حذف/تراجع عن هذه الحركة؟')) return;
+                            const deleted = deleteShareholderTransaction(tx.id);
+                            if (deleted) {
+                              alert('تم إزالة الحركة والتراجع عن تأثيرها.');
+                              loadData();
+                            } else {
+                              alert('فشل حذف الحركة. الرجاء المحاولة لاحقاً.');
+                            }
+                          }}
+                          className="text-rose-600 hover:text-rose-800"
+                          title="حذف الحركة"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {transactions.length === 0 && (

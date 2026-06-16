@@ -20,7 +20,7 @@ export default function Inventory() {
         const search = searchTerm.toLowerCase();
         return (
           product.name.toLowerCase().includes(search) ||
-          product.barcode.includes(searchTerm) ||
+          (product.barcode || '').includes(searchTerm) ||
           product.category.toLowerCase().includes(search)
         );
       }),
@@ -114,7 +114,7 @@ export default function Inventory() {
                     <td className="px-4 py-4">
                       <div>
                         <p className="font-semibold text-slate-800">{product.name}</p>
-                        <p className="text-xs text-slate-500">{product.barcode}</p>
+                        <p className="text-xs text-slate-500">{product.barcode || '-'}</p>
                       </div>
                     </td>
                     <td className="px-4 py-4">

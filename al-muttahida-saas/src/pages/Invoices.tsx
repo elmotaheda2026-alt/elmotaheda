@@ -45,7 +45,6 @@ interface DraftItem {
 
 interface QuickProductForm {
   name: string;
-  barcode: string;
   purchasePrice: number;
   salePrice: number;
   supplierId: string;
@@ -98,7 +97,6 @@ export default function Invoices() {
   const [showQuickProduct, setShowQuickProduct] = useState(false);
   const [quickProduct, setQuickProduct] = useState<QuickProductForm>({
     name: '',
-    barcode: '',
     purchasePrice: 0,
     salePrice: 0,
     supplierId: '',
@@ -266,7 +264,6 @@ export default function Invoices() {
     setShowQuickProduct(false);
     setQuickProduct({
       name: '',
-      barcode: '',
       purchasePrice: 0,
       salePrice: 0,
       supplierId: suppliers[0]?.id || '',
@@ -329,19 +326,19 @@ export default function Invoices() {
       return;
     }
 
-    if (quickProduct.purchasePrice <= 0 || quickProduct.salePrice <= 0) {
-      setMessage({ type: 'error', text: 'أدخل سعر شراء وسعر بيع صحيحين.' });
+    if (quickProduct.purchasePrice <= 0) {
+      setMessage({ type: 'error', text: 'أدخل سعر شراء صحيح.' });
       return;
     }
 
     const createdProduct = await createProduct({
       name: quickProduct.name.trim(),
-      barcode: quickProduct.barcode.trim() || `OD-${Date.now()}`,
+      barcode: null,
       category: 'حسب الطلب',
       fulfillmentType: 'on_demand',
       unit: 'قطعة',
       purchasePrice: quickProduct.purchasePrice,
-      salePrice: quickProduct.salePrice,
+      salePrice: 0,
       discount: 0,
       tax: settings.taxRate,
       quantity: 0,
@@ -356,7 +353,6 @@ export default function Invoices() {
     setProcurementSupplierId(quickProduct.supplierId || procurementSupplierId);
     setQuickProduct({
       name: '',
-      barcode: '',
       purchasePrice: 0,
       salePrice: 0,
       supplierId: quickProduct.supplierId || suppliers[0]?.id || '',
@@ -796,15 +792,7 @@ export default function Invoices() {
                         className="input-ui"
                       />
                     </Field>
-                    <Field label="الباركود">
-                      <input
-                        type="text"
-                        value={quickProduct.barcode}
-                        onChange={(e) => setQuickProduct((current) => ({ ...current, barcode: e.target.value }))}
-                        className="input-ui"
-                        placeholder="اختياري"
-                      />
-                    </Field>
+                    {/* barcode field removed from quick-add */}
                     <Field label="سعر الشراء">
                       <input
                         type="number"
@@ -817,18 +805,7 @@ export default function Invoices() {
                         className="input-ui"
                       />
                     </Field>
-                    <Field label="سعر البيع">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={quickProduct.salePrice}
-                        onChange={(e) =>
-                          setQuickProduct((current) => ({ ...current, salePrice: Number(e.target.value) || 0 }))
-                        }
-                        className="input-ui"
-                      />
-                    </Field>
+                    {/* sale price removed for on_demand quick products */}
                     <Field label="المورد المتوقع">
                       <select
                         value={quickProduct.supplierId}

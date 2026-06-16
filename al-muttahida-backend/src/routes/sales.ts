@@ -25,7 +25,7 @@ function addMonths(dateStr: string, months: number): string {
 const saleItemSchema = z.object({
   productId: z.string().min(1),
   productName: z.string().min(1),
-  barcode: z.string().min(1),
+  barcode: z.string().optional().nullable(),
   quantity: z.number().positive(),
   unitPrice: z.number().nonnegative(),
   discount: z.number().nonnegative().default(0),
@@ -116,7 +116,7 @@ type SaleRow = {
 type SaleItemRow = {
   product_id: string;
   product_name: string;
-  barcode: string;
+  barcode?: string | null;
   quantity: number;
   unit_price: number;
   discount: number;
@@ -137,7 +137,7 @@ function mapSaleItems(items: SaleItemRow[]) {
   return items.map((item) => ({
     productId: item.product_id,
     productName: item.product_name,
-    barcode: item.barcode,
+    barcode: item.barcode || '',
     quantity: Number(item.quantity),
     unitPrice: Number(item.unit_price),
     discount: Number(item.discount),
@@ -206,7 +206,7 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
       saleId,
       item.productId,
       item.productName,
-      item.barcode,
+      item.barcode || null,
       item.quantity,
       item.unitPrice,
       item.discount,

@@ -51,7 +51,7 @@ export default function Purchases() {
       const newItem: PurchaseItem = {
         productId: product.id,
         productName: product.name,
-        barcode: product.barcode,
+        barcode: product.barcode || '',
         quantity: 1,
         unitPrice: product.purchasePrice,
         discount: product.discount,
@@ -220,7 +220,7 @@ export default function Purchases() {
                         className="p-3 border border-gray-200 rounded-lg hover:border-orange-500 hover:bg-orange-50 transition-all text-right"
                       >
                         <p className="font-medium text-gray-800 text-sm">{product.name}</p>
-                        <p className="text-xs text-gray-500">{product.barcode}</p>
+                        <p className="text-xs text-gray-500">{product.barcode || '-'}</p>
                         <p className="text-orange-600 font-bold mt-1">{formatCurrency(product.purchasePrice)}</p>
                         <p className="text-xs text-gray-400">المخزون: {product.quantity}</p>
                       </button>

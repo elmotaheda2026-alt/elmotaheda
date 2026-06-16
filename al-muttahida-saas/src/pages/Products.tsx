@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Barcode, Edit, Package, Plus, Search, Trash2 } from 'lucide-react';
+import { Edit, Package, Plus, Search, Trash2 } from 'lucide-react';
 import { Product } from '../types';
 import { createProduct, deleteProduct, getProducts, updateProduct } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -9,7 +9,6 @@ type ProductForm = Omit<Product, 'id' | 'createdAt' | 'updatedAt'>;
 
 const initialForm = (taxRate: number): ProductForm => ({
   name: '',
-  barcode: '',
   category: '',
   fulfillmentType: 'stocked',
   unit: 'قطعة',
@@ -39,7 +38,8 @@ export default function Products() {
   };
 
   const generateBarcode = () => {
-    setFormData((current) => ({ ...current, barcode: Math.random().toString().slice(2, 14) }));
+    // barcode removed; no-op kept for compatibility
+    return;
   };
 
   const resetForm = () => {
@@ -70,7 +70,6 @@ export default function Products() {
     setEditingProduct(product);
     setFormData({
       name: product.name,
-      barcode: product.barcode,
       category: product.category,
       fulfillmentType: product.fulfillmentType || 'stocked',
       unit: product.unit,
@@ -89,7 +88,7 @@ export default function Products() {
     const search = searchTerm.toLowerCase();
     return (
       product.name.toLowerCase().includes(search) ||
-      product.barcode.includes(searchTerm) ||
+      (product.barcode || '').includes(searchTerm) ||
       product.category.toLowerCase().includes(search)
     );
   });
@@ -123,7 +122,7 @@ export default function Products() {
             type="text"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="ابحث بالاسم أو الباركود أو التصنيف"
+            placeholder="ابحث بالاسم أو التصنيف"
             className="input-ui pr-10"
           />
         </div>
@@ -136,7 +135,7 @@ export default function Products() {
               <tr>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الصنف</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">النوع</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الباركود</th>
+                {/* barcode column removed */}
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">الكمية</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">سعر الشراء</th>
                 <th className="px-4 py-4 text-right text-sm font-bold text-slate-700">سعر البيع</th>
@@ -162,13 +161,13 @@ export default function Products() {
                       {product.fulfillmentType === 'on_demand' ? 'حسب الطلب' : 'مخزني'}
                     </span>
                   </td>
-                  <td className="px-4 py-4 font-mono text-sm text-slate-600">{product.barcode}</td>
+                  <td className="px-4 py-4 font-mono text-sm text-slate-600">{product.barcode || '-'}</td>
                   <td className="px-4 py-4">
                     <span className="font-bold text-slate-800">{product.quantity}</span>
                     <span className="mr-1 text-xs text-slate-500">{product.unit}</span>
                   </td>
                   <td className="px-4 py-4 text-slate-700">{formatCurrency(product.purchasePrice)}</td>
-                  <td className="px-4 py-4 font-bold text-emerald-700">{formatCurrency(product.salePrice)}</td>
+                  <td className="px-4 py-4 font-bold text-emerald-700">{product.fulfillmentType === 'on_demand' ? '-' : formatCurrency(product.salePrice)}</td>
                   <td className="px-4 py-4">
                     <div className="flex gap-2">
                       <button onClick={() => handleEdit(product)} className="rounded-xl p-2 text-sky-600 hover:bg-sky-50">
@@ -224,14 +223,7 @@ export default function Products() {
                   </select>
                 </Field>
 
-                <Field label="الباركود">
-                  <div className="flex gap-2">
-                    <input value={formData.barcode} onChange={(e) => setFormData({ ...formData, barcode: e.target.value })} className="input-ui" required />
-                    <button type="button" onClick={generateBarcode} className="rounded-2xl bg-slate-100 px-3 hover:bg-slate-200">
-                      <Barcode size={18} />
-                    </button>
-                  </div>
-                </Field>
+                {/* barcode field removed */}
 
                 <Field label="التصنيف">
                   <input value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })} className="input-ui" />
@@ -260,9 +252,11 @@ export default function Products() {
                   <input type="number" min="0" step="0.01" value={formData.purchasePrice} onChange={(e) => setFormData({ ...formData, purchasePrice: Number(e.target.value) || 0 })} className="input-ui" required />
                 </Field>
 
-                <Field label="سعر البيع">
-                  <input type="number" min="0" step="0.01" value={formData.salePrice} onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) || 0 })} className="input-ui" required />
-                </Field>
+                {formData.fulfillmentType !== 'on_demand' && (
+                  <Field label="سعر البيع">
+                    <input type="number" min="0" step="0.01" value={formData.salePrice} onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) || 0 })} className="input-ui" required />
+                  </Field>
+                )}
 
                 <Field label="الخصم">
                   <input type="number" min="0" step="0.01" value={formData.discount} onChange={(e) => setFormData({ ...formData, discount: Number(e.target.value) || 0 })} className="input-ui" />

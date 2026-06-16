@@ -105,7 +105,7 @@ export default function Sales() {
         {
           productId: product.id,
           productName: product.name,
-          barcode: product.barcode,
+          barcode: product.barcode || '',
           quantity: 1,
           unitPrice: product.salePrice,
           discount: product.discount,
@@ -311,7 +311,7 @@ export default function Sales() {
                         className="rounded-2xl border border-slate-200 p-3 text-right hover:border-emerald-400 hover:bg-emerald-50"
                       >
                         <p className="font-semibold text-slate-800">{product.name}</p>
-                        <p className="text-xs text-slate-500">{product.barcode}</p>
+                        <p className="text-xs text-slate-500">{product.barcode || '-'}</p>
                         <p className="mt-1 font-bold text-emerald-700">{formatCurrency(product.salePrice)}</p>
                         <div className="mt-2 flex items-center justify-between text-xs">
                           <span className={`rounded-full px-2 py-1 ${product.fulfillmentType === 'on_demand' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>

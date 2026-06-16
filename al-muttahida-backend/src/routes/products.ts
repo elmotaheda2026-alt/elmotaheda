@@ -10,7 +10,7 @@ router.use(requireAuth);
 
 const productSchema = z.object({
   name: z.string().min(1),
-  barcode: z.string().min(1),
+  barcode: z.string().optional().nullable(),
   category: z.string().default(''),
   fulfillmentType: z.enum(['stocked', 'on_demand']).default('stocked'),
   unit: z.string().default(''),
@@ -74,7 +74,7 @@ router.post('/', requirePermission('inventory:manage'), async (req: AuthedReques
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       data.name,
-      data.barcode,
+      data.barcode || null,
       data.category,
       data.fulfillmentType,
       data.unit,
@@ -124,7 +124,7 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
            quantity = ?, min_quantity = ?, image = ?, description = ?, updated_at = ?
        WHERE id = ?`,
       data.name,
-      data.barcode,
+      data.barcode || null,
       data.category,
       data.fulfillmentType,
       data.unit,

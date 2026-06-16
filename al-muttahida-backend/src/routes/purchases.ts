@@ -11,7 +11,7 @@ router.use(requireAuth);
 const purchaseItemSchema = z.object({
   productId: z.string().min(1),
   productName: z.string().min(1),
-  barcode: z.string().min(1),
+  barcode: z.string().optional().nullable(),
   quantity: z.number().positive(),
   unitPrice: z.number().nonnegative(),
   discount: z.number().nonnegative().default(0),
@@ -94,7 +94,7 @@ router.get('/:id', requirePermission('purchases:manage'), async (req, res) => {
     const mappedItems = items.map((item: any) => ({
       productId: item.product_id,
       productName: item.product_name,
-      barcode: item.barcode,
+      barcode: item.barcode || '',
       quantity: Number(item.quantity),
       unitPrice: Number(item.unit_price),
       discount: Number(item.discount),
@@ -191,7 +191,7 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
         id,
         item.productId,
         item.productName,
-        item.barcode,
+        item.barcode || null,
         item.quantity,
         item.unitPrice,
         item.discount,

@@ -201,7 +201,7 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <p className="font-bold text-slate-800">{product.name}</p>
-                      <p className="text-xs text-slate-500 font-medium">{product.barcode}</p>
+                      <p className="text-xs text-slate-500 font-medium">{product.barcode || '-'}</p>
                     </div>
                   </div>
                   <div className="text-left">

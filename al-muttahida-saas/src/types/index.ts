@@ -80,7 +80,7 @@ export interface Supplier {
 export interface Product {
   id: string;
   name: string;
-  barcode: string;
+  barcode?: string;
   category: string;
   fulfillmentType: 'stocked' | 'on_demand';
   unit: string;
@@ -99,7 +99,7 @@ export interface Product {
 export interface SaleItem {
   productId: string;
   productName: string;
-  barcode: string;
+  barcode?: string;
   quantity: number;
   unitPrice: number;
   discount: number;
@@ -159,7 +159,7 @@ export interface Sale {
 export interface PurchaseItem {
   productId: string;
   productName: string;
-  barcode: string;
+  barcode?: string;
   quantity: number;
   unitPrice: number;
   discount: number;
