@@ -84,7 +84,7 @@ export default function Invoices() {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [paymentDate, setPaymentDate] = useState(today());
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('installment');
   const [paidAmount, setPaidAmount] = useState(0);
   const [installmentMonths, setInstallmentMonths] = useState(12);
   const [invoiceNotes, setInvoiceNotes] = useState('');
@@ -251,7 +251,7 @@ export default function Invoices() {
     setInvoiceNumber(getNextSaleInvoiceNumber());
     setInvoiceDate(today());
     setPaymentDate(today());
-    setPaymentMethod('cash');
+    setPaymentMethod('installment');
     setPaidAmount(0);
     setInstallmentMonths(12);
     setInvoiceNotes('');
@@ -657,7 +657,7 @@ export default function Invoices() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={paidAmount}
+                  value={paidAmount === 0 ? '' : paidAmount}
                   onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
                   className="input-ui"
                 />
@@ -720,7 +720,7 @@ export default function Invoices() {
                   <input
                     type="number"
                     min="1"
-                    value={lineQuantity}
+                    value={lineQuantity === 0 ? '' : lineQuantity}
                     onChange={(e) => setLineQuantity(Math.max(1, Number(e.target.value) || 1))}
                     className="input-ui"
                   />
@@ -732,7 +732,7 @@ export default function Invoices() {
                     min="0"
                     max="100"
                     step="0.01"
-                    value={lineDiscount}
+                    value={lineDiscount === 0 ? '' : lineDiscount}
                     onChange={(e) => setLineDiscount(Number(e.target.value) || 0)}
                     className="input-ui"
                   />
@@ -744,7 +744,7 @@ export default function Invoices() {
                     min="0"
                     max="100"
                     step="0.01"
-                    value={lineTax}
+                    value={lineTax === 0 ? '' : lineTax}
                     onChange={(e) => setLineTax(Number(e.target.value) || 0)}
                     className="input-ui"
                   />
@@ -798,7 +798,7 @@ export default function Invoices() {
                         type="number"
                         min="0"
                         step="0.01"
-                        value={quickProduct.purchasePrice}
+                        value={quickProduct.purchasePrice === 0 ? '' : quickProduct.purchasePrice}
                         onChange={(e) =>
                           setQuickProduct((current) => ({ ...current, purchasePrice: Number(e.target.value) || 0 }))
                         }

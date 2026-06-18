@@ -180,10 +180,16 @@ export default function Shareholders() {
 
   const handleShareholderSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingShareholder) {
-      updateShareholder(editingShareholder.id, shareholderForm);
-    } else {
+    // Require a positive opening capital when adding a new shareholder
+    if (!editingShareholder) {
+      const cap = Number(shareholderForm.capital || 0);
+      if (!cap || cap <= 0) {
+        window.alert('الرجاء إدخال الرصيد الافتتاحي للمساهم ويجب أن يكون أكبر من صفر.');
+        return;
+      }
       createShareholder(shareholderForm);
+    } else {
+      updateShareholder(editingShareholder.id, shareholderForm);
     }
     loadData();
     setShowShareholderModal(false);

@@ -195,12 +195,12 @@ export default function Products() {
 
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl">
-            <div className="border-b border-slate-100 p-6">
-              <h3 className="text-xl font-bold text-slate-900">{editingProduct ? 'تعديل الصنف' : 'إضافة صنف جديد'}</h3>
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[20px] bg-white shadow-2xl">
+            <div className="border-b border-slate-100 p-4">
+              <h3 className="text-lg font-bold text-slate-900">{editingProduct ? 'تعديل الصنف' : 'إضافة صنف جديد'}</h3>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5 p-6">
+            <form onSubmit={handleSubmit} className="space-y-4 p-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="اسم الصنف">
                   <input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="input-ui" required />
@@ -237,16 +237,6 @@ export default function Products() {
                   <input type="number" min="0" value={formData.quantity} onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) || 0 })} className="input-ui" required />
                 </Field>
 
-                <Field label="الحد الأدنى للمخزون">
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.minQuantity}
-                    onChange={(e) => setFormData({ ...formData, minQuantity: Number(e.target.value) || 0 })}
-                    className="input-ui"
-                    disabled={formData.fulfillmentType === 'on_demand'}
-                  />
-                </Field>
 
                 <Field label="سعر الشراء">
                   <input type="number" min="0" step="0.01" value={formData.purchasePrice} onChange={(e) => setFormData({ ...formData, purchasePrice: Number(e.target.value) || 0 })} className="input-ui" required />
@@ -258,17 +248,11 @@ export default function Products() {
                   </Field>
                 )}
 
-                <Field label="الخصم">
-                  <input type="number" min="0" step="0.01" value={formData.discount} onChange={(e) => setFormData({ ...formData, discount: Number(e.target.value) || 0 })} className="input-ui" />
-                </Field>
-
-                <Field label="الضريبة %">
-                  <input type="number" min="0" step="0.01" value={formData.tax} onChange={(e) => setFormData({ ...formData, tax: Number(e.target.value) || 0 })} className="input-ui" />
-                </Field>
+                {/* discount, tax, and minQuantity fields removed per design */}
 
                 <div className="md:col-span-2">
                   <Field label="ملاحظات">
-                    <textarea value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} rows={3} className="input-ui resize-none" />
+                    <textarea value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} rows={1} className="input-ui resize-none" />
                   </Field>
                 </div>
               </div>
