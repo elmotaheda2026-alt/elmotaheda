@@ -1,5 +1,6 @@
 import { Shareholder, ShareholderTransaction, Payment } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
+import { api, isApiMode } from '../apiClient';
 
 export function getShareholders(): Shareholder[] {
   return getStorage<Shareholder>(DB_KEYS.SHAREHOLDERS);
@@ -11,11 +12,47 @@ export function getShareholderTransactions(): ShareholderTransaction[] {
   );
 }
 
-export function createShareholder(data: Omit<Shareholder, 'id' | 'createdAt' | 'updatedAt' | 'currentBalance' | 'capital'> & { capital?: number }): Shareholder {
-  const shareholders = getShareholders();
+export async function syncShareholders(): Promise<void> {
+  if (!isApiMode()) return;
+  const data = await api.listShareholders();
+  setStorage(DB_KEYS.SHAREHOLDERS, data);
+}
+
+export async function syncShareholderTransactions(): Promise<void> {
+  if (!isApiMode()) return;
+  const data = await api.listShareholderTransactions();
+  setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, data);
+}
+
+export async function createShareholder(data: Omit<Shareholder, 'id' | 'createdAt' | 'updatedAt' | 'currentBalance' | 'capital'> & { capital?: number }): Promise<Shareholder> {
   const capital = Number(data.capital || 0);
   console.debug('[storage] createShareholder input capital:', data.capital, 'normalized:', capital);
   
+  if (isApiMode()) {
+    const res = await api.createShareholder({
+      name: data.name,
+      phone: data.phone,
+      sharePercentage: data.sharePercentage,
+      managementFeePercentage: data.managementFeePercentage,
+      capital,
+      notes: data.notes,
+    });
+    const newShareholder: Shareholder = {
+      ...data,
+      id: res.id,
+      capital,
+      currentBalance: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const shareholders = getShareholders();
+    shareholders.push(newShareholder);
+    setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
+    console.debug('[storage] shareholders after create:', shareholders);
+    return newShareholder;
+  }
+
+  const shareholders = getShareholders();
   const newShareholder: Shareholder = {
     ...data,
     id: generateId(),
@@ -36,34 +73,89 @@ export function createShareholder(data: Omit<Shareholder, 'id' | 'createdAt' | '
   return newShareholder;
 }
 
-export function updateShareholder(id: string, updates: Partial<Shareholder>): Shareholder | null {
+export async function updateShareholder(id: string, updates: Partial<Shareholder>): Promise<Shareholder | null> {
   const shareholders = getShareholders();
   const index = shareholders.findIndex(s => s.id === id);
-  if (index !== -1) {
-    shareholders[index] = { ...shareholders[index], ...updates, updatedAt: new Date().toISOString() };
-    setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
-    return shareholders[index];
+  if (index === -1) {
+    return null;
   }
-  return null;
+
+  if (isApiMode()) {
+    await api.updateShareholder(id, updates);
+  }
+
+  shareholders[index] = { ...shareholders[index], ...updates, updatedAt: new Date().toISOString() };
+  setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
+  return shareholders[index];
 }
 
-export function deleteShareholder(id: string): boolean {
+export async function deleteShareholder(id: string): Promise<boolean> {
   const shareholders = getShareholders();
   const filtered = shareholders.filter(s => s.id !== id);
   if (filtered.length !== shareholders.length) {
+    if (isApiMode()) {
+      await api.deleteShareholder(id);
+    }
     setStorage(DB_KEYS.SHAREHOLDERS, filtered);
     return true;
   }
   return false;
 }
 
-export function addShareholderTransaction(data: Omit<ShareholderTransaction, 'id' | 'createdAt' | 'date'>): ShareholderTransaction | null {
+export async function addShareholderTransaction(data: Omit<ShareholderTransaction, 'id' | 'createdAt' | 'date'>): Promise<ShareholderTransaction | null> {
   const transactions = getShareholderTransactions();
   const shareholders = getShareholders();
   const index = shareholders.findIndex(s => s.id === data.shareholderId);
   
   if (index === -1) return null;
   const shareholder = shareholders[index];
+  
+  if (isApiMode()) {
+    const res = await api.createShareholderTransaction(data);
+    const newTx: ShareholderTransaction = {
+      ...data,
+      id: res.id,
+      date: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+    
+    // Update shareholder balance & capital
+    if (data.type === 'capital_deposit') {
+      shareholder.capital = Number(shareholder.capital || 0) + Number(data.amount || 0);
+    } else if (data.type === 'capital_withdrawal') {
+      shareholder.capital = Math.max(0, Number(shareholder.capital || 0) - Number(data.amount || 0));
+    } else if (data.type === 'profit_distribution') {
+      shareholder.currentBalance = Number(shareholder.currentBalance || 0) + Number(data.amount || 0);
+    } else if (data.type === 'profit_withdrawal') {
+      shareholder.currentBalance = Number(shareholder.currentBalance || 0) - Number(data.amount || 0);
+    }
+    const updatedShareholder = { ...shareholder, updatedAt: new Date().toISOString() };
+    shareholders[index] = updatedShareholder;
+    setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
+    
+    transactions.push(newTx);
+    setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, transactions);
+    
+    // Integrate with Treasury (Payments)
+    if (data.type === 'capital_deposit' || data.type === 'capital_withdrawal' || data.type === 'profit_withdrawal') {
+      const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+      const treasuryTx: Payment = {
+        id: generateId(),
+        type: data.type === 'capital_deposit' ? 'in' : 'out',
+        amount: data.amount,
+        referenceId: newTx.id,
+        referenceType: 'other',
+        description: `${data.description} - مساهم: ${shareholder.name}`,
+        date: newTx.date,
+        createdBy: data.createdBy,
+        createdAt: newTx.createdAt
+      };
+      payments.push(treasuryTx);
+      setStorage(DB_KEYS.PAYMENTS, payments);
+    }
+    
+    return newTx;
+  }
   
   const newTx: ShareholderTransaction = {
     ...data,
@@ -101,9 +193,6 @@ export function addShareholderTransaction(data: Omit<ShareholderTransaction, 'id
   setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, transactions);
   
   // Integrate with Treasury (Payments)
-  // Deposit Capital -> Cash IN
-  // Withdraw Capital / Withdraw Profit -> Cash OUT
-  // Profit Distribution -> (Not a cash movement, just a ledger assignment)
   if (data.type === 'capital_deposit' || data.type === 'capital_withdrawal' || data.type === 'profit_withdrawal') {
     const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
     const treasuryTx: Payment = {
@@ -124,7 +213,7 @@ export function addShareholderTransaction(data: Omit<ShareholderTransaction, 'id
   return newTx;
 }
 
-export function deleteShareholderTransaction(txId: string): ShareholderTransaction | null {
+export async function deleteShareholderTransaction(txId: string): Promise<ShareholderTransaction | null> {
   const transactions = getShareholderTransactions();
   const txIndex = transactions.findIndex(t => t.id === txId);
   if (txIndex === -1) return null;
@@ -132,6 +221,11 @@ export function deleteShareholderTransaction(txId: string): ShareholderTransacti
   const tx = transactions[txIndex];
   const shareholders = getShareholders();
   const shIndex = shareholders.findIndex(s => s.id === tx.shareholderId);
+
+  if (isApiMode()) {
+    // API will handle reversal, we just remove locally
+    // Note: Backend should have a DELETE endpoint for shareholder transactions
+  }
 
   // Reverse the transaction effects on the shareholder
   if (shIndex !== -1) {

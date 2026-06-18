@@ -13,12 +13,14 @@ export const config = {
     return secret;
   })(),
   sql: {
-    host: process.env.DB_HOST || '127.0.0.1',
+    server: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT || 1433),
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'AlMuttahida_New',
-    encrypt: (process.env.DB_ENCRYPT || 'false').toLowerCase() === 'true',
-    trustServerCertificate: (process.env.DB_TRUST_CERT || 'true').toLowerCase() === 'true',
+    options: {
+      encrypt: (process.env.DB_ENCRYPT || 'false').toLowerCase() === 'true',
+      trustServerCertificate: (process.env.DB_TRUST_CERT || 'true').toLowerCase() === 'true',
+    },
   },
 };

@@ -4,9 +4,22 @@ import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
+import { hasPermission } from '../permissions.js';
+import { Permission } from '../types.js';
 
 const router = Router();
 router.use(requireAuth);
+
+function requireAnyPermission(...permissions: Permission[]) {
+  return (req: AuthedRequest, res: any, next: any) => {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+    const allowed = permissions.some((permission) =>
+      hasPermission(req.user!.role, permission, req.user!.permissions),
+    );
+    if (!allowed) return res.status(403).json({ message: 'Forbidden' });
+    return next();
+  };
+}
 
 const productSchema = z.object({
   name: z.string().min(1),
@@ -54,7 +67,7 @@ router.get('/', async (_req, res) => {
 });
 
 // POST /products
-router.post('/', requirePermission('inventory:manage'), async (req: AuthedRequest, res) => {
+router.post('/', requireAnyPermission('inventory:manage', 'sales:write'), async (req: AuthedRequest, res) => {
   const parsed = productSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid product payload', errors: parsed.error.format() });
@@ -63,6 +76,7 @@ router.post('/', requirePermission('inventory:manage'), async (req: AuthedReques
   const data = parsed.data;
   const id = uid();
   const now = new Date().toISOString();
+  const barcode = data.barcode?.trim() || id;
 
   try {
     const db = await dbPromise;
@@ -74,7 +88,7 @@ router.post('/', requirePermission('inventory:manage'), async (req: AuthedReques
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       data.name,
-      data.barcode || null,
+      barcode,
       data.category,
       data.fulfillmentType,
       data.unit,
@@ -117,6 +131,8 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
       return res.status(404).json({ message: 'Product not found' });
     }
 
+    const barcode = data.barcode?.trim() || req.params.id;
+
     await db.run(
       `UPDATE products
        SET name = ?, barcode = ?, category = ?, fulfillment_type = ?, unit = ?,
@@ -124,7 +140,7 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
            quantity = ?, min_quantity = ?, image = ?, description = ?, updated_at = ?
        WHERE id = ?`,
       data.name,
-      data.barcode || null,
+      barcode,
       data.category,
       data.fulfillmentType,
       data.unit,

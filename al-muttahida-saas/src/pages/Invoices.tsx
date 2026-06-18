@@ -281,6 +281,8 @@ export default function Invoices() {
       return;
     }
 
+    const unitPrice = selectedProduct.salePrice > 0 ? selectedProduct.salePrice : selectedProduct.purchasePrice;
+
     setDraftItems((current) => {
       const existingIndex = current.findIndex((item) => item.productId === selectedProduct.id);
       if (existingIndex !== -1) {
@@ -289,7 +291,7 @@ export default function Invoices() {
             ? {
                 ...item,
                 quantity: item.quantity + lineQuantity,
-                unitPrice: selectedProduct.salePrice,
+                unitPrice,
                 discount: lineDiscount,
                 tax: lineTax,
               }
@@ -302,7 +304,7 @@ export default function Invoices() {
         {
           productId: selectedProduct.id,
           quantity: lineQuantity,
-          unitPrice: selectedProduct.salePrice,
+          unitPrice,
           discount: lineDiscount,
           tax: lineTax,
         },
@@ -338,7 +340,7 @@ export default function Invoices() {
       fulfillmentType: 'on_demand',
       unit: 'قطعة',
       purchasePrice: quickProduct.purchasePrice,
-      salePrice: 0,
+      salePrice: quickProduct.purchasePrice,
       discount: 0,
       tax: settings.taxRate,
       quantity: 0,

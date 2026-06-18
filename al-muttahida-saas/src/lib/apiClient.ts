@@ -44,6 +44,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      clearApiToken();
+      if (window.location.pathname !== '/login') {
+        window.location.replace('/login');
+      }
+    }
     throw new Error(payload.message || 'Request failed');
   }
   return response.json() as Promise<T>;
