@@ -21,6 +21,7 @@ import {
   ShoppingCart,
   Truck,
   UserCheck,
+  UserCircle,
   Users,
   Warehouse,
 } from 'lucide-react';

@@ -52,23 +52,19 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/20 bg-white/70 backdrop-blur-xl shadow-sm">
-      <div className="mx-auto flex w-full max-w-[1720px] items-center justify-between px-4 py-3 md:px-6 xl:px-8">
+      <div className="mx-auto flex w-full max-w-[1720px] items-center justify-between px-4 py-2 md:px-6 xl:px-8">
         <div className="flex items-center gap-4">
           <button onClick={onMenuClick} className="rounded-xl p-2 hover:bg-slate-100 lg:hidden">
             <Menu size={18} />
           </button>
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">{title || 'لوحة التحكم'}</h1>
-            <p className="hidden text-xs text-slate-500 md:block">واجهة محسنة للديسكتوب مع تنظيم أوضح للمحتوى</p>
-          </div>
+          {title && (
+            <div>
+              <h1 className="text-xl font-bold text-slate-800">{title}</h1>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="hidden items-center rounded-full border border-slate-200 bg-slate-50 px-4 py-2 md:flex">
-            <Search size={16} className="ml-2 text-slate-400" />
-            <input type="text" placeholder="بحث سريع" className="w-48 bg-transparent text-sm outline-none xl:w-64" />
-          </div>
-
           <div className="relative">
             <button onClick={() => setShowNotifications((current) => !current)} className="relative rounded-xl p-2 hover:bg-slate-100">
               <Bell size={18} className="text-slate-600" />

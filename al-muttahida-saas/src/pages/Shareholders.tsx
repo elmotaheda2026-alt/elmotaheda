@@ -388,57 +388,6 @@ export default function Shareholders() {
             <Plus size={20} />
             <span>إضافة مساهم</span>
           </button>
-          <button
-            onClick={async () => {
-              if (!confirm('تأكيد: توزيع الأرباح غير الموزعة لكل المساهمين للفترة الحالية؟')) return;
-              // compute and distribute
-              const allocations: Array<{ id: string; amount: number }> = [];
-              for (const s of shareholders) {
-                const startDate = periodFrom ? new Date(periodFrom) : (s.createdAt ? new Date(s.createdAt) : new Date(0));
-                const endDate = periodTo ? new Date(periodTo) : new Date();
-                const periodSales = sales.filter(sale => {
-                  const d = new Date(sale.date);
-                  return d >= startDate && d <= endDate;
-                });
-                const periodExpenses = expenses.filter(exp => {
-                  const d = new Date(exp.date);
-                  return d >= startDate && d <= endDate;
-                });
-                const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
-                const grossProfit = netProfitSinceJoin * ((s.sharePercentage || 0) / 100);
-                const mgmtFee = grossProfit * ((s.managementFeePercentage || 0) / 100);
-                const netEntitlement = grossProfit - mgmtFee;
-                const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
-                const totalDistributed = shareholderTxs
-                  .filter(t => t.type === 'profit_distribution')
-                  .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-                const undistributed = Math.max(0, netEntitlement - totalDistributed);
-                if (undistributed > 0.009) {
-                  allocations.push({ id: s.id, amount: Number(undistributed.toFixed(2)) });
-                }
-              }
-              for (const a of allocations) {
-                addShareholderTransaction({
-                  shareholderId: a.id,
-                  shareholderName: shareholders.find(s => s.id === a.id)?.name || '',
-                  type: 'profit_distribution',
-                  amount: a.amount,
-                  description: 'توزيع أرباح تلقائي للفترة',
-                  createdBy: user?.name || 'النظام'
-                });
-              }
-              if (allocations.length > 0) {
-                loadData();
-                alert(`تم توزيع الأرباح على ${allocations.length} مساهمين.`);
-              } else {
-                alert('لا يوجد مبالغ غير موزعة حالياً.');
-              }
-            }}
-            className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors"
-          >
-            <TrendingUp size={18} />
-            <span>توزيع الأرباح الآن</span>
-          </button>
         </div>
       </div>
 

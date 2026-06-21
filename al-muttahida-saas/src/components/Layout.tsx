@@ -17,7 +17,7 @@ export default function Layout() {
           <Header onMenuClick={() => setSidebarOpen(true)} />
         </div>
 
-        <main className="px-4 py-4 md:px-6 md:py-6 xl:px-8 print:p-0">
+        <main className="px-4 pt-2 pb-4 md:px-6 md:pt-3 md:pb-6 xl:px-8 print:p-0">
           <div className="mx-auto w-full max-w-[1720px]">
             <Outlet />
           </div>
