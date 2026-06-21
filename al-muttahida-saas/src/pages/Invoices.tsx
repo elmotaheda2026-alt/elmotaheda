@@ -26,6 +26,7 @@ import {
   getSalesReps,
   getSales,
   updateSale,
+  deleteSale,
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
@@ -89,9 +90,9 @@ export default function Invoices() {
   const [installmentMonths, setInstallmentMonths] = useState(12);
   const [invoiceNotes, setInvoiceNotes] = useState('');
   const [lineProductId, setLineProductId] = useState('');
-  const [lineQuantity, setLineQuantity] = useState(1);
-  const [lineDiscount, setLineDiscount] = useState(0);
-  const [lineTax, setLineTax] = useState(settings.taxRate);
+  const [lineQuantity, setLineQuantity] = useState<number | ''>('');
+  const [lineDiscount, setLineDiscount] = useState<number | ''>('');
+  const [lineTax, setLineTax] = useState<number | ''>('');
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [procurementSupplierId, setProcurementSupplierId] = useState('');
   const [showQuickProduct, setShowQuickProduct] = useState(false);
@@ -134,6 +135,31 @@ export default function Invoices() {
       type: 'success',
       text: `تم تحميل بيانات التعاقد رقم ${sale.invoiceNumber} للتعديل والمراجعة بنجاح. يمكنك الآن تعديل أي خانات أو أصناف ثم الحفظ.`,
     });
+  };
+
+  const handleDeleteContract = async (sale: Sale) => {
+    const confirmed = window.confirm(
+      `هل أنت متأكد من حذف التعاقد رقم ${sale.invoiceNumber}؟\nسيتم حذف التعاقد والأقساط والمدفوعات والحسابات المرتبطة به من النظام.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteSale(sale.id, user?.name || 'system');
+      setSales((current) => current.filter((entry) => entry.id !== sale.id));
+      setMessage({
+        type: 'success',
+        text: `تم حذف التعاقد رقم ${sale.invoiceNumber} وكل الحسابات المرتبطة به بنجاح.`,
+      });
+
+      if (editingSaleId === sale.id) {
+        resetForm();
+      }
+    } catch (err: any) {
+      setMessage({
+        type: 'error',
+        text: err.message || 'حدث خطأ أثناء حذف التعاقد.',
+      });
+    }
   };
 
   useEffect(() => {
@@ -262,9 +288,9 @@ export default function Invoices() {
     setInstallmentMonths(12);
     setInvoiceNotes('');
     setLineProductId('');
-    setLineQuantity(1);
-    setLineDiscount(0);
-    setLineTax(settings.taxRate);
+    setLineQuantity('');
+    setLineDiscount('');
+    setLineTax('');
     setDraftItems([]);
     setSelectedSalesRepId('');
     setShowQuickProduct(false);
@@ -282,12 +308,15 @@ export default function Invoices() {
       return;
     }
 
-    if (lineQuantity <= 0) {
+    const qty = Number(lineQuantity) || 0;
+    if (qty <= 0) {
       setMessage({ type: 'error', text: 'الكمية يجب أن تكون أكبر من صفر.' });
       return;
     }
 
     const unitPrice = selectedProduct.salePrice > 0 ? selectedProduct.salePrice : selectedProduct.purchasePrice;
+    const discount = Number(lineDiscount) || 0;
+    const tax = Number(lineTax) || 0;
 
     setDraftItems((current) => {
       const existingIndex = current.findIndex((item) => item.productId === selectedProduct.id);
@@ -296,10 +325,10 @@ export default function Invoices() {
           index === existingIndex
             ? {
                 ...item,
-                quantity: item.quantity + lineQuantity,
+                quantity: item.quantity + qty,
                 unitPrice,
-                discount: lineDiscount,
-                tax: lineTax,
+                discount: discount,
+                tax: tax,
               }
             : item,
         );
@@ -309,18 +338,18 @@ export default function Invoices() {
         ...current,
         {
           productId: selectedProduct.id,
-          quantity: lineQuantity,
+          quantity: qty,
           unitPrice,
-          discount: lineDiscount,
-          tax: lineTax,
+          discount: discount,
+          tax: tax,
         },
       ];
     });
 
     setLineProductId('');
-    setLineQuantity(1);
-    setLineDiscount(0);
-    setLineTax(settings.taxRate);
+    setLineQuantity('');
+    setLineDiscount('');
+    setLineTax('');
     setMessage(null);
   };
 
@@ -357,7 +386,7 @@ export default function Invoices() {
     const refreshedProducts = getProducts();
     setProducts(refreshedProducts);
     setLineProductId(createdProduct.id);
-    setLineTax(createdProduct.tax);
+    setLineTax(createdProduct.tax || '');
     setProcurementSupplierId(quickProduct.supplierId || procurementSupplierId);
     setQuickProduct({
       name: '',
@@ -442,6 +471,31 @@ export default function Invoices() {
 
     let autoPurchaseNumber = '';
 
+    const createdSale = await createSale({
+      customerId: selectedCustomer.id,
+      customerName: selectedCustomer.name,
+      items,
+      subtotal,
+      discount: discountAmount,
+      tax: taxAmount,
+      total,
+      paid,
+      remaining,
+      status: remaining > 0 ? 'pending' : 'completed',
+      date: invoiceDate,
+      notes: invoiceNotes,
+      createdBy: user?.name || 'مدير النظام',
+      financing: {
+        paymentMethod,
+        salesRepId: selectedSalesRepId || undefined,
+        salesRepName: salesReps.find(r => r.id === selectedSalesRepId)?.name,
+        installmentMonths: paymentMethod === 'installment' ? effectiveMonths : 0,
+        installmentStartDate: paymentMethod === 'installment' ? firstInstallmentDate : undefined,
+        upfrontAmount: paid,
+        monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
+      },
+    });
+
     if (procurementRows.length > 0 && selectedProcurementSupplier) {
       const purchaseItems: PurchaseItem[] = procurementRows.map((item) => {
         const unitPrice = item.product?.purchasePrice || 0;
@@ -477,7 +531,7 @@ export default function Invoices() {
         remaining: purchaseTotal,
         status: 'pending',
         date: invoiceDate,
-        notes: `شراء تلقائي مرتبط بالفاتورة ${invoiceNumber} للعميل ${selectedCustomer.name}`,
+        notes: `شراء تلقائي مرتبط بالفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
         createdBy: user?.name || 'مدير النظام',
       });
 
@@ -489,31 +543,6 @@ export default function Invoices() {
         message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} تلقائيًا لتجهيز طلب العميل ${selectedCustomer.name}`,
       });
     }
-
-    const createdSale = await createSale({
-      customerId: selectedCustomer.id,
-      customerName: selectedCustomer.name,
-      items,
-      subtotal,
-      discount: discountAmount,
-      tax: taxAmount,
-      total,
-      paid,
-      remaining,
-      status: remaining > 0 ? 'pending' : 'completed',
-      date: invoiceDate,
-      notes: invoiceNotes,
-      createdBy: user?.name || 'مدير النظام',
-      financing: {
-        paymentMethod,
-        salesRepId: selectedSalesRepId || undefined,
-        salesRepName: salesReps.find(r => r.id === selectedSalesRepId)?.name,
-        installmentMonths: paymentMethod === 'installment' ? effectiveMonths : 0,
-        installmentStartDate: paymentMethod === 'installment' ? firstInstallmentDate : undefined,
-        upfrontAmount: paid,
-        monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
-      },
-    });
 
     if (paid > 0) {
       await createPayment({
@@ -713,7 +742,7 @@ export default function Invoices() {
                     onChange={(e) => {
                       const product = products.find((entry) => entry.id === e.target.value);
                       setLineProductId(e.target.value);
-                      setLineTax(product?.tax ?? settings.taxRate);
+                      setLineTax(product?.tax || '');
                     }}
                     className="input-ui"
                   >
@@ -730,8 +759,8 @@ export default function Invoices() {
                   <input
                     type="number"
                     min="1"
-                    value={lineQuantity === 0 ? '' : lineQuantity}
-                    onChange={(e) => setLineQuantity(Math.max(1, Number(e.target.value) || 1))}
+                    value={lineQuantity}
+                    onChange={(e) => setLineQuantity(e.target.value === '' ? '' : Number(e.target.value))}
                     className="input-ui"
                     onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   />
@@ -743,8 +772,8 @@ export default function Invoices() {
                     min="0"
                     max="100"
                     step="0.01"
-                    value={lineDiscount === 0 ? '' : lineDiscount}
-                    onChange={(e) => setLineDiscount(Number(e.target.value) || 0)}
+                    value={lineDiscount}
+                    onChange={(e) => setLineDiscount(e.target.value === '' ? '' : Number(e.target.value))}
                     className="input-ui"
                     onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   />
@@ -756,8 +785,8 @@ export default function Invoices() {
                     min="0"
                     max="100"
                     step="0.01"
-                    value={lineTax === 0 ? '' : lineTax}
-                    onChange={(e) => setLineTax(Number(e.target.value) || 0)}
+                    value={lineTax}
+                    onChange={(e) => setLineTax(e.target.value === '' ? '' : Number(e.target.value))}
                     className="input-ui"
                     onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   />
@@ -1138,6 +1167,14 @@ export default function Invoices() {
                         >
                           <Edit3 size={13} />
                           تعديل البيانات
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteContract(sale)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                        >
+                          <Trash2 size={13} />
+                          حذف التعاقد
                         </button>
                         <button
                           type="button"

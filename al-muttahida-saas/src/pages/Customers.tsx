@@ -63,6 +63,7 @@ export default function Customers() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   const emptyForm = {
@@ -92,6 +93,12 @@ export default function Customers() {
   useEffect(() => {
     loadCustomers();
   }, []);
+
+  useEffect(() => {
+    if (showForm) {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [showForm]);
 
   const loadCustomers = async () => {
     await syncCustomers();
@@ -249,188 +256,212 @@ export default function Customers() {
   const nextCustomerNumber = selectedCustomer?.customerNumber || generateCustomerNumber();
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="bg-gradient-to-l from-pink-600 to-pink-500 text-white py-4 px-6 shadow-lg">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Users className="text-2xl" />
-            <h1 className="text-xl font-bold">تكويد بيانات العملاء</h1>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="opacity-80">إجمالي العملاء:</span>
-            <span className="font-bold text-lg bg-white/20 px-3 py-1 rounded-full">
-              {customers.length}
-            </span>
-          </div>
+      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">ملفات العملاء</h2>
+          <p className="text-gray-500 text-sm mt-1">إدارة بيانات العملاء والضامنين وسجلاتهم المالية</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSearchModal(true)}
+            className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+          >
+            <Search size={18} />
+            <span>بحث</span>
+          </button>
+          <button
+            onClick={handleNew}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            <Plus size={20} />
+            <span>عميل جديد</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="p-6">
-        {/* Action Buttons Bar */}
-        <div className="bg-white rounded-xl shadow-sm p-4 mb-6">
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={handleNew}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-            >
-              <Plus size={18} />
-              <span>جديد</span>
-            </button>
-            <button
-              onClick={() => setSearchModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Search size={18} />
-              <span>بحث</span>
-            </button>
+      {!showForm && (
+        <>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+              <Users size={20} className="text-indigo-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">إجمالي العملاء</p>
+              <p className="text-xl font-bold text-gray-800">{customers.length}</p>
+            </div>
           </div>
         </div>
-
-        {/* Customers List */}
-        {!showForm && (
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-gray-200">
-              <h2 className="text-lg font-bold text-gray-800">قائمة العملاء</h2>
+        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
+              <Gavel size={20} className="text-red-600" />
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">رقم العميل</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">الاسم</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">رقم الهاتف</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">العنوان</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">الرصيد</th>
-                    <th className="px-4 py-3 text-center text-sm font-semibold text-gray-600">الإجراءات</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredCustomers.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                        لا يوجد عملاء
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredCustomers.map(customer => (
-                      <tr key={customer.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 py-3 text-sm font-medium text-blue-600">
-                          {customer.customerNumber}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${customer.isSued ? 'bg-red-100' : 'bg-pink-100'}`}>
-                              {customer.isSued ? <Gavel size={16} className="text-red-600" /> : <User size={16} className="text-pink-600" />}
-                            </div>
-                            <div className="flex flex-col">
-                               <span className={`font-medium ${customer.isSued ? 'text-red-600 line-through' : 'text-gray-800'}`}>{customer.name}</span>
-                               {customer.isSued && <span className="text-xs text-red-500 font-bold flex items-center gap-1"><AlertTriangle size={10} /> محال للقضاء</span>}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{customer.phone}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{customer.address || '-'}</td>
-                        <td className="px-4 py-3">
-                          <span className={`text-sm font-medium ${customer.balanceType === 'debtor' ? 'text-red-600' : 'text-green-600'}`}>
-                            {formatCurrency(customer.balance)} {customer.balanceType === 'debtor' ? 'مدين' : 'دائن'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => handleEdit(customer)}
-                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            >
-                              <Edit size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(customer.id)}
-                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div>
+              <p className="text-sm text-gray-500">محالون للقضاء</p>
+              <p className="text-xl font-bold text-red-600">{customers.filter(c => c.isSued).length}</p>
             </div>
           </div>
-        )}
+        </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
+              <DollarSign size={20} className="text-emerald-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">إجمالي الديون</p>
+              <p className="text-xl font-bold text-emerald-600">
+                {customers.filter(c => c.balanceType === 'debtor').length}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+        </>
+      )}
 
-        {/* Customer Form */}
-        {showForm && (
-          <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-            {/* Form Header */}
-            <div className="bg-gray-800 text-white py-3 px-6 flex items-center justify-between">
+      {/* Customers List */}
+      {!showForm && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-5 border-b border-gray-100">
+            <h3 className="font-bold text-gray-800">قائمة العملاء</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">رقم العميل</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">الاسم</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">رقم الهاتف</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">العنوان</th>
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">الرصيد</th>
+                  <th className="px-5 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filteredCustomers.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
+                      <Users size={40} className="mx-auto mb-3 text-gray-300" />
+                      <p>لا يوجد عملاء</p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredCustomers.map(customer => (
+                    <tr key={customer.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-5 py-4 text-sm font-semibold text-indigo-600">
+                        {customer.customerNumber}
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${customer.isSued ? 'bg-red-100' : 'bg-indigo-100'}`}>
+                            {customer.isSued ? <Gavel size={16} className="text-red-600" /> : <User size={16} className="text-indigo-600" />}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className={`font-medium text-sm ${customer.isSued ? 'text-red-600 line-through' : 'text-gray-800'}`}>{customer.name}</span>
+                            {customer.isSued && <span className="text-xs text-red-500 font-medium flex items-center gap-1"><AlertTriangle size={10} /> محال للقضاء</span>}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 text-sm text-gray-600 font-mono">{customer.phone}</td>
+                      <td className="px-5 py-4 text-sm text-gray-500">{customer.address || '—'}</td>
+                      <td className="px-5 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${customer.balanceType === 'debtor' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                          {formatCurrency(customer.balance)} {customer.balanceType === 'debtor' ? 'مدين' : 'دائن'}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => handleEdit(customer)}
+                            className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                            title="تعديل"
+                          >
+                            <Edit size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(customer.id)}
+                            className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                            title="حذف"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* Customer Form */}
+      {showForm && (
+        <div ref={formRef} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden scroll-mt-4">
+          {/* Form Header */}
+          <div className="bg-indigo-600 text-white py-4 px-6 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-white/20 rounded-lg flex items-center justify-center">
+                <UserCircle size={20} />
+              </div>
               <h2 className="font-bold text-lg">
                 {isEditing ? 'تعديل بيانات العميل' : 'إضافة عميل جديد'}
               </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              {isEditing && (
+                <button
+                  type="button"
+                  onClick={() => handleDelete(selectedCustomer!.id)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium"
+                >
+                  <Trash2 size={15} />
+                  <span>حذف</span>
+                </button>
+              )}
               <button
+                type="button"
+                onClick={handleNew}
+                className="flex items-center gap-1.5 px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors text-sm font-medium"
+              >
+                <Plus size={15} />
+                <span>جديد</span>
+              </button>
+              <button
+                type="button"
                 onClick={handleClose}
                 className="p-2 hover:bg-white/20 rounded-lg transition-colors"
               >
                 <X size={20} />
               </button>
             </div>
+          </div>
 
-            <form onSubmit={handleSubmit} className="p-6">
-              {error && (
-                <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium flex items-center gap-2">
-                  <AlertTriangle className="text-red-500 shrink-0" size={18} />
-                  <span>{error}</span>
-                </div>
-              )}
-              <div className="flex gap-6">
-                {/* Right Side - Action Buttons */}
-                <div className="w-32 flex flex-col gap-3">
-                  <button
-                    type="submit"
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
-                  >
-                    <Save size={18} />
-                    <span>حفظ</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleNew}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                  >
-                    <Plus size={18} />
-                    <span>جديد</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSearchModal(true)}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
-                  >
-                    <Search size={18} />
-                    <span>بحث</span>
-                  </button>
-                  {isEditing && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(selectedCustomer!)}
-                        className="flex items-center justify-center gap-2 px-4 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-medium"
-                      >
-                        <Edit size={18} />
-                        <span>تعديل</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(selectedCustomer!.id)}
-                        className="flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium"
-                      >
-                        <Trash2 size={18} />
-                        <span>حذف</span>
-                      </button>
-                    </>
-                  )}
+          <form onSubmit={handleSubmit} className="p-6">
+            {error && (
+              <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium flex items-center gap-2">
+                <AlertTriangle className="text-red-500 shrink-0" size={18} />
+                <span>{error}</span>
+              </div>
+            )}
+            <div className="flex gap-6">
+              {/* Right Side - Photo placeholder */}
+              <div className="w-32 flex flex-col gap-3">
+                <button
+                  type="submit"
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+                >
+                  <Save size={18} />
+                  <span>حفظ</span>
+                </button>
                   <button
                     type="button"
                     onClick={handleClose}
@@ -447,9 +478,9 @@ export default function Customers() {
                   <div className="flex gap-6 mb-6">
                     {/* Photo Area */}
                     <div className="w-40">
-                      <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center bg-gray-50">
-                        <div className="w-full aspect-square bg-gradient-to-br from-pink-100 to-pink-200 rounded-lg flex items-center justify-center mb-3">
-                          <User size={48} className="text-pink-400" />
+                    <div className="border-2 border-dashed border-indigo-200 rounded-xl p-4 text-center bg-indigo-50">
+                      <div className="w-full aspect-square bg-gradient-to-br from-indigo-100 to-indigo-200 rounded-lg flex items-center justify-center mb-3">
+                        <User size={48} className="text-indigo-400" />
                         </div>
                         <button
                           type="button"
@@ -466,7 +497,7 @@ export default function Customers() {
                         <div className="text-xs text-gray-400 my-2">أو</div>
                         <button
                           type="button"
-                          className="w-full px-3 py-1.5 text-xs bg-pink-600 text-white rounded-lg hover:bg-pink-700"
+                          className="w-full px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
                         >
                           <Camera size={14} className="inline ml-1" />
                           الكاميرا
@@ -476,9 +507,9 @@ export default function Customers() {
 
                     {/* Customer Number */}
                     <div className="flex-1">
-                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
+                      <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-4">
                         <label className="block text-sm font-medium text-gray-600 mb-2">رقم العميل</label>
-                        <div className="text-2xl font-bold text-blue-600">{nextCustomerNumber}</div>
+                        <div className="text-2xl font-bold text-indigo-600">{nextCustomerNumber}</div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
@@ -488,7 +519,7 @@ export default function Customers() {
                             type="text"
                             value={formData.name}
                             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                             required
                           />
                         </div>
@@ -564,7 +595,7 @@ export default function Customers() {
                           type="text"
                           value={formData.address}
                           onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                           required
                         />
                       </div>
@@ -574,7 +605,7 @@ export default function Customers() {
                           type="text"
                           value={formData.city}
                           onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                           required
                         />
                       </div>
@@ -584,7 +615,7 @@ export default function Customers() {
                           type="text"
                           value={formData.governorate}
                           onChange={(e) => setFormData({ ...formData, governorate: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                           required
                         />
                       </div>
@@ -594,7 +625,7 @@ export default function Customers() {
                           type="text"
                           value={formData.region}
                           onChange={(e) => setFormData({ ...formData, region: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                           required
                         />
                       </div>
@@ -604,7 +635,7 @@ export default function Customers() {
                           type="tel"
                           value={formData.phone}
                           onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                           required
                         />
                       </div>
@@ -614,7 +645,7 @@ export default function Customers() {
                           type="email"
                           value={formData.email}
                           onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                         />
                       </div>
                     </div>
@@ -635,7 +666,7 @@ export default function Customers() {
                           maxLength={14}
                           value={formData.nationalId}
                           onChange={(e) => handleNationalIdChange(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                           required
                         />
                       </div>
@@ -673,7 +704,7 @@ export default function Customers() {
                       value={formData.notes}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                       rows={3}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none resize-none"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none"
                     />
                   </div>
 
@@ -695,35 +726,35 @@ export default function Customers() {
                             placeholder="الاسم"
                             value={formData.guarantors[0]?.name || ''}
                             onChange={(e) => updateGuarantor(0, 'name', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="text"
                             placeholder="العنوان"
                             value={formData.guarantors[0]?.address || ''}
                             onChange={(e) => updateGuarantor(0, 'address', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="text"
                             placeholder="الرقم القومى"
                             value={formData.guarantors[0]?.nationalId || ''}
                             onChange={(e) => updateGuarantor(0, 'nationalId', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="tel"
                             placeholder="رقم الهاتف"
                             value={formData.guarantors[0]?.phone || ''}
                             onChange={(e) => updateGuarantor(0, 'phone', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="text"
                             placeholder="صلة القرابة"
                             value={formData.guarantors[0]?.relationship || ''}
                             onChange={(e) => updateGuarantor(0, 'relationship', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                         </div>
                       </div>
@@ -737,35 +768,35 @@ export default function Customers() {
                             placeholder="الاسم"
                             value={formData.guarantors[1]?.name || ''}
                             onChange={(e) => updateGuarantor(1, 'name', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="text"
                             placeholder="العنوان"
                             value={formData.guarantors[1]?.address || ''}
                             onChange={(e) => updateGuarantor(1, 'address', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="text"
                             placeholder="الرقم القومى"
                             value={formData.guarantors[1]?.nationalId || ''}
                             onChange={(e) => updateGuarantor(1, 'nationalId', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="tel"
                             placeholder="رقم الهاتف"
                             value={formData.guarantors[1]?.phone || ''}
                             onChange={(e) => updateGuarantor(1, 'phone', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                           <input
                             type="text"
                             placeholder="صلة القرابة"
                             value={formData.guarantors[1]?.relationship || ''}
                             onChange={(e) => updateGuarantor(1, 'relationship', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                           />
                         </div>
                       </div>
@@ -780,45 +811,44 @@ export default function Customers() {
                           placeholder="الاسم"
                           value={formData.guarantors[2]?.name || ''}
                           onChange={(e) => updateGuarantor(2, 'name', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                         />
                         <input
                           type="text"
                           placeholder="العنوان"
                           value={formData.guarantors[2]?.address || ''}
                           onChange={(e) => updateGuarantor(2, 'address', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                         />
                         <input
                           type="text"
                           placeholder="الرقم القومى"
                           value={formData.guarantors[2]?.nationalId || ''}
                           onChange={(e) => updateGuarantor(2, 'nationalId', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                         />
                         <input
                           type="tel"
                           placeholder="رقم الهاتف"
                           value={formData.guarantors[2]?.phone || ''}
                           onChange={(e) => updateGuarantor(2, 'phone', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                         />
                         <input
                           type="text"
                           placeholder="صلة القرابة"
                           value={formData.guarantors[2]?.relationship || ''}
                           onChange={(e) => updateGuarantor(2, 'relationship', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none text-sm"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
                         />
                       </div>
                     </div>
                   </div>
-                </div>
               </div>
-            </form>
-          </div>
-        )}
-      </div>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Search Modal */}
       {searchModal && (
@@ -839,7 +869,7 @@ export default function Customers() {
                 placeholder="أدخل رقم العميل أو الاسم أو رقم الهاتف..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none mb-4"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none mb-4"
                 autoFocus
               />
               <div className="max-h-80 overflow-y-auto border border-gray-200 rounded-lg">
@@ -858,8 +888,8 @@ export default function Customers() {
                         <div className="text-sm text-gray-500">{customer.phone}</div>
                       </div>
                       <div className="text-left">
-                        <div className="text-sm font-medium text-blue-600">{customer.customerNumber}</div>
-                        <div className={`text-sm ${customer.balanceType === 'debtor' ? 'text-red-600' : 'text-green-600'}`}>
+                        <div className="text-sm font-semibold text-indigo-600">{customer.customerNumber}</div>
+                        <div className={`text-sm ${customer.balanceType === 'debtor' ? 'text-red-600' : 'text-emerald-600'}`}>
                           {formatCurrency(customer.balance)}
                         </div>
                       </div>
@@ -879,3 +909,4 @@ export default function Customers() {
     </div>
   );
 }
+

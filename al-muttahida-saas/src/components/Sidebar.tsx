@@ -21,7 +21,6 @@ import {
   ShoppingCart,
   Truck,
   UserCheck,
-  UserCircle,
   Users,
   Warehouse,
 } from 'lucide-react';
@@ -91,7 +90,7 @@ const menuGroups: {
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-const { user, logout, settings } = useAuth();
+  const { user, settings } = useAuth();
   
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
@@ -103,12 +102,6 @@ const { user, logout, settings } = useAuth();
     () => Object.fromEntries(menuGroups.map((group) => [group.title, Boolean(group.defaultOpen)])),
   );
 
-  const handleLogout = () => {
-    if (confirm('هل تريد تسجيل الخروج؟')) {
-      logout();
-      navigate('/login');
-    }
-  };
   const toggleGroup = (title: string) => {
     setOpenGroups((current) => {
       const isAlreadyOpen = !!current[title];
@@ -196,15 +189,6 @@ const { user, logout, settings } = useAuth();
           </div>
         </nav>
 
-        <div className="border-t border-slate-200 p-5">
-          <button
-            onClick={handleLogout}
-            className="flex w-full items-center justify-between rounded-2xl bg-rose-100 px-4 py-3.5 text-base font-semibold text-rose-700 transition hover:bg-rose-200"
-          >
-            <span>تسجيل الخروج</span>
-            <LogOut size={18} />
-          </button>
-        </div>
       </aside>
     </>
   );

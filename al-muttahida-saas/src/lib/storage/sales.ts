@@ -1,4 +1,4 @@
-import { Customer, Payment, Sale } from '../../types';
+import { Customer, InstallmentCollectionTask, Payment, Purchase, RescheduleRequest, Sale, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, addMonths, buildInstallmentSchedule, syncSalePaymentStatus, createAuditLog } from './core';
 import { getSettings } from './settings';
 import { updateProductQuantity } from './products';
@@ -226,4 +226,112 @@ export async function updateSale(saleId: string, updatedSaleData: SaleDraft): Pr
   });
 
   return syncedSale;
+}
+
+export async function deleteSale(saleId: string, deletedBy = 'system'): Promise<boolean> {
+  if (isApiMode()) {
+    throw new Error('لا يمكن حذف التعاقد محليًا أثناء تشغيل وضع API.');
+  }
+
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const sale = sales.find((entry) => entry.id === saleId);
+  if (!sale) return false;
+
+  setStorage(
+    DB_KEYS.SALES,
+    sales.filter((entry) => entry.id !== saleId),
+  );
+
+  sale.items.forEach((item) => {
+    updateProductQuantity(item.productId, item.quantity);
+  });
+
+  const purchases = getStorage<Purchase>(DB_KEYS.PURCHASES);
+  const linkedPurchases = purchases.filter((purchase) => {
+    const notes = purchase.notes || '';
+    const isAutoPurchase = notes.includes('شراء تلقائي') || notes.includes('Ø´Ø±Ø§Ø¡ ØªÙ„Ù‚Ø§Ø¦ÙŠ');
+    const linkedByInvoice = notes.includes(sale.invoiceNumber);
+    const likelySameContract =
+      purchase.date === sale.date &&
+      notes.includes(sale.customerName) &&
+      purchase.items.every((purchaseItem) =>
+        sale.items.some((saleItem) => saleItem.productId === purchaseItem.productId),
+      );
+
+    return isAutoPurchase && (linkedByInvoice || likelySameContract);
+  });
+
+  if (linkedPurchases.length > 0) {
+    const linkedPurchaseIds = new Set(linkedPurchases.map((purchase) => purchase.id));
+    setStorage(
+      DB_KEYS.PURCHASES,
+      purchases.filter((purchase) => !linkedPurchaseIds.has(purchase.id)),
+    );
+
+    linkedPurchases.forEach((purchase) => {
+      purchase.items.forEach((item) => {
+        updateProductQuantity(item.productId, -item.quantity);
+      });
+    });
+
+    const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
+    linkedPurchases.forEach((purchase) => {
+      const supplierIndex = suppliers.findIndex((supplier) => supplier.id === purchase.supplierId);
+      if (supplierIndex !== -1) {
+        suppliers[supplierIndex].balance = Number(
+          Math.max(Number(suppliers[supplierIndex].balance || 0) - Number(purchase.remaining || 0), 0).toFixed(2),
+        );
+      }
+    });
+    setStorage(DB_KEYS.SUPPLIERS, suppliers);
+  }
+
+  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+  const customerIndex = customers.findIndex((customer) => customer.id === sale.customerId);
+  if (customerIndex !== -1) {
+    customers[customerIndex].balance = Number(
+      Math.max(Number(customers[customerIndex].balance || 0) - Number(sale.remaining || 0), 0).toFixed(2),
+    );
+    setStorage(DB_KEYS.CUSTOMERS, customers);
+  }
+
+  const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+  setStorage(
+    DB_KEYS.PAYMENTS,
+    payments.filter(
+      (payment) =>
+        payment.saleId !== saleId &&
+        !(payment.referenceType === 'sale' && payment.referenceId === saleId) &&
+        payment.invoiceNumber !== sale.invoiceNumber,
+    ),
+  );
+
+  const collectionTasks = getStorage<InstallmentCollectionTask>(DB_KEYS.COLLECTION_TASKS);
+  setStorage(
+    DB_KEYS.COLLECTION_TASKS,
+    collectionTasks.filter((task) => task.saleId !== saleId),
+  );
+
+  const rescheduleRequests = getStorage<RescheduleRequest>(DB_KEYS.RESCHEDULE_REQUESTS);
+  setStorage(
+    DB_KEYS.RESCHEDULE_REQUESTS,
+    rescheduleRequests.filter((request) => request.saleId !== saleId),
+  );
+
+  createAuditLog({
+    action: 'sale.delete',
+    entityType: 'sale',
+    entityId: sale.id,
+    payload: {
+      invoiceNumber: sale.invoiceNumber,
+      customerId: sale.customerId,
+      total: sale.total,
+      remaining: sale.remaining,
+      itemsCount: sale.items.length,
+      deletedAutoPurchaseIds: linkedPurchases.map((purchase) => purchase.id),
+    },
+    createdBy: deletedBy,
+  });
+
+  return true;
 }

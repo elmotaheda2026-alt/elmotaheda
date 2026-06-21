@@ -28,7 +28,7 @@ router.get('/', async (_req, res) => {
     if (!settings) {
       await db.run(
         `INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer)
-         VALUES (?, ?, ?, ?, 14, ?, ?, ? )`,
+         VALUES (?, ?, ?, ?, 0, ?, ?, ? )`,
         'شركة المتحدة',
         'الشارع المقابل للبوابة الخلفية للمستشفى العام',
         '01001207474',
@@ -38,6 +38,9 @@ router.get('/', async (_req, res) => {
         'شكراً للتعامل معنا - شركة المتحدة',
       );
       settings = await db.get<any>('SELECT TOP 1 * FROM settings');
+    } else if (Number(settings.tax_rate) === 14) {
+      await db.run('UPDATE settings SET tax_rate = 0');
+      settings.tax_rate = 0;
     }
 
     return res.json({

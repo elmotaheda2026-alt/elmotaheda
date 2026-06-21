@@ -201,12 +201,20 @@ export function initializeDatabase(): void {
       companyAddress: 'الشارع المقابل للبوابة الخلفية للمستشفى العام',
       companyPhone: '01001207474',
       companyEmail: 'info@almuttahida.com',
-      taxRate: 14,
+      taxRate: 0,
       currency: 'جنيه',
       invoicePrefix: 'INV',
       invoiceFooter: 'شكراً للتعامل معنا - شركة المتحدة',
     };
     localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(defaultSettings));
+  } else {
+    try {
+      const parsed = JSON.parse(settings);
+      if (parsed.taxRate === 14) {
+        parsed.taxRate = 0;
+        localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(parsed));
+      }
+    } catch (e) {}
   }
 
   // Initialize invoice counter
