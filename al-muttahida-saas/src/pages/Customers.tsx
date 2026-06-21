@@ -212,11 +212,12 @@ export default function Customers() {
   };
 
   const updateGuarantor = (index: number, field: keyof Guarantor, value: string) => {
+    const cleanedValue = (field === 'phone' || field === 'nationalId') ? value.replace(/\D/g, '') : value;
     const newGuarantors = [...formData.guarantors] as [Guarantor | null, Guarantor | null, Guarantor | null];
     if (!newGuarantors[index]) {
       newGuarantors[index] = { ...initialGuarantor };
     }
-    newGuarantors[index] = { ...newGuarantors[index]!, [field]: value };
+    newGuarantors[index] = { ...newGuarantors[index]!, [field]: cleanedValue };
     setFormData({ ...formData, guarantors: newGuarantors });
   };
 
@@ -602,7 +603,7 @@ export default function Customers() {
                         <input
                           type="tel"
                           value={formData.phone}
-                          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                          onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 outline-none"
                           required
                         />

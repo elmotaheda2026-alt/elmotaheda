@@ -39,43 +39,49 @@ const menuGroups: {
   items: { icon: any; label: string; path: string; permission?: PermissionKey }[];
 }[] = [
   {
-    title: 'مكتب المحاسب',
+    title: 'المبيعات والعملاء',
     defaultOpen: true,
     items: [
-      { icon: LayoutDashboard, label: 'الرئيسية', path: '/', permission: 'dashboard:view' },
-      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales:read' },
       { icon: UserCircle, label: 'ملفات العملاء', path: '/customers', permission: 'sales:read' },
-      { icon: Package, label: 'دليل الأصناف', path: '/products', permission: 'inventory:manage' },
-      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases', permission: 'purchases:manage' },
-    ],
-  },
-  {
-    title: 'الخزينة والمتابعة',
-    defaultOpen: false,
-    items: [
-      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments', permission: 'payments:read' },
-      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
-      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses', permission: 'payments:write' },
-      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
-      { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
-    ],
-  },
-  {
-    title: 'التشغيل التجاري',
-    defaultOpen: false,
-    items: [
-      { icon: ShoppingBag, label: 'حركة المبيعات', path: '/sales', permission: 'sales:read' },
-      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory', permission: 'inventory:manage' },
+      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales:read' },
       { icon: Truck, label: 'شركاء التوريد', path: '/suppliers', permission: 'sales:read' },
       { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps', permission: 'sales:read' },
     ],
   },
   {
-    title: 'الإدارة والتحكم',
+    title: 'الخزينة والتحصيل',
+    defaultOpen: false,
+    items: [
+      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments', permission: 'payments:read' },
+      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
+      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses', permission: 'payments:write' },
+    ],
+  },
+  {
+    title: 'التقارير والمالية',
+    defaultOpen: false,
+    items: [
+      { icon: LayoutDashboard, label: 'الرئيسية', path: '/', permission: 'dashboard:view' },
+      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports:read' },
+      { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
+      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
+      { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
+    ],
+  },
+  {
+    title: 'المخزون والمشتريات',
+    defaultOpen: false,
+    items: [
+      { icon: Package, label: 'دليل الأصناف', path: '/products', permission: 'inventory:manage' },
+      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases', permission: 'purchases:manage' },
+      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory', permission: 'inventory:manage' },
+    ],
+  },
+  {
+    title: 'الإدارة',
     defaultOpen: false,
     items: [
       { icon: Users, label: 'إدارة المستخدمين', path: '/users', permission: 'users:manage' },
-      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports:read' },
       { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
       { icon: Settings, label: 'تهيئة النظام', path: '/settings', permission: 'settings:manage' },
     ],
@@ -85,7 +91,7 @@ const menuGroups: {
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-const { user, logout } = useAuth();
+const { user, logout, settings } = useAuth();
   
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
@@ -128,8 +134,14 @@ const { user, logout } = useAuth();
         }`}
       >
         <div className="border-b border-slate-200 px-6 py-8">
-          <h1 className="text-center text-3xl font-extrabold leading-tight text-slate-900">شركة المتحدة</h1>
-          <p className="mt-2 text-center text-sm text-slate-500">بوابات عمل متكاملة للمحاسبة والإدارة</p>
+          <button
+            type="button"
+            onClick={() => { navigate('/'); onClose(); }}
+            className="w-full text-center group transition-opacity hover:opacity-75 active:scale-95"
+          >
+            <h1 className="text-3xl font-extrabold leading-tight text-slate-900 group-hover:text-sky-700 transition-colors">{settings.companyName || 'شركة المتحدة'}</h1>
+            <p className="mt-2 text-sm text-slate-500">بوابات عمل متكاملة للمحاسبة والإدارة</p>
+          </button>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-5 py-3 no-scrollbar">

@@ -142,9 +142,10 @@ export default function Expenses() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">المبلغ</label>
                 <input
                   type="number"
-                  value={formData.amount}
+                  value={formData.amount === 0 ? '' : formData.amount}
                   onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   required
                 />
               </div>

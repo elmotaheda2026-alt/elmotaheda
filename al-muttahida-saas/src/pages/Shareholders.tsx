@@ -781,7 +781,7 @@ export default function Shareholders() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">الهاتف</label>
-                  <input type="text" required value={shareholderForm.phone} onChange={e => setShareholderForm({...shareholderForm, phone: e.target.value})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" />
+                  <input type="tel" required value={shareholderForm.phone} onChange={e => setShareholderForm({...shareholderForm, phone: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -789,7 +789,7 @@ export default function Shareholders() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">نسبة ربح المساهم %</label>
                   <input 
                     type="number" step="0.01" min="0" max="100" required 
-                    value={shareholderForm.sharePercentage} 
+                    value={shareholderForm.sharePercentage === 0 ? '' : shareholderForm.sharePercentage} 
                     onChange={e => {
                       const val = Number(e.target.value);
                       setShareholderForm({
@@ -798,6 +798,7 @@ export default function Shareholders() {
                         managementFeePercentage: 100 - val
                       });
                     }} 
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" 
                   />
                 </div>
@@ -805,7 +806,7 @@ export default function Shareholders() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">نسبة ربح الشركة (الإدارة) %</label>
                   <input 
                     type="number" step="0.01" min="0" max="100" required 
-                    value={shareholderForm.managementFeePercentage} 
+                    value={shareholderForm.managementFeePercentage === 0 ? '' : shareholderForm.managementFeePercentage} 
                     onChange={e => {
                       const val = Number(e.target.value);
                       setShareholderForm({
@@ -814,6 +815,7 @@ export default function Shareholders() {
                         sharePercentage: 100 - val
                       });
                     }} 
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none bg-indigo-50" 
                   />
                 </div>
@@ -821,7 +823,13 @@ export default function Shareholders() {
               {!editingShareholder && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">رأس المال الافتتاحي</label>
-                  <input type="number" min="0" required value={shareholderForm.capital} onChange={e => setShareholderForm({...shareholderForm, capital: Number(e.target.value)})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" />
+                  <input 
+                    type="number" min="0" required 
+                    value={shareholderForm.capital === 0 ? '' : shareholderForm.capital} 
+                    onChange={e => setShareholderForm({...shareholderForm, capital: Number(e.target.value)})} 
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" 
+                  />
                 </div>
               )}
               <div>
@@ -852,7 +860,13 @@ export default function Shareholders() {
             <form onSubmit={handleTransactionSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">المبلغ</label>
-                <input type="number" min="1" required value={transactionForm.amount} onChange={e => setTransactionForm({...transactionForm, amount: Number(e.target.value)})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-lg font-bold text-indigo-700" />
+                <input 
+                  type="number" min="1" required 
+                  value={transactionForm.amount === 0 ? '' : transactionForm.amount} 
+                  onChange={e => setTransactionForm({...transactionForm, amount: Number(e.target.value)})} 
+                  onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-lg font-bold text-indigo-700" 
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">البيان / ملاحظات</label>

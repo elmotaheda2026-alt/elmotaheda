@@ -754,11 +754,12 @@ export default function Payments() {
                               type="number"
                               min="0"
                               step="0.01"
-                              value={incomingForm.amount}
+                              value={incomingForm.amount === 0 ? '' : incomingForm.amount}
                               onChange={(event) =>
                                 setIncomingForm((current) => ({ ...current, amount: Number(event.target.value) || 0 }))
                               }
                               className="input-ui"
+                              onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                             />
                           </Field>
 
@@ -907,9 +908,10 @@ export default function Payments() {
                           type="number"
                           min="0"
                           step="0.01"
-                          value={outgoingForm.amount}
+                          value={outgoingForm.amount === 0 ? '' : outgoingForm.amount}
                           onChange={(event) => setOutgoingForm((current) => ({ ...current, amount: Number(event.target.value) || 0 }))}
                           className="input-ui"
+                          onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                         />
                       </Field>
                       <Field label="الوصف">

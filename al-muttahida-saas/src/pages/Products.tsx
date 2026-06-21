@@ -234,17 +234,42 @@ export default function Products() {
                 </Field>
 
                 <Field label="الكمية الحالية">
-                  <input type="number" min="0" value={formData.quantity} onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) || 0 })} className="input-ui" required />
+                  <input
+                    type="number"
+                    min="0"
+                    value={formData.quantity === 0 ? '' : formData.quantity}
+                    onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) || 0 })}
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                    className="input-ui"
+                    required
+                  />
                 </Field>
 
-
                 <Field label="سعر الشراء">
-                  <input type="number" min="0" step="0.01" value={formData.purchasePrice} onChange={(e) => setFormData({ ...formData, purchasePrice: Number(e.target.value) || 0 })} className="input-ui" required />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.purchasePrice === 0 ? '' : formData.purchasePrice}
+                    onChange={(e) => setFormData({ ...formData, purchasePrice: Number(e.target.value) || 0 })}
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                    className="input-ui"
+                    required
+                  />
                 </Field>
 
                 {formData.fulfillmentType !== 'on_demand' && (
                   <Field label="سعر البيع">
-                    <input type="number" min="0" step="0.01" value={formData.salePrice} onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) || 0 })} className="input-ui" required />
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={formData.salePrice === 0 ? '' : formData.salePrice}
+                      onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) || 0 })}
+                      onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                      className="input-ui"
+                      required
+                    />
                   </Field>
                 )}
 

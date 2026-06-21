@@ -668,6 +668,7 @@ export default function Invoices() {
                   value={paidAmount === 0 ? '' : paidAmount}
                   onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
                   className="input-ui"
+                  onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                 />
               </Field>
 
@@ -677,9 +678,10 @@ export default function Invoices() {
                     <input
                       type="number"
                       min="1"
-                      value={installmentMonths}
+                      value={installmentMonths === 0 ? '' : installmentMonths}
                       onChange={(e) => setInstallmentMonths(Math.max(1, Number(e.target.value) || 1))}
                       className="input-ui"
+                      onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                     />
                   </Field>
                   <Field label="تاريخ أول قسط">
@@ -731,6 +733,7 @@ export default function Invoices() {
                     value={lineQuantity === 0 ? '' : lineQuantity}
                     onChange={(e) => setLineQuantity(Math.max(1, Number(e.target.value) || 1))}
                     className="input-ui"
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   />
                 </Field>
 
@@ -743,6 +746,7 @@ export default function Invoices() {
                     value={lineDiscount === 0 ? '' : lineDiscount}
                     onChange={(e) => setLineDiscount(Number(e.target.value) || 0)}
                     className="input-ui"
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   />
                 </Field>
 
@@ -755,6 +759,7 @@ export default function Invoices() {
                     value={lineTax === 0 ? '' : lineTax}
                     onChange={(e) => setLineTax(Number(e.target.value) || 0)}
                     className="input-ui"
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   />
                 </Field>
 
@@ -811,6 +816,7 @@ export default function Invoices() {
                           setQuickProduct((current) => ({ ...current, purchasePrice: Number(e.target.value) || 0 }))
                         }
                         className="input-ui"
+                        onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                       />
                     </Field>
                     {/* sale price removed for on_demand quick products */}
@@ -882,11 +888,12 @@ export default function Invoices() {
                             <input
                               type="number"
                               min="1"
-                              value={item.quantity}
+                              value={item.quantity === 0 ? '' : item.quantity}
                               onChange={(e) =>
                                 updateLine(index, { quantity: Math.max(1, Number(e.target.value) || 1) })
                               }
                               className="w-24 rounded-xl border border-slate-200 px-3 py-2"
+                              onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                             />
                           </td>
                           <td className="px-4 py-4 text-sm text-slate-600">{item.availableStock}</td>

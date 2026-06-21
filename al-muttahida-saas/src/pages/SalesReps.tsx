@@ -178,7 +178,7 @@ export default function SalesReps() {
                 <input
                   type="tel"
                   value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   required
                 />
@@ -197,8 +197,9 @@ export default function SalesReps() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">الهدف الشهري</label>
                   <input
                     type="number"
-                    value={formData.target}
+                    value={formData.target === 0 ? '' : formData.target}
                     onChange={(e) => setFormData({ ...formData, target: parseFloat(e.target.value) || 0 })}
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   />
                 </div>
@@ -206,8 +207,9 @@ export default function SalesReps() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">نسبة العمولة %</label>
                   <input
                     type="number"
-                    value={formData.commission}
+                    value={formData.commission === 0 ? '' : formData.commission}
                     onChange={(e) => setFormData({ ...formData, commission: parseFloat(e.target.value) || 0 })}
+                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   />
                 </div>
