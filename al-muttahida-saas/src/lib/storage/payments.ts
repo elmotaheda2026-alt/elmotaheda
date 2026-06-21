@@ -30,7 +30,7 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
   setStorage(DB_KEYS.PAYMENTS, payments);
 
   if (payment.type === 'in') {
-    if (saleIndex !== -1) {
+    if (saleIndex !== -1 && payment.affectsCustomerBalance !== false) {
       sales[saleIndex] = applyPaymentToSale(sales[saleIndex], newPayment);
       sales[saleIndex].locked = true;
       setStorage(DB_KEYS.SALES, sales);

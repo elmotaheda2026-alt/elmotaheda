@@ -1,4 +1,4 @@
-import { Customer, Sale } from '../../types';
+import { Customer, Payment, Sale } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, addMonths, buildInstallmentSchedule, syncSalePaymentStatus, createAuditLog } from './core';
 import { getSettings } from './settings';
 import { updateProductQuantity } from './products';
@@ -7,7 +7,65 @@ import { api, isApiMode } from '../apiClient';
 type SaleDraft = Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>;
 
 export function getSales(): Sale[] {
-  return getStorage<Sale>(DB_KEYS.SALES);
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+  let changed = false;
+
+  const fixedSales = sales.map((sale) => {
+    const upfrontPayments = payments.filter(
+      (payment) =>
+        payment.type === 'in' &&
+        payment.status !== 'voided' &&
+        payment.affectsCustomerBalance === false &&
+        (payment.saleId === sale.id || payment.referenceId === sale.id),
+    );
+    const duplicatedUpfront = upfrontPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const schedulePaidTotal =
+      sale.financing?.schedules?.reduce((sum, schedule) => sum + Number(schedule.paidAmount || 0), 0) || 0;
+    const amountToFix = Math.min(duplicatedUpfront, schedulePaidTotal);
+
+    if (amountToFix <= 0) return sale;
+
+    const nextSale: Sale = {
+      ...sale,
+      paid: Number(Math.max(Number(sale.paid || 0) - amountToFix, 0).toFixed(2)),
+      financing: sale.financing
+        ? {
+            ...sale.financing,
+            schedules: sale.financing.schedules ? [...sale.financing.schedules] : sale.financing.schedules,
+          }
+        : sale.financing,
+    };
+
+    if (nextSale.financing?.schedules?.length) {
+      let amountToRemove = amountToFix;
+      nextSale.financing.schedules = nextSale.financing.schedules.map((schedule) => {
+        if (amountToRemove <= 0 || Number(schedule.paidAmount || 0) <= 0) return schedule;
+
+        const removed = Math.min(Number(schedule.paidAmount || 0), amountToRemove);
+        amountToRemove = Number((amountToRemove - removed).toFixed(2));
+        const paidAmount = Number(Math.max(Number(schedule.paidAmount || 0) - removed, 0).toFixed(2));
+
+        return {
+          ...schedule,
+          paidAmount,
+          paidAt: paidAmount > 0 ? schedule.paidAt : undefined,
+          status: paidAmount <= 0 ? 'unpaid' : paidAmount >= schedule.amount ? 'paid' : 'partial',
+        };
+      });
+    }
+
+    nextSale.remaining = Number(Math.max(Number(nextSale.total || 0) - Number(nextSale.paid || 0), 0).toFixed(2));
+    nextSale.status = nextSale.remaining <= 0 ? 'completed' : 'pending';
+    changed = true;
+    return nextSale;
+  });
+
+  if (changed) {
+    setStorage(DB_KEYS.SALES, fixedSales);
+  }
+
+  return fixedSales;
 }
 
 export function getNextSaleInvoiceNumber(): string {

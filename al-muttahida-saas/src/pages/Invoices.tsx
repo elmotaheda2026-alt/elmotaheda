@@ -165,12 +165,22 @@ export default function Invoices() {
   const selectedProcurementSupplier =
     suppliers.find((supplier) => supplier.id === procurementSupplierId) || null;
 
+  const rawSubtotal = draftItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const rawDiscountAmount = draftItems.reduce(
+    (sum, item) => sum + (item.quantity * item.unitPrice * item.discount) / 100,
+    0,
+  );
+  const preTaxTotal = rawSubtotal - rawDiscountAmount;
+  const upfrontAgainstItems = Math.min(Math.max(paidAmount, 0), Math.max(preTaxTotal, 0));
+
   const draftRows = useMemo(() => {
     return draftItems.map((item) => {
       const product = products.find((entry) => entry.id === item.productId);
       const subtotal = item.unitPrice * item.quantity;
       const discountValue = (subtotal * item.discount) / 100;
-      const taxableAmount = subtotal - discountValue;
+      const amountBeforeTax = subtotal - discountValue;
+      const paidShare = preTaxTotal > 0 ? (amountBeforeTax / preTaxTotal) * upfrontAgainstItems : 0;
+      const taxableAmount = Math.max(amountBeforeTax - paidShare, 0);
       const taxValue = (taxableAmount * item.tax) / 100;
       const availableStock = product?.quantity || 0;
       const needsProcurement =
@@ -190,10 +200,10 @@ export default function Invoices() {
         availableStock,
         needsProcurement,
         shortageQuantity,
-        total: taxableAmount + taxValue,
+        total: amountBeforeTax + taxValue,
       };
     });
-  }, [draftItems, products]);
+  }, [draftItems, products, preTaxTotal, upfrontAgainstItems]);
 
   const items: SaleItem[] = draftRows.map((item) => ({
     productId: item.productId,
@@ -209,11 +219,7 @@ export default function Invoices() {
   const procurementRows = draftRows.filter((item) => item.needsProcurement && item.shortageQuantity > 0);
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
   const discountAmount = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice * item.discount) / 100, 0);
-  const taxAmount = items.reduce(
-    (sum, item) =>
-      sum + ((item.quantity * item.unitPrice - (item.quantity * item.unitPrice * item.discount) / 100) * item.tax) / 100,
-    0,
-  );
+  const taxAmount = items.reduce((sum, item) => sum + (item.total - (item.quantity * item.unitPrice - (item.quantity * item.unitPrice * item.discount) / 100)), 0);
   const total = subtotal - discountAmount + taxAmount;
   const paid = Math.min(Math.max(paidAmount, 0), total);
   const remaining = Math.max(total - paid, 0);

@@ -46,16 +46,25 @@ interface DueCustomerRow {
   lastPaymentDate?: string;
 }
 
-const today = () => new Date().toISOString().split('T')[0];
+const pad = (value: number) => String(value).padStart(2, '0');
 
-function addDays(dateStr: string, days: number): string {
-  const date = new Date(`${dateStr}T00:00:00`);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().split('T')[0];
-}
+const formatLocalDate = (date: Date): string =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+
+const getCurrentMonthRange = () => {
+  const now = new Date();
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  return {
+    from: formatLocalDate(firstDay),
+    to: formatLocalDate(lastDay),
+  };
+};
 
 export default function CollectionStatement() {
   const { settings } = useAuth();
+  const currentMonthRange = useMemo(() => getCurrentMonthRange(), []);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [activeTab, setActiveTab] = useState<'due' | 'invoices' | 'legal'>('due');
@@ -65,8 +74,8 @@ export default function CollectionStatement() {
   const [showOnlyDue, setShowOnlyDue] = useState(true);
   const [hideSuedCustomers, setHideSuedCustomers] = useState(false);
   
-  const [dueFromDate, setDueFromDate] = useState(today());
-  const [dueToDate, setDueToDate] = useState(addDays(today(), 30));
+  const [dueFromDate, setDueFromDate] = useState(currentMonthRange.from);
+  const [dueToDate, setDueToDate] = useState(currentMonthRange.to);
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('all');
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
