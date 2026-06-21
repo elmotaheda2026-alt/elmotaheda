@@ -12,7 +12,9 @@ export default function Settings() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    updateSettings(formData);
+    const updated = { ...formData, taxRate: 0 };
+    updateSettings(updated);
+    setFormData(updated);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   };
@@ -91,22 +93,13 @@ export default function Settings() {
             <FileText size={20} className="text-indigo-600" />
             إعدادات الفواتير
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">بادئة الفاتورة</label>
               <input
                 type="text"
                 value={formData.invoicePrefix}
                 onChange={(e) => setFormData({ ...formData, invoicePrefix: e.target.value })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">نسبة الضريبة %</label>
-              <input
-                type="number"
-                value={formData.taxRate}
-                onChange={(e) => setFormData({ ...formData, taxRate: parseFloat(e.target.value) || 0 })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
               />
             </div>

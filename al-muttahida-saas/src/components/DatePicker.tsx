@@ -12,16 +12,34 @@ interface DatePickerProps {
 const pad = (value: number) => String(value).padStart(2, '0');
 
 function normalizeTypedDate(input: string): string {
-  const digits = input.replace(/\D/g, '').slice(0, 8);
-  const day = digits.slice(0, 2);
-  const month = digits.slice(2, 4);
-  const year = digits.slice(4, 8);
-
-  return [day, month, year].filter(Boolean).join('/');
+  const clean = input.replace(/[^0-9/]/g, '');
+  const rawSegments = clean.split('/');
+  
+  const segments: string[] = [];
+  let overflow = '';
+  
+  for (let i = 0; i < 3; i++) {
+    let current = (rawSegments[i] || '') + overflow;
+    overflow = '';
+    
+    const maxLength = i === 2 ? 4 : 2;
+    if (current.length > maxLength) {
+      overflow = current.slice(maxLength);
+      current = current.slice(0, maxLength);
+    }
+    
+    if (current.length > 0 || (i < rawSegments.length - 1)) {
+      segments.push(current);
+    } else {
+      break;
+    }
+  }
+  
+  return segments.join('/');
 }
 
 function parseDisplayDate(input: string): string {
-  const match = input.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const match = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (!match) return '';
 
   const day = Number(match[1]);
@@ -44,7 +62,12 @@ export function DatePicker({ value, onChange, placeholder = 'يوم/شهر/سن�
   const [typedValue, setTypedValue] = useState(value ? formatDateDisplay(value) : '');
 
   useEffect(() => {
-    setTypedValue(value ? formatDateDisplay(value) : '');
+    const currentParsed = parseDisplayDate(typedValue);
+    const normalizedValue = value || '';
+    if (currentParsed !== normalizedValue) {
+      setTypedValue(value ? formatDateDisplay(value) : '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -62,9 +85,17 @@ export function DatePicker({ value, onChange, placeholder = 'يوم/شهر/سن�
     setTypedValue(parsedDate ? formatDateDisplay(parsedDate) : value ? formatDateDisplay(value) : '');
   };
 
+  // Strip padding classes from wrapper class name so they don't compound padding and shrink content width
+  const cleanClassName = className
+    ? className.replace(/\b(p[xytrbl]?-[0-9.]+)\b/g, '').trim()
+    : '';
+
+  // Extract vertical padding passed (like py-2) to apply to the input, default to py-1.5
+  const pyClass = className?.match(/\b(py-[0-9.]+)\b/)?.[1] || 'py-1.5';
+
   return (
     <div
-      className={`relative flex items-center rounded-lg border bg-white text-right text-sm transition ${className || 'w-full border-slate-200 focus-within:border-indigo-500'}`}
+      className={`relative flex items-center rounded-lg border bg-white text-right text-sm transition ${cleanClassName || 'w-full border-slate-200 focus-within:border-indigo-500'}`}
     >
       <input
         type="text"
@@ -73,7 +104,7 @@ export function DatePicker({ value, onChange, placeholder = 'يوم/شهر/سن�
         onChange={handleChange}
         onBlur={handleBlur}
         placeholder={placeholder}
-        className="h-full w-full rounded-[inherit] border-0 bg-transparent pl-9 pr-3 py-1.5 text-right text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400"
+        className={`h-full w-full rounded-[inherit] border-0 bg-transparent pl-9 pr-3 ${pyClass} text-right text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400`}
       />
       <CalendarIcon size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
     </div>

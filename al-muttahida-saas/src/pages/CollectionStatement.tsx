@@ -315,11 +315,11 @@ export default function CollectionStatement() {
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
           {/* Filters for Due */}
           <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-end gap-4 print:hidden">
-            <label className="block flex-1 min-w-[140px]">
+            <label className="block flex-1 min-w-[155px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">من تاريخ</span>
               <DatePicker value={dueFromDate} onChange={setDueFromDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
             </label>
-            <label className="block flex-1 min-w-[140px]">
+            <label className="block flex-1 min-w-[155px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">إلى تاريخ</span>
               <DatePicker value={dueToDate} onChange={setDueToDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
             </label>

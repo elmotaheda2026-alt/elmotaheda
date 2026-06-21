@@ -770,7 +770,7 @@ export default function Invoices() {
                   className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100"
                 >
                   <Sparkles size={16} />
-                  {showQuickProduct ? 'إخفاء الصنف السريع' : 'إضافة صنف سريع من نفس الشاشة'}
+                  {showQuickProduct ? 'إخفاء صنف حسب الطلب' : 'إضافة صنف حسب الطلب'}
                 </button>
                 <span className="text-sm text-slate-500">
                   إذا الصنف غير موجود، أنشئه هنا وسيتم اعتباره حسب الطلب تلقائيًا.
@@ -780,7 +780,7 @@ export default function Invoices() {
               {showQuickProduct && (
                 <div className="mt-4 rounded-[24px] border border-dashed border-sky-300 bg-white p-4">
                   <div className="mb-4">
-                    <h4 className="font-bold text-slate-800">إدخال صنف سريع</h4>
+                    <h4 className="font-bold text-slate-800">إدخال صنف حسب الطلب</h4>
                     <p className="mt-1 text-sm text-slate-500">
                       مناسب لحالة حضور العميل وطلب صنف جديد، بدون فتح شاشة الأصناف أو المشتريات.
                     </p>
@@ -816,7 +816,7 @@ export default function Invoices() {
                       >
                         <option value="">اختر المورد</option>
                         {suppliers.map((supplier) => (
-                          <option key={supplier.id} value={supplier.id}>
+                           <option key={supplier.id} value={supplier.id}>
                             {supplier.name}
                           </option>
                         ))}
@@ -831,7 +831,7 @@ export default function Invoices() {
                       className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2 font-bold text-white hover:bg-slate-800"
                     >
                       <Plus size={16} />
-                      حفظ الصنف السريع
+                      حفظ الصنف
                     </button>
                   </div>
                 </div>

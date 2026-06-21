@@ -10,7 +10,7 @@ export function getSettings(): Setting {
         companyAddress: 'الشارع المقابل للبوابة الخلفية للمستشفى العام',
         companyPhone: '01001207474',
         companyEmail: 'info@almuttahida.com',
-        taxRate: 14,
+        taxRate: 0,
         currency: 'جنيه',
         invoicePrefix: 'INV',
         invoiceFooter: 'شكراً للتعامل معنا - شركة المتحدة',
