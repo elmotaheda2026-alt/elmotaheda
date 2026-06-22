@@ -10,7 +10,7 @@ import {
   Search,
 } from 'lucide-react';
 import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, getCustomers, getPayments, getSales, getSuppliers } from '../lib/storage';
+import { createPayment, getCustomers, getPayments, getSales, getSuppliers, syncCustomers, syncSuppliers } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -109,6 +109,9 @@ export default function Payments() {
   });
 
   const loadData = async () => {
+    if (isApiMode()) {
+      await Promise.all([syncCustomers(), syncSuppliers()]);
+    }
     const nextPayments = isApiMode() ? (await api.listPayments()).map(mapApiPayment).reverse() : getPayments().slice().reverse();
     const nextSales = isApiMode() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse();
     const nextCustomers = getCustomers();

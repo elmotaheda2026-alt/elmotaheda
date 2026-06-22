@@ -58,10 +58,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean }>('/health'),
   seedAdmin: () => request<{ message: string }>('/auth/seed-admin', { method: 'POST' }),
-  login: (email: string, password: string) =>
-    request<{ token: string; user: { id: string; name: string; role: string; permissions?: Record<string, boolean> | string[] } }>('/auth/login', {
+  login: (username: string, password: string) =>
+    request<{ token: string; user: { id: string; name: string; role: string; permissions?: Record<string, boolean> | string[]; email?: string } }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ username, password }),
     }),
   listSales: () => request<any[]>('/sales?includeItems=true'),
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),

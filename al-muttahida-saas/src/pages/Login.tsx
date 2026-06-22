@@ -5,7 +5,7 @@ import { Store, Lock, Mail, Eye, EyeOff } from 'lucide-react';
 // Helmet import removed; title set via useEffect
 
 export default function Login() {
-  const [email, setEmail] = useState('admin@almuttahida.com');
+  const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin123');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
@@ -26,10 +26,10 @@ export default function Login() {
     // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    if (await login(email, password)) {
+    if (await login(username, password)) {
       navigate('/');
     } else {
-      setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
+      setError('اسم المستخدم أو كلمة المرور غير صحيحة');
     }
     setLoading(false);
   };
@@ -64,19 +64,19 @@ export default function Login() {
             )}
 
             <div className="space-y-6">
-              {/* Email */}
+              {/* Username */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  البريد الإلكتروني
+                  اسم المستخدم
                 </label>
                 <div className="relative">
-                  <Mail size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <Lock size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 rotate-90" />
                   <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
                     className="w-full pr-10 pl-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
-                    placeholder="admin@almuttahida.com"
+                    placeholder="admin"
                     required
                   />
                 </div>
@@ -131,7 +131,7 @@ export default function Login() {
             <div className="mt-6 p-4 bg-gray-50 rounded-lg">
               <p className="text-xs text-gray-500 text-center">
                 بيانات الدخول التجريبية:<br />
-                <span className="font-mono text-indigo-600">admin@almuttahida.com</span> / <span className="font-mono text-indigo-600">admin123</span>
+                <span className="font-mono text-indigo-600">admin</span> / <span className="font-mono text-indigo-600">admin123</span>
               </p>
             </div>
           </form>

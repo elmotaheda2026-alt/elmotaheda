@@ -66,18 +66,45 @@ type SaleInput = z.infer<typeof saleSchema>;
 const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
 
 function validateSaleTotals(data: SaleInput): string | null {
-  const subtotal = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0));
-  const discount = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.discount, 0));
-  const tax = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.tax, 0));
-  const total = roundMoney(subtotal - discount + tax);
-  const itemsMismatch = data.items.some((item) => roundMoney(item.total) !== roundMoney(item.quantity * item.unitPrice - item.quantity * item.discount + item.quantity * item.tax));
+  const round = (v: number) => Number(Number(v || 0).toFixed(2));
+  // Subtotal: sum of quantity * unit price
+  const subtotal = round(
+    data.items.reduce((sum, item) => sum + round(item.quantity * item.unitPrice), 0),
+  );
+  // Discount: percentage per item
+  const discount = round(
+    data.items.reduce(
+      (sum, item) => sum + round((item.quantity * item.unitPrice * item.discount) / 100),
+      0,
+    ),
+  );
+  // Tax: percentage applied after discount per item
+  const tax = round(
+    data.items.reduce((sum, item) => {
+      const itemSubtotal = round(item.quantity * item.unitPrice);
+      const discountAmt = round((itemSubtotal * item.discount) / 100);
+      const taxable = itemSubtotal - discountAmt;
+      return sum + round((taxable * item.tax) / 100);
+    }, 0),
+  );
+  const total = round(subtotal - discount + tax);
+
+  // Verify each item's total using percentage logic
+  const itemsMismatch = data.items.some((item) => {
+    const itemSubtotal = round(item.quantity * item.unitPrice);
+    const discountAmt = round((itemSubtotal * item.discount) / 100);
+    const taxable = itemSubtotal - discountAmt;
+    const taxAmt = round((taxable * item.tax) / 100);
+    const expected = round(taxable + taxAmt);
+    return Math.abs(round(item.total) - expected) > 0.01;
+  });
 
   if (itemsMismatch) return 'Sale item totals do not match quantity, unit price, discount, and tax.';
-  if (roundMoney(data.subtotal) !== subtotal) return 'Sale subtotal does not match item subtotal.';
-  if (roundMoney(data.discount) !== discount) return 'Sale discount does not match item discounts.';
-  if (roundMoney(data.tax) !== tax) return 'Sale tax does not match item taxes.';
-  if (roundMoney(data.total) !== total) return 'Sale total does not match subtotal - discount + tax.';
-  if (roundMoney(data.paid) > total) return 'Paid amount cannot exceed sale total.';
+  if (round(data.subtotal) !== subtotal) return 'Sale subtotal does not match item subtotal.';
+  if (round(data.discount) !== discount) return 'Sale discount does not match item discounts.';
+  if (round(data.tax) !== tax) return 'Sale tax does not match item taxes.';
+  if (round(data.total) !== total) return 'Sale total does not match subtotal - discount + tax.';
+  if (round(data.paid) > total) return 'Paid amount cannot exceed sale total.';
   return null;
 }
 
@@ -299,6 +326,8 @@ router.get('/:id', requirePermission('sales:read'), async (req, res) => {
 router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
   const parsed = saleSchema.safeParse(req.body);
   if (!parsed.success) {
+    // eslint-disable-next-line no-console
+    console.error('Sale Validation Error:', JSON.stringify(parsed.error.format(), null, 2));
     return res.status(400).json({ message: 'Invalid sale payload', errors: parsed.error.format() });
   }
 

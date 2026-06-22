@@ -63,14 +63,14 @@ export const hasPermission = (user: User | null, permission: Permission): boolea
   if (!user) return false;
   if (user.role === 'admin') return true;
 
-  if (user.permissions?.[permission]) return true;
-
-  if (!user.permissions) {
-    return rolePermissions[user.role]?.includes(permission) ?? false;
+  // If user has explicit permissions object, respect its boolean values directly
+  if (user.permissions && typeof user.permissions === 'object') {
+    const customVal = user.permissions[permission];
+    if (customVal !== undefined) {
+      return customVal;
+    }
   }
 
-  return broadPermissionMap[permission]?.some((legacyPermission) => {
-    const permissions = user.permissions as Record<string, boolean> | undefined;
-    return !!permissions?.[legacyPermission];
-  }) ?? false;
+  // Fallback to role defaults
+  return rolePermissions[user.role]?.includes(permission) ?? false;
 };

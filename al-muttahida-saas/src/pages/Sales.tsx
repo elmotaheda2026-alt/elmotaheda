@@ -74,7 +74,10 @@ export default function Sales() {
   const filteredSales = useMemo(
     () =>
       sales.filter((sale) => {
-        const saleDate = sale.date.slice(0, 10);
+        const parsedDate = new Date(sale.date);
+        const saleDate = !isNaN(parsedDate.getTime())
+          ? `${parsedDate.getFullYear()}-${pad(parsedDate.getMonth() + 1)}-${pad(parsedDate.getDate())}`
+          : sale.date.slice(0, 10);
         const matchesFrom = !dateFrom || saleDate >= dateFrom;
         const matchesTo = !dateTo || saleDate <= dateTo;
 

@@ -31,7 +31,7 @@ export default function Users() {
 
   const [formData, setFormData] = useState({
     name: '',
-    email: '',
+    username: '',
     password: '',
     role: 'user' as User['role'],
     phone: '',
@@ -65,7 +65,7 @@ export default function Users() {
     setEditingUser(user);
     setFormData({
       name: user.name,
-      email: user.email,
+      username: user.username,
       password: user.password,
       role: user.role,
       phone: user.phone || '',
@@ -90,7 +90,7 @@ export default function Users() {
   const resetForm = () => {
     setFormData({
       name: '',
-      email: '',
+      username: '',
       password: '',
       role: 'user',
       phone: '',
@@ -101,7 +101,7 @@ export default function Users() {
 
   const filteredUsers = users.filter(user =>
     user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.email.toLowerCase().includes(searchTerm.toLowerCase())
+    user.username.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -142,7 +142,7 @@ export default function Users() {
             <thead className="bg-indigo-50">
               <tr>
                 <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">المستخدم</th>
-                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">البريد الإلكتروني</th>
+                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">اسم المستخدم</th>
                 <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">الدور</th>
                 <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">الحالة</th>
                 <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">الإجراءات</th>
@@ -162,7 +162,7 @@ export default function Users() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-gray-600">{user.email}</td>
+                  <td className="px-6 py-4 text-gray-600">{user.username}</td>
                   <td className="px-6 py-4">
                     <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                       user.role === 'admin' ? 'bg-purple-100 text-purple-700' :
@@ -233,11 +233,11 @@ export default function Users() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">اسم المستخدم</label>
                 <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   required
                 />
@@ -276,48 +276,100 @@ export default function Users() {
               </div>
 
               {formData.role !== 'admin' && (
-                <div className="border-t border-slate-100 pt-4 mt-4">
-                  <h4 className="font-bold text-slate-800 mb-3 text-sm flex items-center gap-2">
-                    <Shield size={16} className="text-indigo-600" />
-                    تخصيص صلاحيات المستخدم الدقيقة
-                  </h4>
-                  <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    {Object.entries({
-                      'dashboard:view': 'لوحة التحكم',
-                      'sales:read': 'عرض العملاء والموردين والمبيعات',
-                      'sales:write': 'إنشاء وتعديل العملاء والمبيعات',
-                      'sales:reschedule': 'إعادة جدولة التعاقدات',
-                      'payments:read': 'عرض الخزينة والتحصيل',
-                      'payments:write': 'تسجيل المدفوعات',
-                      'payments:reverse': 'عكس المدفوعات',
-                      'reports:read': 'التقارير المالية',
-                      'closing:write': 'إقفال الفترات',
-                      'users:manage': 'إدارة المستخدمين',
-                      'inventory:manage': 'إدارة المخزون والأصناف',
-                      'purchases:manage': 'المشتريات',
-                      'settings:manage': 'إعدادات النظام',
-                      'shareholders:manage': 'حسابات الشركاء',
-                      'notifications:read': 'التنبيهات'
-                    }).map(([key, label]) => (
-                      <label key={key} className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={formData.permissions[key as keyof UserPermissions]}
-                          onChange={(e) => setFormData({
-                            ...formData,
-                            permissions: {
-                              ...formData.permissions,
-                              [key]: e.target.checked
-                            }
-                          })}
-                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        <span className="text-sm font-medium text-slate-700">{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
+  <div className="border-t border-slate-100 pt-4 mt-4">
+    <h4 className="font-bold text-slate-800 mb-3 text-sm flex items-center gap-2">
+      <Shield size={16} className="text-indigo-600" />
+      تخصيص صلاحيات المستخدم الدقيقة
+    </h4>
+    <div className="grid grid-cols-1 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
+      {/* المبيعات والعملاء */}
+      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+        <input
+          type="checkbox"
+          checked={formData.permissions['sales:read'] && formData.permissions['sales:write'] && formData.permissions['sales:reschedule']}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            setFormData({
+              ...formData,
+              permissions: {
+                ...formData.permissions,
+                'sales:read': checked,
+                'sales:write': checked,
+                'sales:reschedule': checked,
+                'inventory:manage': checked,
+                'purchases:manage': checked,
+              },
+            });
+          }}
+          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+        />
+        <span className="text-sm font-medium text-slate-700">المبيعات والعملاء</span>
+      </label>
+      {/* الخزينة والتحصيل */}
+      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+        <input
+          type="checkbox"
+          checked={formData.permissions['payments:read'] && formData.permissions['payments:write'] && formData.permissions['payments:reverse']}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            setFormData({
+              ...formData,
+              permissions: {
+                ...formData.permissions,
+                'payments:read': checked,
+                'payments:write': checked,
+                'payments:reverse': checked,
+                'closing:write': checked,
+              },
+            });
+          }}
+          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+        />
+        <span className="text-sm font-medium text-slate-700">الخزينة والتحصيل</span>
+      </label>
+      {/* التقارير والمالية */}
+      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+        <input
+          type="checkbox"
+          checked={formData.permissions['reports:read'] && formData.permissions['closing:write']}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            setFormData({
+              ...formData,
+              permissions: {
+                ...formData.permissions,
+                'reports:read': checked,
+                'closing:write': checked,
+              },
+            });
+          }}
+          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+        />
+        <span className="text-sm font-medium text-slate-700">التقارير والمالية</span>
+      </label>
+      {/* الإدارة */}
+      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+        <input
+          type="checkbox"
+          checked={formData.permissions['users:manage']}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            const allPermissions = Object.keys(formData.permissions).reduce((acc, key) => {
+              acc[key as keyof typeof formData.permissions] = checked;
+              return acc;
+            }, {} as typeof formData.permissions);
+            setFormData({
+              ...formData,
+              permissions: allPermissions,
+            });
+          }}
+          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+        />
+        <span className="text-sm font-medium text-slate-700">الإدارة</span>
+      </label>
+    </div>
+  </div>
+)}
 
               </div>
               

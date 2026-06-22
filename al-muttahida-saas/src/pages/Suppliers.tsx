@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, Phone, MapPin, DollarSign, Truck } from 'lucide-react';
 import { Supplier } from '../types';
-import { getSuppliers, createSupplier, updateSupplier, deleteSupplier } from '../lib/storage';
+import { getSuppliers, createSupplier, updateSupplier, deleteSupplier, syncSuppliers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -25,7 +25,8 @@ export default function Suppliers() {
   }, []);
 
   const loadSuppliers = async () => {
-    const data = await getSuppliers();
+    await syncSuppliers();
+    const data = getSuppliers();
     setSuppliers(data);
   };
 

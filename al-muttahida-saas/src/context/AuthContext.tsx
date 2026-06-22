@@ -6,7 +6,7 @@ import { api, clearApiToken, getApiUser, isApiMode, setApiSession } from '../lib
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   settings: Setting;
   updateSettings: (settings: Setting) => void;
@@ -28,9 +28,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(db.getCurrentUser());
   }, []);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (username: string, password: string): Promise<boolean> => {
     try {
-      const { token, user: apiUser } = await api.login(email, password);
+      const { token, user: apiUser } = await api.login(username, password);
       const permissions = Array.isArray(apiUser.permissions)
         ? apiUser.permissions.reduce<UserPermissions>((acc, permission) => {
             acc[permission as Permission] = true;
@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const mappedUser: User = {
         id: apiUser.id,
         name: apiUser.name,
-        email,
+        username,
         password: '',
         role: apiUser.role as User['role'],
         permissions,
@@ -55,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('API login failed, attempting local fallback', e);
       // Ensure database is initialized for local fallback
       db.initializeDatabase();
-      const loggedInUser = db.login(email, password);
+      const loggedInUser = db.login(username, password);
       if (loggedInUser) {
         setUser(loggedInUser);
         return true;

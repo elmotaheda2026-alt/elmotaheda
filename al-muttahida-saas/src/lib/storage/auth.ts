@@ -2,9 +2,9 @@ import { User } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
 
 // Auth Functions
-export function login(email: string, password: string): User | null {
+export function login(username: string, password: string): User | null {
   const users = getStorage<User>(DB_KEYS.USERS);
-  const user = users.find((u) => u.email === email && u.password === password && u.isActive);
+  const user = users.find((u) => u.username === username && u.password === password && u.isActive);
   if (user) {
     user.lastLogin = new Date().toISOString();
     setStorage(DB_KEYS.USERS, users);

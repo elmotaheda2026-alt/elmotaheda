@@ -20,7 +20,7 @@ export type UserPermissions = Partial<Record<Permission, boolean>>;
 export interface User {
   id: string;
   name: string;
-  email: string;
+  username: string;
   password: string;
   role: 'admin' | 'manager' | 'accountant' | 'user' | 'collector' | 'reviewer' | 'finance_manager';
   permissions?: UserPermissions;

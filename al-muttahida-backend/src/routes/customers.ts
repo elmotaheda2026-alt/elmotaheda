@@ -69,6 +69,8 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
 router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
   const parsed = customerSchema.safeParse(req.body);
   if (!parsed.success) {
+    // eslint-disable-next-line no-console
+    console.error('Customer Validation Error:', JSON.stringify(parsed.error.format(), null, 2));
     return res.status(400).json({ message: 'Invalid customer payload', errors: parsed.error.format() });
   }
 

@@ -134,6 +134,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         <nav className="flex-1 overflow-y-auto px-5 py-3 no-scrollbar">
           <div className="space-y-2">
             {menuGroups.map((group) => {
+              // If group is 'التقارير والمالية' and user lacks 'reports:read', hide the entire group
+              if (group.title === 'التقارير والمالية' && !hasPermission('reports:read')) {
+                return null;
+              }
+
               const allowedItems = group.items.filter(item => hasPermission(item.permission));
               
               if (allowedItems.length === 0) return null;

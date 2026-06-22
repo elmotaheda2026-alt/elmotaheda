@@ -47,7 +47,7 @@ const defaultPermissions = {
 
 const userSchema = z.object({
   name: z.string().min(1),
-  email: z.string().email(),
+  username: z.string().min(3).regex(/^[A-Za-z0-9_]+$/),
   password: z.string().min(6).optional().or(z.literal('')),
   role: z.enum(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']),
   phone: z.string().optional().nullable(),
@@ -59,11 +59,11 @@ const userSchema = z.object({
 router.get('/', requirePermission('users:manage'), async (_req, res) => {
   try {
     const db = await dbPromise;
-    const rows = await db.all('SELECT id, name, email, role, is_active, phone, permissions, created_at FROM users');
+    const rows = await db.all('SELECT id, name, username, role, is_active, phone, permissions, created_at FROM users');
     const mapped = rows.map((row: any) => ({
       id: row.id,
       name: row.name,
-      email: row.email,
+      username: row.username,
       role: row.role,
       isActive: row.is_active === 1 || row.is_active === true,
       phone: row.phone || '',
@@ -93,18 +93,18 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
 
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM users WHERE email = ?', data.email);
+    const existing = await db.get('SELECT id FROM users WHERE username = ?', data.username);
     if (existing) {
-      return res.status(409).json({ message: 'البريد الإلكتروني مسجل بالفعل لمستخدم آخر' });
+      return res.status(409).json({ message: 'اسم المستخدم مسجل بالفعل لمستخدم آخر' });
     }
 
     const hashedPassword = await hashPassword(data.password);
     await db.run(
-      `INSERT INTO users (id, name, email, password_hash, role, is_active, phone, permissions, created_at)
+      `INSERT INTO users (id, name, username, password_hash, role, is_active, phone, permissions, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       data.name,
-      data.email,
+      data.username,
       hashedPassword,
       data.role,
       data.isActive ? 1 : 0,
@@ -151,10 +151,10 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
 
     await db.run(
       `UPDATE users
-       SET name = ?, email = ?, password_hash = ?, role = ?, is_active = ?, phone = ?, permissions = ?
+       SET name = ?, username = ?, password_hash = ?, role = ?, is_active = ?, phone = ?, permissions = ?
        WHERE id = ?`,
       data.name,
-      data.email,
+      data.username,
       hashedPassword,
       data.role,
       data.isActive ? 1 : 0,
@@ -163,14 +163,14 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
       req.params.id,
     );
 
-    await audit('user.update', 'user', req.params.id, req.user?.name || 'system', {
-      name: data.name,
-      email: data.email,
-      role: data.role,
-      isActive: data.isActive,
-      phone: data.phone,
-      permissions: data.permissions,
-    });
+      await audit('user.update', 'user', req.params.id, req.user?.name || 'system', {
+        name: data.name,
+        username: data.username,
+        role: data.role,
+        isActive: data.isActive,
+        phone: data.phone,
+        permissions: data.permissions,
+      });
 
     return res.json({ message: 'User updated successfully' });
   } catch (error: any) {

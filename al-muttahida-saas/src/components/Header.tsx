@@ -132,10 +132,10 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
 
                 <div className="space-y-3 p-4">
                   <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white p-3">
-                    <Mail size={16} className="text-slate-400" />
+                    <User size={16} className="text-slate-400" />
                     <div>
-                      <p className="text-xs text-slate-500">البريد الإلكتروني</p>
-                      <p className="text-sm font-semibold text-slate-800">{user?.email || '-'}</p>
+                      <p className="text-xs text-slate-500">اسم المستخدم</p>
+                      <p className="text-sm font-semibold text-slate-800">{user?.username || '-'}</p>
                     </div>
                   </div>
 
