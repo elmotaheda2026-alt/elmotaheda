@@ -40,6 +40,7 @@ function AppRoutes() {
         <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
         <Route path="products" element={<ProtectedRoute permission="inventory:manage"><Products /></ProtectedRoute>} />
         <Route path="inventory" element={<ProtectedRoute permission="inventory:manage"><Inventory /></ProtectedRoute>} />
+        <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
         <Route path="sales" element={<ProtectedRoute permission="sales:read"><Sales /></ProtectedRoute>} />
         <Route path="purchases" element={<ProtectedRoute permission="purchases:manage"><Purchases /></ProtectedRoute>} />
         <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
