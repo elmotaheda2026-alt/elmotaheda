@@ -46,6 +46,7 @@ const menuGroups: {
       { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales:read' },
       { icon: Truck, label: 'شركاء التوريد', path: '/suppliers', permission: 'sales:read' },
       { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps', permission: 'sales:read' },
+      { icon: Package, label: 'دليل الأصناف / المخزون', path: '/products-inventory', permission: 'inventory:manage' },
     ],
   },
   {
@@ -61,20 +62,11 @@ const menuGroups: {
     title: 'التقارير والمالية',
     defaultOpen: false,
     items: [
-      { icon: LayoutDashboard, label: 'الرئيسية', path: '/', permission: 'dashboard:view' },
+      
       { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports:read' },
       { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
       { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
       { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
-    ],
-  },
-  {
-    title: 'المخزون والمشتريات',
-    defaultOpen: false,
-    items: [
-      { icon: Package, label: 'دليل الأصناف', path: '/products', permission: 'inventory:manage' },
-      { icon: ShoppingCart, label: 'أوامر التوريد', path: '/purchases', permission: 'purchases:manage' },
-      { icon: Warehouse, label: 'إدارة المخزون', path: '/inventory', permission: 'inventory:manage' },
     ],
   },
   {
@@ -92,7 +84,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, settings } = useAuth();
-  
+
+
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
     if (!permission) return true;

@@ -22,6 +22,7 @@ import Notifications from './pages/Notifications';
 import SalesReps from './pages/SalesReps';
 import CollectionStatement from './pages/CollectionStatement';
 import Shareholders from './pages/Shareholders';
+import ProductsInventory from './pages/ProductsInventory';
 
 import ProtectedRoute from './components/ProtectedRoute';
 
