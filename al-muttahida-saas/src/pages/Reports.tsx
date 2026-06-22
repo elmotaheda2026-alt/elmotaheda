@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { TrendingUp, DollarSign, ShoppingBag, ShoppingCart, PieChart as PieChartIcon, Users, Activity, Award, Gavel } from 'lucide-react';
-import { getSales, getPurchases, getExpenses, getSettings, getCustomers, getProducts } from '../lib/storage';
+import { TrendingUp, DollarSign, ShoppingBag, ShoppingCart, PieChart as PieChartIcon, Users, Activity, Award, Gavel, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { getSales, getPurchases, getExpenses, getSettings, getCustomers, getProducts, getAgingReport, getCollectionRateReport, getReceivablesReconciliationReport } from '../lib/storage';
 import { DatePicker } from '../components/DatePicker';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { calculateCostOfGoodsSold, calculateNetProfit } from '../lib/accounting';
 import { formatWholeCurrency } from '../lib/utils';
@@ -18,6 +18,8 @@ const TypedPieChart = PieChart as any;
 const TypedPie = Pie as any;
 const TypedCell = Cell as any;
 const TypedLegend = Legend as any;
+const TypedBarChart = BarChart as any;
+const TypedBar = Bar as any;
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#3b82f6', '#14b8a6'];
 
@@ -51,6 +53,36 @@ export default function Reports() {
   const totalExpenses = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
   const costOfGoodsSold = calculateCostOfGoodsSold(filteredSales, allProducts);
   const netProfit = calculateNetProfit(filteredSales, allProducts, filteredExpenses);
+
+  // Installments & Collection rates
+  const collectionReport = useMemo(() => {
+    return getCollectionRateReport(startDate, endDate);
+  }, [startDate, endDate]);
+
+  // Receivables Reconciliation
+  const reconciliation = useMemo(() => {
+    return getReceivablesReconciliationReport();
+  }, []);
+
+  // Aging Buckets Data
+  const agingData = useMemo(() => {
+    const report = getAgingReport();
+    const buckets = {
+      '0-30': 0,
+      '31-60': 0,
+      '61-90': 0,
+      '90+': 0
+    };
+    report.forEach(item => {
+      buckets[item.bucket as keyof typeof buckets] += item.remaining;
+    });
+    return [
+      { name: '0-30 يوم', المبالغ: Math.round(buckets['0-30']) },
+      { name: '31-60 يوم', المبالغ: Math.round(buckets['31-60']) },
+      { name: '61-90 يوم', المبالغ: Math.round(buckets['61-90']) },
+      { name: '90+ يوم', المبالغ: Math.round(buckets['90+']) },
+    ];
+  }, []);
 
   // Top Products
   const topProducts = useMemo(() => {
@@ -91,11 +123,10 @@ export default function Reports() {
     return Array.from(expMap.values()).sort((a, b) => b.value - a.value).slice(0, 5);
   }, [filteredExpenses]);
 
-  // Daily Trend Chart Data (Last 7 Days or Period)
+  // Daily Trend Chart Data
   const trendData = useMemo(() => {
     const datesMap = new Map();
     
-    // Just map the days from filtered items
     filteredSales.forEach(sale => {
         const d = formatDateDisplay(sale.date);
         const current = datesMap.get(d) || { date: d, المبيعات: 0, المشتريات: 0 };
@@ -110,9 +141,6 @@ export default function Reports() {
         datesMap.set(d, current);
     });
 
-    // Sort by date ascending roughly (since keys are text, it might not be perfect chronological, 
-    // but works fine for a simple dashboard). 
-    // For a real production app we'd sort by parsed Date.
     return Array.from(datesMap.values());
   }, [filteredSales, filteredPurchases]);
 
@@ -120,11 +148,11 @@ export default function Reports() {
 
   return (
     <div className="space-y-6 pb-10">
-      {/* Header & Compact Date Filter */}
+      {/* Header & Date Filter */}
       <div className="flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">التقارير وذكاء الأعمال (BI)</h2>
-          <p className="text-slate-500 text-sm mt-1">تحليل الأداء التجاري والمبيعات والمشتريات</p>
+          <p className="text-slate-500 text-sm mt-1">تحليل الأداء المالي، المبيعات الآجلة، الديون، ومعدلات التحصيل اللحظية</p>
         </div>
         
         <div className="flex flex-wrap items-end gap-4 bg-indigo-50/50 p-2 rounded-xl border border-indigo-100/50">
@@ -146,62 +174,94 @@ export default function Reports() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
-          <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center shrink-0">
-            <ShoppingBag size={28} className="text-emerald-600" />
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
+            <ShoppingBag size={24} className="text-indigo-600" />
           </div>
           <div>
-            <p className="text-slate-500 text-sm font-medium">إجمالي المبيعات</p>
-            <p className="text-2xl font-black text-slate-800">{formatCurrency(totalSales)}</p>
-            <p className="text-xs text-slate-400 mt-1">{filteredSales.length} فاتورة مسجلة</p>
+            <p className="text-slate-500 text-xs font-medium">إجمالي المبيعات الآجلة</p>
+            <p className="text-xl font-black text-slate-800">{formatCurrency(totalSales)}</p>
+            <p className="text-xs text-slate-400 mt-1">{filteredSales.length} تعاقد مسجل</p>
           </div>
         </div>
         
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
-          <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center shrink-0">
-            <ShoppingCart size={28} className="text-amber-600" />
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center shrink-0">
+            <TrendingUp size={24} className="text-emerald-600" />
           </div>
           <div>
-            <p className="text-slate-500 text-sm font-medium">إجمالي المشتريات</p>
-            <p className="text-2xl font-black text-slate-800">{formatCurrency(totalPurchases)}</p>
-            <p className="text-xs text-slate-400 mt-1">{filteredPurchases.length} فاتورة مسجلة</p>
+            <p className="text-slate-500 text-xs font-medium">المحصل الفعلي</p>
+            <p className="text-xl font-black text-emerald-600">{formatCurrency(collectionReport.collected)}</p>
+            <p className="text-xs text-slate-400 mt-1">مدفوعات داخل الخزينة</p>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
-          <div className="w-14 h-14 bg-rose-100 rounded-2xl flex items-center justify-center shrink-0">
-            <DollarSign size={28} className="text-rose-600" />
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 bg-sky-100 rounded-xl flex items-center justify-center shrink-0">
+            <PieChartIcon size={24} className="text-sky-600" />
           </div>
           <div>
-            <p className="text-slate-500 text-sm font-medium">إجمالي المصروفات</p>
-            <p className="text-2xl font-black text-slate-800">{formatCurrency(totalExpenses)}</p>
-            <p className="text-xs text-slate-400 mt-1">{filteredExpenses.length} عملية صرف</p>
+            <p className="text-slate-500 text-xs font-medium">معدل التحصيل</p>
+            <p className="text-xl font-black text-sky-600">{collectionReport.collectionRate}%</p>
+            <p className="text-xs text-slate-400 mt-1">من المبيعات المستهدفة</p>
           </div>
         </div>
 
-        <div className={`rounded-2xl p-6 shadow-sm border flex items-center gap-4 hover:shadow-md transition-shadow ${netProfit >= 0 ? 'bg-indigo-50 border-indigo-100' : 'bg-rose-50 border-rose-100'}`}>
-          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 ${netProfit >= 0 ? 'bg-indigo-600' : 'bg-rose-600'}`}>
-            <TrendingUp size={28} className="text-white" />
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 bg-rose-100 rounded-xl flex items-center justify-center shrink-0">
+            <DollarSign size={24} className="text-rose-600" />
           </div>
           <div>
-            <p className={`text-sm font-bold ${netProfit >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>صافي الأرباح (عن الفترة)</p>
-            <p className={`text-2xl font-black ${netProfit >= 0 ? 'text-indigo-900' : 'text-rose-900'}`}>{formatCurrency(Math.abs(netProfit))}</p>
+            <p className="text-slate-500 text-xs font-medium">إجمالي المصروفات</p>
+            <p className="text-xl font-black text-slate-800">{formatCurrency(totalExpenses)}</p>
+            <p className="text-xs text-slate-400 mt-1">{filteredExpenses.length} إيصال مصروفات</p>
           </div>
         </div>
 
-        <div className="bg-rose-50 rounded-2xl p-6 shadow-sm border border-rose-200 flex items-center gap-4 hover:shadow-md transition-shadow md:col-span-2 lg:col-span-1">
-          <div className="w-14 h-14 bg-rose-200 rounded-2xl flex items-center justify-center shrink-0">
-            <Gavel size={28} className="text-rose-700" />
+        <div className="bg-rose-50 rounded-2xl p-5 shadow-sm border border-rose-100 flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 bg-rose-200 rounded-xl flex items-center justify-center shrink-0">
+            <Gavel size={24} className="text-rose-700" />
           </div>
           <div>
-            <p className="text-rose-700 text-sm font-bold">نزاعات قانونية</p>
-            <p className="text-2xl font-black text-rose-900">{suedCustomersCount}</p>
-            <p className="text-xs text-rose-600 mt-1">عميل محال للقضاء</p>
+            <p className="text-rose-700 text-xs font-bold">نزاعات قانونية</p>
+            <p className="text-xl font-black text-rose-900">{suedCustomersCount}</p>
+            <p className="text-xs text-rose-600 mt-1">عملاء محالين للقضاء</p>
           </div>
         </div>
       </div>
 
-      {/* Main Charts Row */}
+      {/* Reconciliation Alert Banner */}
+      {reconciliation.hasAlert ? (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm text-right">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-100 text-amber-800 rounded-xl shrink-0">
+              <AlertTriangle size={20} />
+            </div>
+            <div>
+              <h4 className="font-bold text-amber-900 text-sm sm:text-base">تنبيه مطابقة حسابات المدينين!</h4>
+              <p className="text-xs sm:text-sm text-amber-700 mt-0.5">
+                هناك تفاوت مالي في المديونيات بمقدار <span className="font-bold">{formatCurrency(Math.abs(reconciliation.variance))}</span>. يرجى مراجعة عمليات ترحيل الفواتير أو الدفعات الملغاة.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-emerald-50/70 border border-emerald-100 rounded-2xl p-4 shadow-sm text-right">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl shrink-0">
+              <CheckCircle2 size={20} className="text-emerald-600" />
+            </div>
+            <div>
+              <h4 className="font-bold text-emerald-950 text-sm sm:text-base">مطابقة الحسابات سليمة</h4>
+              <p className="text-xs sm:text-sm text-emerald-700 mt-0.5">
+                تطابق الحسابات 100% بين المبيعات الآجلة والمبالغ المحصلة والذمم المتبقية. الفروقات المالية: <span className="font-bold">0 جنيه</span>.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Trend Area Chart */}
         <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
@@ -240,13 +300,44 @@ export default function Reports() {
           </div>
         </div>
 
-        {/* Expenses Pie Chart */}
+        {/* Receivables Aging Bar Chart */}
         <div className="lg:col-span-1 bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col">
-          <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">
+          <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
             <PieChartIcon size={20} className="text-rose-500" />
-            تحليل المصروفات
+            أعمار ديون العملاء المتأخرة (Receivables Aging)
           </h3>
           <div className="flex-1 min-h-[250px]" dir="ltr">
+            {agingData.some(b => b.المبالغ > 0) ? (
+              <TypedResponsiveContainer width="100%" height="100%">
+                <TypedBarChart data={agingData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <TypedCartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <TypedXAxis dataKey="name" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} dy={5} />
+                  <TypedYAxis tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} dx={-10} />
+                  <TypedTooltip 
+                    formatter={(val: number) => formatCurrency(val)} 
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  />
+                  <TypedBar dataKey="المبالغ" fill="#f43f5e" radius={[6, 6, 0, 0]} barSize={32} />
+                </TypedBarChart>
+              </TypedResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-slate-400 text-center">
+                لا توجد مديونيات متأخرة حالياً. الحسابات نظيفة! 🎉
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Row 3: Lists & Expenses Pie Chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Expenses Pie Chart */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col">
+          <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
+            <PieChartIcon size={20} className="text-amber-500" />
+            تحليل المصروفات التشغيلية
+          </h3>
+          <div className="flex-1 min-h-[220px]" dir="ltr">
              {expenseBreakdown.length > 0 ? (
                 <TypedResponsiveContainer width="100%" height="100%">
                   <TypedPieChart>
@@ -254,9 +345,9 @@ export default function Reports() {
                       data={expenseBreakdown}
                       cx="50%"
                       cy="50%"
-                      innerRadius={60}
-                      outerRadius={80}
-                      paddingAngle={5}
+                      innerRadius={55}
+                      outerRadius={75}
+                      paddingAngle={4}
                       dataKey="value"
                       nameKey="name"
                     >
@@ -265,38 +356,35 @@ export default function Reports() {
                       ))}
                     </TypedPie>
                     <TypedTooltip formatter={(val: number) => formatCurrency(val)} />
-                    <TypedLegend verticalAlign="bottom" height={36} />
+                    <TypedLegend verticalAlign="bottom" height={36} iconType="circle" />
                   </TypedPieChart>
                 </TypedResponsiveContainer>
              ) : (
-                 <div className="h-full flex items-center justify-center text-slate-400">لا توجد مصروفات مسجلة</div>
+                  <div className="h-full flex items-center justify-center text-slate-400">لا توجد مصروفات مسجلة</div>
              )}
           </div>
         </div>
-      </div>
 
-      {/* Top Lists Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Products */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
           <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-            <Award size={20} className="text-amber-500" />
+            <Award size={20} className="text-indigo-600" />
             أفضل المنتجات مبيعاً (Top Products)
           </h3>
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             {topProducts.length > 0 ? topProducts.map((prod, idx) => (
-              <div key={idx} className="flex items-center justify-between p-4 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors">
+              <div key={idx} className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center font-bold text-lg">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm">
                     {idx + 1}
                   </div>
                   <div>
-                    <h4 className="font-bold text-slate-800">{prod.name}</h4>
+                    <h4 className="font-bold text-slate-800 text-sm">{prod.name}</h4>
                     <p className="text-xs text-slate-500">تم بيع {prod.qty} وحدة</p>
                   </div>
                 </div>
                 <div className="text-left">
-                  <p className="font-black text-emerald-600">{formatCurrency(prod.revenue)}</p>
+                  <p className="font-black text-slate-800 text-sm">{formatCurrency(prod.revenue)}</p>
                 </div>
               </div>
             )) : <p className="text-center text-slate-400 py-4">لا توجد مبيعات</p>}
@@ -306,23 +394,23 @@ export default function Reports() {
         {/* Top Customers */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
           <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-            <Users size={20} className="text-blue-500" />
+            <Users size={20} className="text-sky-500" />
             أفضل العملاء (Top Customers)
           </h3>
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             {topCustomers.length > 0 ? topCustomers.map((cust, idx) => (
-              <div key={idx} className="flex items-center justify-between p-4 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors">
+              <div key={idx} className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-lg">
+                  <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-600 flex items-center justify-center font-bold text-sm">
                     {idx + 1}
                   </div>
                   <div>
-                    <h4 className="font-bold text-slate-800">{cust.name}</h4>
+                    <h4 className="font-bold text-slate-800 text-sm">{cust.name}</h4>
                     <p className="text-xs text-slate-500">{cust.count} فاتورة شراء</p>
                   </div>
                 </div>
                 <div className="text-left">
-                  <p className="font-black text-emerald-600">{formatCurrency(cust.revenue)}</p>
+                  <p className="font-black text-slate-800 text-sm">{formatCurrency(cust.revenue)}</p>
                 </div>
               </div>
             )) : <p className="text-center text-slate-400 py-4">لا توجد مبيعات للعملاء</p>}

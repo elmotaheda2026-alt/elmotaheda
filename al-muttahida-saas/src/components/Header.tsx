@@ -44,7 +44,6 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   }, []);
 
   const handleLogout = () => {
-    if (!confirm('هل تريد تسجيل الخروج؟')) return;
     logout();
     setShowUserMenu(false);
     navigate('/login');

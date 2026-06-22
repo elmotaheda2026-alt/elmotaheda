@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatWholeCurrency(amount: number, currency: string): string {
-  return `${new Intl.NumberFormat('ar-EG', {
+  return `${new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
     minimumFractionDigits: 0,
   }).format(Math.round(Number(amount || 0)))} ${currency}`;
