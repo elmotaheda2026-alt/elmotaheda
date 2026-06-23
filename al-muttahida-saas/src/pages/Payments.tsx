@@ -10,7 +10,7 @@ import {
   Search,
 } from 'lucide-react';
 import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, getCustomers, getPayments, getSales, getSuppliers, syncCustomers, syncSuppliers } from '../lib/storage';
+import { createPayment, getCustomers, getPayments, getSales, getSuppliers, syncCustomers, syncPayments, syncSales, syncSuppliers } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -67,53 +67,12 @@ export default function Payments() {
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const mapApiSale = (row: any): Sale => ({
-    id: row.id,
-    invoiceNumber: row.invoice_number,
-    customerId: row.customer_id,
-    customerName: row.customer_name,
-    items: [],
-    subtotal: Number(row.total || 0),
-    discount: 0,
-    tax: 0,
-    total: Number(row.total || 0),
-    paid: Number(row.paid || 0),
-    remaining: Number(row.remaining || 0),
-    status: row.status,
-    date: row.date,
-    notes: undefined,
-    createdBy: row.created_by || 'system',
-    createdAt: row.created_at || new Date().toISOString(),
-    version: row.version,
-    locked: !!row.locked,
-    lastEditedBy: row.last_edited_by || undefined,
-    lastEditedAt: row.last_edited_at || undefined,
-  });
-
-  const mapApiPayment = (row: any): Payment => ({
-    id: row.id,
-    type: row.type,
-    amount: Number(row.amount || 0),
-    referenceId: row.sale_id || row.id,
-    referenceType: row.sale_id ? 'sale' : 'other',
-    description: row.description || '',
-    date: row.date,
-    createdBy: row.created_by || 'system',
-    createdAt: row.created_at || new Date().toISOString(),
-    saleId: row.sale_id || undefined,
-    installmentId: row.installment_id || undefined,
-    invoiceNumber: undefined,
-    receiptNumber: row.receipt_number || undefined,
-    status: row.status || 'posted',
-    channel: row.channel || 'cash',
-  });
-
   const loadData = async () => {
     if (isApiMode()) {
-      await Promise.all([syncCustomers(), syncSuppliers()]);
+      await Promise.all([syncCustomers(), syncSuppliers(), syncPayments(), syncSales()]);
     }
-    const nextPayments = isApiMode() ? (await api.listPayments()).map(mapApiPayment).reverse() : getPayments().slice().reverse();
-    const nextSales = isApiMode() ? (await api.listSales()).map(mapApiSale).reverse() : getSales().slice().reverse();
+    const nextPayments = getPayments().slice().reverse();
+    const nextSales = getSales().slice().reverse();
     const nextCustomers = getCustomers();
     const nextSuppliers = getSuppliers();
 
@@ -477,6 +436,7 @@ export default function Payments() {
     if (isApiMode()) {
       await api.createPayment({
         type: 'out',
+        supplierId: outgoingForm.supplierId,
         amount: outgoingForm.amount,
         description: outgoingForm.description.trim() || 'دفعة للمورد',
         date: outgoingForm.date,

@@ -183,7 +183,7 @@ export function initializeDatabase(): void {
     const adminUser: User = {
       id: generateId(),
       name: 'مدير النظام',
-      email: 'admin@almuttahida.com',
+      username: 'admin',
       password: 'admin123',
       role: 'admin',
       phone: '01001207474',

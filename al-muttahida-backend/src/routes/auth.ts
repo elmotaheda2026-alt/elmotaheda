@@ -73,7 +73,7 @@ router.post('/seed-admin', async (_req, res) => {
     ` VALUES (?, ?, ?, ?, ?, 1, ?)`,
     id,
     'مدير النظام',
-    data.username,
+    'admin',
     hashed,
     'admin',
     new Date().toISOString(),

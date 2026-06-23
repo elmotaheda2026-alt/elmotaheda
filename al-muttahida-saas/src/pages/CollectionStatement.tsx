@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
-import { getCustomers, getSales, getSalesReps } from '../lib/storage';
+import { getCustomers, getSales, getSalesReps, syncCustomers, syncSales, syncSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
+import { isApiMode } from '../lib/apiClient';
 
 interface CollectionInvoiceView {
   saleId: string;
@@ -69,7 +70,8 @@ export default function CollectionStatement() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [activeTab, setActiveTab] = useState<'due' | 'invoices' | 'legal'>('due');
   
-  const [searchTerm, setSearchTerm] = useState('');
+  const [invoiceSearchTerm, setInvoiceSearchTerm] = useState('');
+  const [dueSearchTerm, setDueSearchTerm] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState('all');
   const [showOnlyDue, setShowOnlyDue] = useState(true);
   const [hideSuedCustomers, setHideSuedCustomers] = useState(false);
@@ -81,9 +83,17 @@ export default function CollectionStatement() {
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
 
   useEffect(() => {
-    setCustomers(getCustomers());
-    setSales(getSales().filter((sale) => sale.status !== 'cancelled').slice().reverse());
-    setSalesReps(getSalesReps());
+    const loadData = async () => {
+      if (isApiMode()) {
+        await Promise.allSettled([syncCustomers(), syncSales(), syncSalesReps()]);
+      }
+
+      setCustomers(getCustomers());
+      setSales(getSales().filter((sale) => sale.status !== 'cancelled').slice().reverse());
+      setSalesReps(getSalesReps());
+    };
+
+    void loadData();
   }, []);
 
   const customerMap = useMemo(() => {
@@ -154,7 +164,7 @@ export default function CollectionStatement() {
 
       if (showOnlyDue && row.remaining <= 0) return false;
 
-      const search = searchTerm.trim().toLowerCase();
+      const search = invoiceSearchTerm.trim().toLowerCase();
       if (!search) return true;
 
       return (
@@ -164,7 +174,7 @@ export default function CollectionStatement() {
         row.customerAddress.toLowerCase().includes(search)
       );
     });
-  }, [rows, searchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
+  }, [rows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
 
   const dueRows = useMemo<DueCustomerRow[]>(() => {
     if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) return [];
@@ -200,13 +210,23 @@ export default function CollectionStatement() {
     });
 
     let finalResult = result.sort((a, b) => (a.dueDate > b.dueDate ? 1 : -1));
+    const search = dueSearchTerm.trim().toLowerCase();
+    if (search) {
+      finalResult = finalResult.filter((row) =>
+        row.customerName.toLowerCase().includes(search) ||
+        row.invoiceNumber.toLowerCase().includes(search) ||
+        row.customerPhone.includes(search) ||
+        row.customerAddress.toLowerCase().includes(search) ||
+        row.installmentLabel.toLowerCase().includes(search),
+      );
+    }
     
     if (selectedSalesRepId !== 'all') {
       finalResult = finalResult.filter(r => r.salesRepId === selectedSalesRepId);
     }
     
     return finalResult;
-  }, [dueFromDate, dueToDate, rows, selectedSalesRepId, customerMap]);
+  }, [dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap]);
 
   const groupedDueRows = useMemo(() => {
     const groupsMap = new Map<string, DueCustomerRow[]>();
@@ -324,6 +344,18 @@ export default function CollectionStatement() {
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
           {/* Filters for Due */}
           <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-end gap-4 print:hidden">
+            <label className="block flex-1 min-w-[220px]">
+              <span className="mb-1 block text-xs font-bold text-slate-500">ÈÍË</span>
+              <div className="relative">
+                <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={dueSearchTerm}
+                  onChange={(e) => setDueSearchTerm(e.target.value)}
+                  className="input-ui pr-10 h-10 text-sm"
+                  placeholder="ÈÍË ÈÇÓã ÇáÚãíá¡ ÑÞã ÇáÝÇÊæÑÉ¡ ÇáåÇÊÝ..."
+                />
+              </div>
+            </label>
             <label className="block flex-1 min-w-[155px]">
               <span className="mb-1 block text-xs font-bold text-slate-500">Ù…Ù† ØªØ§Ø±ÙŠØ®</span>
               <DatePicker value={dueFromDate} onChange={setDueFromDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
@@ -519,8 +551,8 @@ export default function CollectionStatement() {
             <div className="relative w-full md:w-80">
               <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                value={invoiceSearchTerm}
+                onChange={(e) => setInvoiceSearchTerm(e.target.value)}
                 className="input-ui pr-10 h-10 text-sm"
                 placeholder="Ø¨Ø­Ø« Ø¨Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø©ØŒ Ø§Ø³Ù…ØŒ Ø±Ù‚Ù…ØŒ Ø£Ùˆ Ø¹Ù†ÙˆØ§Ù†..."
               />

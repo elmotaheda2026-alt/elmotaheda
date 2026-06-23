@@ -1,9 +1,15 @@
 import { Payment, Sale, Customer, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, applyPaymentToSale, createAuditLog, getNextReceiptNumber } from './core';
-import { isApiMode } from '../apiClient';
+import { api, isApiMode } from '../apiClient';
 
 export function getPayments(): Payment[] {
   return getStorage<Payment>(DB_KEYS.PAYMENTS);
+}
+
+export async function syncPayments(): Promise<void> {
+  if (!isApiMode()) return;
+  const data = await api.listPayments();
+  setStorage(DB_KEYS.PAYMENTS, data);
 }
 
 export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payment {

@@ -110,7 +110,7 @@ export default function Suppliers() {
             <div>
               <p className="text-gray-500 text-sm">إجمالي الأرصدة</p>
               <p className="text-xl font-bold text-gray-800">
-                {formatCurrency(suppliers.reduce((sum, s) => sum + s.balance, 0))}
+                -{formatCurrency(suppliers.reduce((sum, s) => sum + s.balance, 0))}
               </p>
             </div>
           </div>

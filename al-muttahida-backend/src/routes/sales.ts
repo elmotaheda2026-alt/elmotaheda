@@ -294,6 +294,14 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     const db = await dbPromise;
     const rows = await db.all<SaleRow>('SELECT * FROM sales ORDER BY created_at DESC');
     const includeItems = String(req.query.includeItems) === 'true';
+    const allSchedules = await db.all<(ScheduleRow & { sale_id: string })>('SELECT * FROM installment_schedules ORDER BY month_index ASC');
+    const schedulesBySale = new Map<string, ScheduleRow[]>();
+    allSchedules.forEach((schedule) => {
+      const current = schedulesBySale.get(schedule.sale_id) || [];
+      current.push(schedule);
+      schedulesBySale.set(schedule.sale_id, current);
+    });
+
     if (includeItems) {
       const allItems = await db.all<(SaleItemRow & { sale_id: string })>('SELECT * FROM sale_items');
       const itemsBySale = new Map<string, SaleItemRow[]>();
@@ -302,10 +310,14 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
         current.push(item);
         itemsBySale.set(item.sale_id, current);
       });
-      return res.json(rows.map((row) => mapSale(row, mapSaleItems(itemsBySale.get(row.id) || []))));
+      return res.json(
+        rows.map((row) =>
+          mapSale(row, mapSaleItems(itemsBySale.get(row.id) || []), mapSchedules(schedulesBySale.get(row.id) || [])),
+        ),
+      );
     }
     // No items requested
-    return res.json(rows.map((row) => mapSale(row, [])));
+    return res.json(rows.map((row) => mapSale(row, [], mapSchedules(schedulesBySale.get(row.id) || []))));
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

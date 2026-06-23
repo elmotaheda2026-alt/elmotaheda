@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, ShoppingCart, Trash2, Printer } from 'lucide-react';
 import { Purchase, PurchaseItem, Supplier, Product } from '../types';
-import { getPurchases, createPurchase, getSuppliers, getProducts } from '../lib/storage';
+import { getPurchases, createPurchase, getSuppliers, getProducts, syncPurchases, syncSuppliers, syncProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { calculateDocumentTotals, calculateLineTotal } from '../lib/accounting';
@@ -25,7 +25,8 @@ export default function Purchases() {
     loadData();
   }, []);
 
-  const loadData = () => {
+  const loadData = async () => {
+    await Promise.all([syncPurchases(), syncSuppliers(), syncProducts()]);
     setPurchases(getPurchases().reverse());
     setSuppliers(getSuppliers());
     setProducts(getProducts());

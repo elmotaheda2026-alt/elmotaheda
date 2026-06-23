@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Edit, Package, Plus, Search, Trash2 } from 'lucide-react';
 import { Product } from '../types';
-import { createProduct, deleteProduct, getProducts, updateProduct } from '../lib/storage';
+import { createProduct, deleteProduct, getProducts, updateProduct, syncProducts } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { formatWholeCurrency } from '../lib/utils';
 
@@ -33,7 +33,8 @@ export default function Products() {
     loadProducts();
   }, []);
 
-  const loadProducts = () => {
+  const loadProducts = async () => {
+    await syncProducts();
     setProducts(getProducts());
   };
 
@@ -46,7 +47,7 @@ export default function Products() {
     setFormData(initialForm(settings.taxRate));
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
     const payload: ProductForm = {
@@ -55,12 +56,12 @@ export default function Products() {
     };
 
     if (editingProduct) {
-      updateProduct(editingProduct.id, payload);
+      await updateProduct(editingProduct.id, payload);
     } else {
-      createProduct(payload);
+      await createProduct(payload);
     }
 
-    loadProducts();
+    await loadProducts();
     setShowModal(false);
     setEditingProduct(null);
     resetForm();
@@ -174,10 +175,10 @@ export default function Products() {
                         <Edit size={18} />
                       </button>
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           if (confirm('هل تريد حذف هذا الصنف؟')) {
-                            deleteProduct(product.id);
-                            loadProducts();
+                            await deleteProduct(product.id);
+                            await loadProducts();
                           }
                         }}
                         className="rounded-xl p-2 text-rose-600 hover:bg-rose-50"

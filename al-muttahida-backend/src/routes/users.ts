@@ -115,7 +115,7 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
 
     await audit('user.create', 'user', id, req.user?.name || 'system', {
       name: data.name,
-      email: data.email,
+      username: data.username,
       role: data.role,
       isActive: data.isActive,
       phone: data.phone,

@@ -6,6 +6,12 @@ import { api, isApiMode } from '../apiClient';
 
 type SaleDraft = Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>;
 
+export async function syncSales(): Promise<void> {
+  if (!isApiMode()) return;
+  const data = await api.listSales();
+  setStorage(DB_KEYS.SALES, data);
+}
+
 export function getSales(): Sale[] {
   const sales = getStorage<Sale>(DB_KEYS.SALES);
   const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);

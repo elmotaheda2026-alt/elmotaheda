@@ -27,6 +27,11 @@ import {
   getSales,
   updateSale,
   deleteSale,
+  syncSales,
+  syncCustomers,
+  syncProducts,
+  syncSuppliers,
+  syncSalesReps,
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
@@ -163,27 +168,38 @@ export default function Invoices() {
   };
 
   useEffect(() => {
-    const loadedCustomers = getCustomers();
-    const loadedProducts = getProducts();
-    const loadedSuppliers = getSuppliers();
-    const loadedSalesReps = getSalesReps();
-    const loadedSales = getSales();
+    const loadData = async () => {
+      await Promise.all([
+        syncSales(),
+        syncCustomers(),
+        syncProducts(),
+        syncSuppliers(),
+        syncSalesReps(),
+      ]);
 
-    setCustomers(loadedCustomers);
-    setProducts(loadedProducts);
-    setSuppliers(loadedSuppliers);
-    setSalesReps(loadedSalesReps);
-    setSales(loadedSales.slice().reverse());
-    setInvoiceNumber(getNextSaleInvoiceNumber());
+      const loadedCustomers = getCustomers();
+      const loadedProducts = getProducts();
+      const loadedSuppliers = getSuppliers();
+      const loadedSalesReps = getSalesReps();
+      const loadedSales = getSales();
 
-    if (loadedCustomers.length > 0) {
-      setSelectedCustomerId(loadedCustomers[0].id);
-    }
+      setCustomers(loadedCustomers);
+      setProducts(loadedProducts);
+      setSuppliers(loadedSuppliers);
+      setSalesReps(loadedSalesReps);
+      setSales(loadedSales.slice().reverse());
+      setInvoiceNumber(getNextSaleInvoiceNumber());
 
-    if (loadedSuppliers.length > 0) {
-      setProcurementSupplierId(loadedSuppliers[0].id);
-      setQuickProduct((current) => ({ ...current, supplierId: current.supplierId || loadedSuppliers[0].id }));
-    }
+      if (loadedCustomers.length > 0) {
+        setSelectedCustomerId(loadedCustomers[0].id);
+      }
+
+      if (loadedSuppliers.length > 0) {
+        setProcurementSupplierId(loadedSuppliers[0].id);
+        setQuickProduct((current) => ({ ...current, supplierId: current.supplierId || loadedSuppliers[0].id }));
+      }
+    };
+    loadData();
   }, []);
 
   const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId) || null;
