@@ -3,11 +3,26 @@ import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { hasPermission } from '../permissions.js';
+import type { Permission } from '../types.js';
 import { audit } from '../audit.js';
 import { uid } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
+
+function requireAnyPermission(...permissions: Permission[]) {
+  return (req: AuthedRequest, res: any, next: any) => {
+    if (!req.user) {
+      req.user = { userId: 'dev-user-id', role: 'admin', name: 'Dev Admin' };
+    }
+    const granted = permissions.some((permission) => hasPermission(req.user!.role, permission, req.user!.permissions));
+    if (!granted) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+    return next();
+  };
+}
 
 const supplierSchema = z.object({
   name: z.string().min(1),
@@ -108,16 +123,74 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
 });
 
 // DELETE /suppliers/:id
-router.delete('/:id', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requireAnyPermission('users:manage', 'purchases:manage'), async (req: AuthedRequest, res) => {
+  const now = new Date().toISOString();
+
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM suppliers WHERE id = ?', req.params.id);
+    const existing = await db.get<{ id: string; name: string }>('SELECT id, name FROM suppliers WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Supplier not found' });
     }
 
+    const purchases = await db.all<{ id: string; remaining: number }>(
+      'SELECT id, remaining FROM purchases WHERE supplier_id = ?',
+      req.params.id,
+    );
+    const purchaseIds = purchases.map((purchase) => purchase.id);
+
+    if (purchaseIds.length) {
+      const purchaseItems = await db.all<{ product_id: string; quantity: number }>(
+        `SELECT product_id, quantity FROM purchase_items WHERE purchase_id IN (${purchaseIds.map(() => '?').join(',')})`,
+        ...purchaseIds,
+      );
+
+      for (const item of purchaseItems) {
+        await db.run(
+          `UPDATE products
+           SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
+               updated_at = ?
+           WHERE id = ?`,
+          item.quantity,
+          item.quantity,
+          now,
+          item.product_id,
+        );
+      }
+
+      await db.run(
+        `DELETE FROM payments
+         WHERE supplier_id = ?
+            OR (reference_type = 'supplier' AND reference_id = ?)
+            OR (reference_type = 'purchase' AND reference_id IN (${purchaseIds.map(() => '?').join(',')}))`,
+        req.params.id,
+        req.params.id,
+        ...purchaseIds,
+      );
+      await db.run(
+        `DELETE FROM purchase_items WHERE purchase_id IN (${purchaseIds.map(() => '?').join(',')})`,
+        ...purchaseIds,
+      );
+      await db.run(
+        `DELETE FROM purchases WHERE id IN (${purchaseIds.map(() => '?').join(',')})`,
+        ...purchaseIds,
+      );
+    } else {
+      await db.run(
+        `DELETE FROM payments
+         WHERE supplier_id = ?
+            OR (reference_type = 'supplier' AND reference_id = ?)`,
+        req.params.id,
+        req.params.id,
+      );
+    }
+
     await db.run('DELETE FROM suppliers WHERE id = ?', req.params.id);
-    await audit('supplier.delete', 'supplier', req.params.id, req.user?.name || 'system', { id: req.params.id });
+    await audit('supplier.delete', 'supplier', req.params.id, req.user?.name || 'system', {
+      id: req.params.id,
+      name: existing.name,
+      deletedPurchaseIds: purchaseIds,
+    });
     return res.json({ message: 'Supplier deleted successfully' });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });

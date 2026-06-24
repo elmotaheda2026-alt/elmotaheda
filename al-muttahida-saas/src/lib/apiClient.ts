@@ -67,6 +67,7 @@ export const api = {
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteSale: (id: string) => request<{ message: string }>(`/sales/${id}`, { method: 'DELETE' }),
   listPayments: () => request<any[]>('/payments'),
   createPayment: (payload: any) => request<{ id: string; receiptNumber: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
   reversePayment: (id: string) => request<{ message: string }>(`/payments/${id}/reverse`, { method: 'POST' }),

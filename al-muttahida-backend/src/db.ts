@@ -270,6 +270,7 @@ export async function initDb(): Promise<void> {
   );
 
   IF COL_LENGTH('purchase_items', 'barcode') IS NOT NULL ALTER TABLE purchase_items ALTER COLUMN barcode NVARCHAR(100) NULL;
+  IF COL_LENGTH('installment_schedules', 'paid_at') IS NULL ALTER TABLE installment_schedules ADD paid_at NVARCHAR(50) NULL;
 
   -- 9. Installment Schedules
   IF OBJECT_ID('installment_schedules', 'U') IS NULL
@@ -280,7 +281,8 @@ export async function initDb(): Promise<void> {
     due_date NVARCHAR(20) NOT NULL,
     amount DECIMAL(18,2) NOT NULL,
     paid_amount DECIMAL(18,2) NOT NULL DEFAULT 0,
-    status NVARCHAR(30) NOT NULL
+    status NVARCHAR(30) NOT NULL,
+    paid_at NVARCHAR(50) NULL
   );
 
   -- 10. Payments

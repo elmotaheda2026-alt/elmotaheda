@@ -83,20 +83,26 @@ export function getNextReceiptNumber(): string {
 export const pad = (value: number) => String(value).padStart(2, '0');
 
 export function addMonths(dateStr: string, months: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  if (!year || !month || !day) {
+  // Parse date safely; handle ISO strings.
+  const origDate = new Date(dateStr);
+  if (isNaN(origDate.getTime())) {
     return dateStr;
   }
-
-  const monthIndex = month - 1 + months;
-  const targetYear = year + Math.floor(monthIndex / 12);
-  const normalizedMonthIndex = ((monthIndex % 12) + 12) % 12;
-  const targetMonth = normalizedMonthIndex + 1;
-  const lastDayInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
-  const safeDay = Math.min(day, lastDayInTargetMonth);
-
-  return `${targetYear}-${pad(targetMonth)}-${pad(safeDay)}`;
+  const originalDay = origDate.getDate();
+  // Add months
+  const newDate = new Date(origDate);
+  newDate.setMonth(newDate.getMonth() + months);
+  // Adjust for month overflow: ensure day does not exceed last day of target month
+  const daysInTargetMonth = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 0).getDate();
+  newDate.setDate(Math.min(originalDay, daysInTargetMonth));
+  const year = newDate.getFullYear();
+  const month = newDate.getMonth() + 1; // getMonth is zero‑based
+  const day = newDate.getDate();
+  return `${year}-${pad(month)}-${pad(day)}`;
 }
+
+
+
 
 export function buildInstallmentSchedule(startDate: string, amount: number, months: number): InstallmentSchedule[] {
   if (months <= 0 || amount <= 0) return [];
@@ -165,7 +171,7 @@ export function applyPaymentToSale(sale: Sale, payment: Payment): Sale {
       schedules[index] = {
         ...schedule,
         paidAmount: nextPaidAmount,
-        paidAt: nextPaidAmount >= schedule.amount ? payment.date : schedule.paidAt,
+        paidAt: payment.date,
         status: (nextPaidAmount >= schedule.amount ? 'paid' : 'partial') as InstallmentSchedule['status'],
       };
     }

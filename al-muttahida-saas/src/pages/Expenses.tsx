@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, Receipt } from 'lucide-react';
 import { Expense } from '../types';
-import { getExpenses, createExpense } from '../lib/storage';
+import { getExpenses, createExpense, syncExpenses } from '../lib/storage';
+import { isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -20,14 +21,24 @@ export default function Expenses() {
   });
 
   useEffect(() => {
-    setExpenses(getExpenses().reverse());
+    const loadData = async () => {
+      if (isApiMode()) {
+        try {
+          await syncExpenses();
+        } catch (err) {
+          console.error('Failed to sync expenses:', err);
+        }
+      }
+      setExpenses(getExpenses().reverse());
+    };
+    void loadData();
   }, []);
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    createExpense({
+    await createExpense({
       category: formData.category,
       description: formData.description,
       amount: formData.amount,

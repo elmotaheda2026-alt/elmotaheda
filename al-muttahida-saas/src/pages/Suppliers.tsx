@@ -55,9 +55,13 @@ export default function Suppliers() {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('Ù‡Ù„ Ø£Ù†Øª Ù…ØªØ£ÙƒØ¯ Ù…Ù† Ø­Ø°Ù Ù‡Ø°Ø§ Ø§Ù„Ù…ÙˆØ±Ø¯ØŸ')) {
+    if (!confirm('åá ÃäÊ ãÊÃßÏ ãä ÍĞİ åĞÇ ÇáãæÑÏ¿ ÓíÊã ÍĞİ ÇáãÔÊÑíÇÊ æÇáãÏİæÚÇÊ ÇáãÑÊÈØÉ Èå ãä ÇáäÙÇã.')) return;
+
+    try {
       await deleteSupplier(id);
       await loadSuppliers();
+    } catch (err: any) {
+      alert(err.message || 'ÍÏË ÎØÃ ÃËäÇÁ ÍĞİ ÇáãæÑÏ.');
     }
   };
 
@@ -151,7 +155,7 @@ export default function Suppliers() {
                     <Edit size={16} />
                   </button>
                 )}
-                {hasPermission(user, 'users:manage') && (
+                {(hasPermission(user, 'users:manage') || hasPermission(user, 'purchases:manage')) && (
                   <button onClick={() => handleDelete(supplier.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                     <Trash2 size={16} />
                   </button>

@@ -129,10 +129,12 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
           await db.run(
             `UPDATE installment_schedules
              SET paid_amount = ?,
-                 status = ?
+                 status = ?,
+                 paid_at = ?
              WHERE id = ?`,
             nextPaid,
             scheduleStatus,
+            data.date,
             data.installmentId,
           );
         }
@@ -153,10 +155,12 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
           await db.run(
             `UPDATE installment_schedules
              SET paid_amount = ?,
-                 status = ?
+                 status = ?,
+                 paid_at = ?
              WHERE id = ?`,
             nextPaidAmount,
             nextPaidAmount >= sch.amount ? 'paid' : 'partial',
+            data.date,
             sch.id,
           );
         }
@@ -264,20 +268,34 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
 
       // Revert schedules
       if (original.installment_id) {
-        await db.run(
-          `UPDATE installment_schedules
-           SET paid_amount = CASE WHEN paid_amount - ? < 0 THEN 0 ELSE paid_amount - ? END,
-               status = CASE WHEN paid_amount - ? <= 0 THEN 'unpaid' ELSE 'partial' END
-           WHERE id = ?`,
-          original.amount,
-          original.amount,
-          original.amount,
+        const schedule = await db.get<{ id: string; paid_amount: number; sale_id: string }>(
+          'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE id = ?',
           original.installment_id,
         );
+        if (schedule) {
+          const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - original.amount).toFixed(2)));
+          const scheduleStatus = nextPaidAmount <= 0 ? 'unpaid' : 'partial';
+          const latestPayment = nextPaidAmount > 0 ? await db.get<{ date: string }>(
+            'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+            schedule.sale_id,
+            original.id,
+          ) : null;
+          await db.run(
+            `UPDATE installment_schedules
+             SET paid_amount = ?,
+                 status = ?,
+                 paid_at = ?
+             WHERE id = ?`,
+            nextPaidAmount,
+            scheduleStatus,
+            latestPayment ? latestPayment.date : null,
+            original.installment_id,
+          );
+        }
       } else {
         // Auto-revert schedules in reverse order (month_index DESC)
-        const schedules = await db.all<{ id: string; paid_amount: number }>(
-          'SELECT id, paid_amount FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
+        const schedules = await db.all<{ id: string; paid_amount: number; sale_id: string }>(
+          'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
           original.sale_id,
         );
         let remainingRevert = original.amount;
@@ -287,13 +305,21 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
           const nextPaidAmount = Number((sch.paid_amount - applied).toFixed(2));
           remainingRevert = Number((remainingRevert - applied).toFixed(2));
 
+          const latestPayment = nextPaidAmount > 0 ? await db.get<{ date: string }>(
+            'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+            sch.sale_id,
+            original.id,
+          ) : null;
+
           await db.run(
             `UPDATE installment_schedules
              SET paid_amount = ?,
-                 status = ?
+                 status = ?,
+                 paid_at = ?
              WHERE id = ?`,
             nextPaidAmount,
             nextPaidAmount <= 0 ? 'unpaid' : 'partial',
+            latestPayment ? latestPayment.date : null,
             sch.id,
           );
         }

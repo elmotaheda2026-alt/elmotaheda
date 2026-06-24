@@ -11,15 +11,19 @@ router.use(requireAuth);
 const pad = (value: number) => String(value).padStart(2, '0');
 
 function addMonths(dateStr: string, months: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  if (!year || !month || !day) return dateStr;
-  const monthIndex = month - 1 + months;
-  const targetYear = year + Math.floor(monthIndex / 12);
-  const normalizedMonthIndex = ((monthIndex % 12) + 12) % 12;
-  const targetMonth = normalizedMonthIndex + 1;
-  const lastDayInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
-  const safeDay = Math.min(day, lastDayInTargetMonth);
-  return `${targetYear}-${pad(targetMonth)}-${pad(safeDay)}`;
+  const origDate = new Date(dateStr);
+  if (isNaN(origDate.getTime())) {
+    return dateStr;
+  }
+  const originalDay = origDate.getDate();
+  const newDate = new Date(origDate);
+  newDate.setMonth(newDate.getMonth() + months);
+  const daysInTargetMonth = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 0).getDate();
+  newDate.setDate(Math.min(originalDay, daysInTargetMonth));
+  const year = newDate.getFullYear();
+  const month = newDate.getMonth() + 1;
+  const day = newDate.getDate();
+  return `${year}-${pad(month)}-${pad(day)}`;
 }
 
 const saleItemSchema = z.object({
@@ -158,6 +162,7 @@ type ScheduleRow = {
   amount: number;
   paid_amount: number;
   status: string;
+  paid_at?: string | null;
 };
 
 function mapSaleItems(items: SaleItemRow[]) {
@@ -182,6 +187,7 @@ function mapSchedules(schedules: ScheduleRow[]) {
     amount: Number(sch.amount),
     paidAmount: Number(sch.paid_amount),
     status: sch.status,
+    paidAt: sch.paid_at || undefined,
   }));
 }
 
@@ -560,6 +566,132 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
     if (error.message?.includes('UNIQUE') || error.message?.includes('violates UNIQUE constraint')) {
       return res.status(409).json({ message: 'Invoice number already exists' });
     }
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+router.delete('/:id', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
+  const now = new Date().toISOString();
+
+  try {
+    const db = await dbPromise;
+    const existing = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', req.params.id);
+    if (!existing) {
+      return res.status(404).json({ message: 'Sale not found' });
+    }
+
+    const oldItems = await db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', req.params.id);
+    const linkedPurchases = await db.all<{
+      id: string;
+      supplier_id: string;
+      remaining: number;
+    }>(
+      `SELECT id, supplier_id, remaining
+       FROM purchases
+       WHERE notes LIKE ?`,
+      `%${existing.invoice_number}%`,
+    );
+    const linkedPurchaseIds = linkedPurchases.map((purchase) => purchase.id);
+    const linkedPurchaseItems = linkedPurchaseIds.length
+      ? await db.all<{ purchase_id: string; product_id: string; quantity: number }>(
+          `SELECT purchase_id, product_id, quantity
+           FROM purchase_items
+           WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+          ...linkedPurchaseIds,
+        )
+      : [];
+
+    for (const item of oldItems) {
+      await db.run(
+        `UPDATE products
+         SET quantity = quantity + ?,
+             updated_at = ?
+         WHERE id = ? AND fulfillment_type = 'stocked'`,
+        item.quantity,
+        now,
+        item.product_id,
+      );
+    }
+
+    for (const item of linkedPurchaseItems) {
+      await db.run(
+        `UPDATE products
+         SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
+             updated_at = ?
+         WHERE id = ? AND fulfillment_type = 'stocked'`,
+        item.quantity,
+        item.quantity,
+        now,
+        item.product_id,
+      );
+    }
+
+    for (const purchase of linkedPurchases) {
+      await db.run(
+        `UPDATE suppliers
+         SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
+             updated_at = ?
+         WHERE id = ?`,
+        purchase.remaining,
+        purchase.remaining,
+        now,
+        purchase.supplier_id,
+      );
+    }
+
+    await db.run(
+      `UPDATE customers
+       SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
+           updated_at = ?
+       WHERE id = ?`,
+      existing.remaining,
+      existing.remaining,
+      now,
+      existing.customer_id,
+    );
+
+    await db.run(
+      `DELETE FROM payments
+       WHERE sale_id = ?
+          OR reference_id = ?
+          OR invoice_number = ?`,
+      req.params.id,
+      req.params.id,
+      existing.invoice_number,
+    );
+    await db.run('DELETE FROM collection_tasks WHERE sale_id = ?', req.params.id);
+    await db.run('DELETE FROM reschedule_requests WHERE sale_id = ?', req.params.id);
+    await db.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
+    await db.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
+    if (linkedPurchaseIds.length) {
+      await db.run(
+        `DELETE FROM purchase_items WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+        ...linkedPurchaseIds,
+      );
+      await db.run(
+        `DELETE FROM payments
+         WHERE reference_type = 'purchase'
+           AND reference_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+        ...linkedPurchaseIds,
+      );
+      await db.run(
+        `DELETE FROM purchases WHERE id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+        ...linkedPurchaseIds,
+      );
+    }
+    await db.run('DELETE FROM sales WHERE id = ?', req.params.id);
+
+    await audit('sale.delete', 'sale', req.params.id, req.user?.name || 'system', {
+      invoiceNumber: existing.invoice_number,
+      customerId: existing.customer_id,
+      total: existing.total,
+      remaining: existing.remaining,
+      itemsCount: oldItems.length,
+      deletedAutoPurchaseIds: linkedPurchaseIds,
+    });
+
+    return res.json({ message: 'Sale deleted successfully' });
+  } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
 });

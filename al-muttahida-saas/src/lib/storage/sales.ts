@@ -236,7 +236,44 @@ export async function updateSale(saleId: string, updatedSaleData: SaleDraft): Pr
 
 export async function deleteSale(saleId: string, deletedBy = 'system'): Promise<boolean> {
   if (isApiMode()) {
-    throw new Error('لا يمكن حذف التعاقد محليًا أثناء تشغيل وضع API.');
+    const sale = getStorage<Sale>(DB_KEYS.SALES).find((entry) => entry.id === saleId);
+    await api.deleteSale(saleId);
+
+    const [freshSales, freshCustomers, freshProducts, freshSuppliers, freshPurchases] = await Promise.all([
+      api.listSales(),
+      api.listCustomers(),
+      api.listProducts(),
+      api.listSuppliers(),
+      api.listPurchases(),
+    ]);
+
+    setStorage(DB_KEYS.SALES, freshSales);
+    setStorage(DB_KEYS.CUSTOMERS, freshCustomers);
+    setStorage(DB_KEYS.PRODUCTS, freshProducts);
+    setStorage(DB_KEYS.SUPPLIERS, freshSuppliers);
+    setStorage(DB_KEYS.PURCHASES, freshPurchases);
+
+    const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+    setStorage(
+      DB_KEYS.PAYMENTS,
+      payments.filter(
+        (payment) =>
+          payment.saleId !== saleId &&
+          !(payment.referenceType === 'sale' && payment.referenceId === saleId) &&
+          (!sale || payment.invoiceNumber !== sale.invoiceNumber),
+      ),
+    );
+    const collectionTasks = getStorage<InstallmentCollectionTask>(DB_KEYS.COLLECTION_TASKS);
+    setStorage(
+      DB_KEYS.COLLECTION_TASKS,
+      collectionTasks.filter((task) => task.saleId !== saleId),
+    );
+    const rescheduleRequests = getStorage<RescheduleRequest>(DB_KEYS.RESCHEDULE_REQUESTS);
+    setStorage(
+      DB_KEYS.RESCHEDULE_REQUESTS,
+      rescheduleRequests.filter((request) => request.saleId !== saleId),
+    );
+    return true;
   }
 
   const sales = getStorage<Sale>(DB_KEYS.SALES);
@@ -255,7 +292,7 @@ export async function deleteSale(saleId: string, deletedBy = 'system'): Promise<
   const purchases = getStorage<Purchase>(DB_KEYS.PURCHASES);
   const linkedPurchases = purchases.filter((purchase) => {
     const notes = purchase.notes || '';
-    const isAutoPurchase = notes.includes('شراء تلقائي') || notes.includes('Ø´Ø±Ø§Ø¡ ØªÙ„Ù‚Ø§Ø¦ÙŠ');
+    const isAutoPurchase = notes.includes('���� ������') || notes.includes('?�?�?�?? ??U�U�?�?�U?');
     const linkedByInvoice = notes.includes(sale.invoiceNumber);
     const likelySameContract =
       purchase.date === sale.date &&

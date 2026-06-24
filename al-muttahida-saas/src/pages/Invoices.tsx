@@ -64,19 +64,19 @@ const formatLocalDate = (date: Date): string =>
 const today = () => formatLocalDate(new Date());
 
 function addMonths(dateStr: string, months: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  if (!year || !month || !day) {
+  const origDate = new Date(dateStr);
+  if (isNaN(origDate.getTime())) {
     return dateStr;
   }
-
-  const monthIndex = month - 1 + months;
-  const targetYear = year + Math.floor(monthIndex / 12);
-  const normalizedMonthIndex = ((monthIndex % 12) + 12) % 12;
-  const targetMonth = normalizedMonthIndex + 1;
-  const lastDayInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
-  const safeDay = Math.min(day, lastDayInTargetMonth);
-
-  return `${targetYear}-${pad(targetMonth)}-${pad(safeDay)}`;
+  const originalDay = origDate.getDate();
+  const newDate = new Date(origDate);
+  newDate.setMonth(newDate.getMonth() + months);
+  const daysInTargetMonth = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 0).getDate();
+  newDate.setDate(Math.min(originalDay, daysInTargetMonth));
+  const year = newDate.getFullYear();
+  const month = newDate.getMonth() + 1;
+  const day = newDate.getDate();
+  return `${year}-${pad(month)}-${pad(day)}`;
 }
 
 export default function Invoices() {

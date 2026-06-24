@@ -1,4 +1,4 @@
-import { Supplier } from '../../types';
+import { Payment, Purchase, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
 import { api, isApiMode } from '../apiClient';
 
@@ -67,20 +67,49 @@ export async function updateSupplier(id: string, updates: Partial<Supplier>): Pr
 export async function deleteSupplier(id: string): Promise<boolean> {
   if (isApiMode()) {
     await api.deleteSupplier(id);
-    const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
-    const filtered = suppliers.filter(s => s.id !== id);
-    if (filtered.length !== suppliers.length) {
-      setStorage(DB_KEYS.SUPPLIERS, filtered);
-      return true;
-    }
-    return false;
+
+    const [freshSuppliers, freshProducts, freshPurchases] = await Promise.all([
+      api.listSuppliers(),
+      api.listProducts(),
+      api.listPurchases(),
+    ]);
+
+    setStorage(DB_KEYS.SUPPLIERS, freshSuppliers);
+    setStorage(DB_KEYS.PRODUCTS, freshProducts);
+    setStorage(DB_KEYS.PURCHASES, freshPurchases);
+
+    const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+    setStorage(
+      DB_KEYS.PAYMENTS,
+      payments.filter(
+        (payment) =>
+          payment.supplierId !== id &&
+          !(payment.referenceType === 'supplier' && payment.referenceId === id),
+      ),
+    );
+    return true;
   }
 
   const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
-  const filtered = suppliers.filter(s => s.id !== id);
-  if (filtered.length !== suppliers.length) {
-    setStorage(DB_KEYS.SUPPLIERS, filtered);
-    return true;
-  }
-  return false;
+  const supplierExists = suppliers.some((supplier) => supplier.id === id);
+  if (!supplierExists) return false;
+
+  const purchases = getStorage<Purchase>(DB_KEYS.PURCHASES);
+  const linkedPurchaseIds = new Set(purchases.filter((purchase) => purchase.supplierId === id).map((purchase) => purchase.id));
+
+  setStorage(DB_KEYS.SUPPLIERS, suppliers.filter((supplier) => supplier.id !== id));
+  setStorage(DB_KEYS.PURCHASES, purchases.filter((purchase) => purchase.supplierId !== id));
+
+  const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+  setStorage(
+    DB_KEYS.PAYMENTS,
+    payments.filter(
+      (payment) =>
+        payment.supplierId !== id &&
+        !(payment.referenceType === 'supplier' && payment.referenceId === id) &&
+        !(payment.referenceType === 'purchase' && payment.referenceId && linkedPurchaseIds.has(payment.referenceId)),
+    ),
+  );
+
+  return true;
 }

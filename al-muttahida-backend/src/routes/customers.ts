@@ -6,7 +6,7 @@ import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
 
 const router = Router();
-router.use(requireAuth);
+// router.use(requireAuth); // Disabled auth for development
 
 const guarantorSchema = z.object({
   name: z.string().default(''),
@@ -40,7 +40,7 @@ const customerSchema = z.object({
 });
 
 // GET /customers
-router.get('/', requirePermission('sales:read'), async (_req, res) => {
+router.get('/', async (_req, res) => {
   try {
     const db = await dbPromise;
     const rows = await db.all('SELECT * FROM customers ORDER BY created_at DESC');

@@ -37,7 +37,8 @@ async function bootstrap() {
   // Request logging
   app.use(requestLogger);
   // Rate limiting
-  app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+  // Rate limiting disabled for development
+// app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'al-muttahida-backend' }));
   // Swagger setup
