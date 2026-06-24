@@ -135,4 +135,9 @@ export const api = {
   createCollectionTask: (payload: any) => request<{ id: string }>('/collection-tasks', { method: 'POST', body: JSON.stringify(payload) }),
   updateCollectionTask: (id: string, payload: any) => request<{ message: string }>(`/collection-tasks/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteCollectionTask: (id: string) => request<{ message: string }>(`/collection-tasks/${id}`, { method: 'DELETE' }),
+
+  // Closing Periods
+  listClosingPeriods: () => request<any[]>('/closing'),
+  closePeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string; notes?: string }) =>
+    request<{ message: string }>('/closing/close', { method: 'POST', body: JSON.stringify(payload) }),
 };

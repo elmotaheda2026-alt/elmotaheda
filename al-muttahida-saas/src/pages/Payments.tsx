@@ -5,14 +5,17 @@ import {
   Banknote,
   CalendarDays,
   CreditCard,
+  Lock,
   Plus,
   Printer,
   Search,
+  CheckCircle2,
 } from 'lucide-react';
-import { Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, getCustomers, getPayments, getSales, getSuppliers, syncCustomers, syncPayments, syncSales, syncSuppliers } from '../lib/storage';
+import { ClosingPeriod, Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
+import { createPayment, getCustomers, getPayments, getSales, getSuppliers, syncCustomers, syncPayments, syncSales, syncSuppliers, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
+import { hasPermission } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
@@ -49,6 +52,12 @@ export default function Payments() {
   const [searchTerm, setSearchTerm] = useState('');
   const [incomingSubmitMode, setIncomingSubmitMode] = useState<IncomingSubmitMode>('save');
 
+  // Daily Closing states
+  const [showClosingModal, setShowClosingModal] = useState(false);
+  const [closingDate, setClosingDate] = useState(today());
+  const [closingNotes, setClosingNotes] = useState('');
+  const [closedPeriods, setClosedPeriods] = useState<ClosingPeriod[]>([]);
+
   const [incomingForm, setIncomingForm] = useState<IncomingPaymentForm>({
     customerId: '',
     saleId: '',
@@ -69,7 +78,7 @@ export default function Payments() {
 
   const loadData = async () => {
     if (isApiMode()) {
-      await Promise.all([syncCustomers(), syncSuppliers(), syncPayments(), syncSales()]);
+      await Promise.all([syncCustomers(), syncSuppliers(), syncPayments(), syncSales(), syncClosingPeriods()]);
     }
     const nextPayments = getPayments().slice().reverse();
     const nextSales = getSales().slice().reverse();
@@ -80,6 +89,7 @@ export default function Payments() {
     setSales(nextSales);
     setCustomers(nextCustomers);
     setSuppliers(nextSuppliers);
+    setClosedPeriods(getClosingPeriods());
 
     if (!incomingForm.customerId && nextCustomers.length > 0) {
       setIncomingForm((current) => ({ ...current, customerId: nextCustomers[0].id }));
@@ -94,6 +104,19 @@ export default function Payments() {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleClosePeriod = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      await closePeriodApi('daily', closingDate, user?.name || 'مدير النظام', closingNotes);
+      await loadData();
+      setShowClosingModal(false);
+      setClosingNotes('');
+      setMessage({ type: 'success', text: 'تم إغلاق اليومية بنجاح.' });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'حدث خطأ أثناء إغلاق اليومية.' });
+    }
+  };
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -321,6 +344,11 @@ export default function Payments() {
   const handleIncomingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
+    if (isDateClosed(incomingForm.date)) {
+      setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
+      return;
+    }
+
     if (!incomingForm.customerId || !incomingForm.saleId || !incomingForm.installmentId) {
       setMessage({ type: 'error', text: 'اختر العميل والفاتورة والقسط المطلوب سداده.' });
       return;
@@ -428,6 +456,11 @@ export default function Payments() {
   const handleOutgoingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
+    if (isDateClosed(outgoingForm.date)) {
+      setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
+      return;
+    }
+
     if (!outgoingForm.supplierId || outgoingForm.amount <= 0) {
       setMessage({ type: 'error', text: 'اختر المورد وأدخل مبلغًا صحيحًا.' });
       return;
@@ -480,6 +513,21 @@ export default function Payments() {
     setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
   };
 
+  const toYYYYMMDD = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const closingDateYYYYMMDD = toYYYYMMDD(closingDate);
+  const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD);
+  const closingTotalIn = closingDatePayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+  const closingTotalOut = closingDatePayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+  const closingNet = closingTotalIn - closingTotalOut;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -504,6 +552,19 @@ export default function Payments() {
             <Plus size={18} />
             دفعة مورد
           </button>
+          {hasPermission(user, 'closing:write') && (
+            <button
+              onClick={() => {
+                setClosingDate(today());
+                setClosingNotes('');
+                setShowClosingModal(true);
+              }}
+              className="inline-flex items-center gap-2 rounded-2xl bg-slate-700 px-4 py-2 text-white hover:bg-slate-800 transition-colors duration-200"
+            >
+              <Lock size={18} />
+              إغلاق اليومية
+            </button>
+          )}
         </div>
       </div>
 
@@ -905,6 +966,120 @@ export default function Payments() {
                     </div>
                   </form>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {showClosingModal && (
+        <div className="fixed inset-0 z-50 bg-black/45 p-3 sm:p-5">
+          <div className="flex min-h-full items-center justify-center">
+            <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-[30px] bg-white shadow-2xl">
+              <div className="bg-slate-800 px-6 py-5 text-white">
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <Lock size={20} />
+                  إغلاق الخزينة اليومية
+                </h3>
+                <p className="mt-1 text-sm text-white/85">
+                  قم بتسوية وإغلاق المعاملات المالية ليوم محدد. لن يُسمح بأي تعديلات بعد الإغلاق.
+                </p>
+              </div>
+
+              <div className="overflow-y-auto p-6 space-y-6">
+                <form onSubmit={handleClosePeriod} className="space-y-6">
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <Field label="تاريخ الإغلاق">
+                      <DatePicker
+                        value={closingDate}
+                        onChange={(date) => setClosingDate(date)}
+                        className="w-full border-slate-200 px-4 py-2"
+                      />
+                    </Field>
+                    
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 text-sm text-amber-800 flex items-start gap-2">
+                      <Lock size={18} className="mt-0.5 shrink-0 text-amber-600" />
+                      <div>
+                        <p className="font-bold">تنبيه هام</p>
+                        <p className="mt-1">
+                          إغلاق اليومية يمنع إضافة، تعديل، سداد، أو عكس أي حركات مالية في التاريخ المحدد نهائيًا.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                      <p className="text-xs text-slate-500 font-bold">إجمالي الوارد (مقبوضات اليوم)</p>
+                      <p className="mt-1 text-lg font-extrabold text-emerald-600">{formatCurrency(closingTotalIn)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4">
+                      <p className="text-xs text-slate-500 font-bold">إجمالي الصادر (مدفوعات اليوم)</p>
+                      <p className="mt-1 text-lg font-extrabold text-rose-600">{formatCurrency(closingTotalOut)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs text-slate-500 font-bold">صافي حركة اليوم</p>
+                      <p className="mt-1 text-lg font-extrabold text-slate-800">{formatCurrency(closingNet)}</p>
+                    </div>
+                  </div>
+
+                  <Field label="ملاحظات وتفاصيل الإغلاق">
+                    <textarea
+                      value={closingNotes}
+                      onChange={(e) => setClosingNotes(e.target.value)}
+                      className="input-ui min-h-[80px] w-full"
+                      placeholder="اكتب أي ملاحظات حول تسوية اليومية أو فروق العجز والزيادة إن وجدت..."
+                    />
+                  </Field>
+
+                  <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => setShowClosingModal(false)}
+                      className="rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50 sm:w-48"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-2xl bg-slate-800 px-4 py-3 font-bold text-white hover:bg-slate-900 sm:w-56"
+                    >
+                      تأكيد إغلاق اليومية
+                    </button>
+                  </div>
+                </form>
+
+                <div className="border-t border-slate-100 pt-6">
+                  <h4 className="font-bold text-slate-800 mb-3 flex items-center gap-1.5">
+                    <CheckCircle2 size={16} className="text-slate-600" />
+                    السجلات المغلقة مؤخرًا
+                  </h4>
+                  {closedPeriods.length === 0 ? (
+                    <p className="text-sm text-slate-500">لا توجد فترات مغلقة مسبقًا.</p>
+                  ) : (
+                    <div className="max-h-[200px] overflow-y-auto rounded-2xl border border-slate-100">
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                          <tr>
+                            <th className="px-4 py-3 text-right font-bold">التاريخ</th>
+                            <th className="px-4 py-3 text-right font-bold">بواسطة</th>
+                            <th className="px-4 py-3 text-right font-bold">تاريخ الإغلاق</th>
+                            <th className="px-4 py-3 text-right font-bold">الملاحظات</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                          {closedPeriods.slice(0, 10).map((period) => (
+                            <tr key={period.id} className="hover:bg-slate-50/50">
+                              <td className="px-4 py-3 font-semibold text-slate-800">{formatDateDisplay(period.periodDate)}</td>
+                              <td className="px-4 py-3">{period.closedBy}</td>
+                              <td className="px-4 py-3 text-xs text-slate-500">{formatDateDisplay(period.closedAt.slice(0, 10))}</td>
+                              <td className="px-4 py-3 text-xs text-slate-500">{period.notes || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

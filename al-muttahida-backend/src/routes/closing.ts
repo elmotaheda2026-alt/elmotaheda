@@ -47,4 +47,14 @@ router.post('/close', requirePermission('closing:write'), async (req: AuthedRequ
   return res.json({ message: 'Closed' });
 });
 
+router.get('/', requirePermission('reports:read'), async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    const rows = await db.all('SELECT * FROM closing_periods ORDER BY period_date DESC');
+    return res.json(rows);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 export default router;

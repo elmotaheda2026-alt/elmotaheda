@@ -17,6 +17,19 @@ async function nextReceiptNumber() {
 
 const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
 
+async function isPeriodClosed(db: any, dateStr: string): Promise<boolean> {
+  const day = dateStr.slice(0, 10);
+  const month = dateStr.slice(0, 7);
+  const closed = await db.get(
+    `SELECT 1 FROM closing_periods 
+     WHERE status = \'closed\' 
+       AND ((period_type = \'daily\' AND period_date = ?) OR (period_type = \'monthly\' AND period_date = ?))`,
+    day,
+    month
+  );
+  return !!closed;
+}
+
 const paymentSchema = z.object({
   type: z.enum(['in', 'out']),
   amount: z.number().positive(),
@@ -86,6 +99,9 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
   const receiptNumber = await nextReceiptNumber();
 
   try {
+    if (await isPeriodClosed(db, data.date)) {
+      return res.status(400).json({ message: 'لا يمكن تسجيل عملية دفع في تاريخ مغلق مالياً' });
+    }
     let finalCustomerId = data.customerId || null;
     let finalSupplierId = data.supplierId || null;
 
@@ -257,6 +273,9 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
   const reverseType = original.type === 'in' ? 'out' : 'in';
 
   try {
+    if (await isPeriodClosed(db, original.date) || await isPeriodClosed(db, now.slice(0, 10))) {
+      return res.status(400).json({ message: 'لا يمكن عكس حركة مالية في تاريخ مغلق مالياً' });
+    }
     // 1. If reversing a sale payment, deduct from paid and add back to remaining
     if (original.sale_id && original.type === 'in') {
       await db.run(

@@ -1,5 +1,6 @@
 import { ClosingPeriod, InstallmentCollectionTask, RescheduleRequest } from '../../types';
 import { DB_KEYS, createAuditLog, generateId, getStorage, setStorage } from './core';
+import { api, isApiMode } from '../apiClient';
 
 export function getCollectionTasks(): InstallmentCollectionTask[] {
   return getStorage<InstallmentCollectionTask>(DB_KEYS.COLLECTION_TASKS);
@@ -78,3 +79,31 @@ export function isDateClosed(date: string): boolean {
   return periods.some((p) => p.status === 'closed' && ((p.periodType === 'daily' && p.periodDate === date) || (p.periodType === 'monthly' && p.periodDate === month)));
 }
 
+export async function syncClosingPeriods(): Promise<void> {
+  if (!isApiMode()) return;
+  try {
+    const rows = await api.listClosingPeriods();
+    const mapped: ClosingPeriod[] = rows.map((r: any) => ({
+      id: r.id,
+      periodType: r.period_type,
+      periodDate: r.period_date,
+      status: r.status,
+      closedBy: r.closed_by,
+      closedAt: r.closed_at,
+      notes: r.notes,
+    }));
+    setStorage(DB_KEYS.CLOSING_PERIODS, mapped);
+  } catch {
+    // silently fail sync
+  }
+}
+
+export async function closePeriodApi(periodType: 'daily' | 'monthly', periodDate: string, closedBy: string, notes?: string): Promise<ClosingPeriod> {
+  if (isApiMode()) {
+    await api.closePeriod({ periodType, periodDate, notes });
+    await syncClosingPeriods();
+    const periods = getClosingPeriods();
+    return periods.find((p) => p.periodType === periodType && p.periodDate === periodDate) || closePeriod(periodType, periodDate, closedBy, notes);
+  }
+  return closePeriod(periodType, periodDate, closedBy, notes);
+}
