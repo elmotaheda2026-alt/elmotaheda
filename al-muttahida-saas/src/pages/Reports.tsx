@@ -1,10 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { TrendingUp, DollarSign, ShoppingBag, PieChart as PieChartIcon, Users, Activity, AlertTriangle, CheckCircle2, Calendar, Landmark, Percent } from 'lucide-react';
-import { getSales, getPurchases, getExpenses, getSettings, getCustomers, getProducts, getAgingReport, getCollectionRateReport, getReceivablesReconciliationReport } from '../lib/storage';
+import { getSales, getExpenses, getSettings, getCustomers, getProducts, getAgingReport, getCollectionRateReport, getReceivablesReconciliationReport, getRealizedProfitReport } from '../lib/storage';
 import { DatePicker } from '../components/DatePicker';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
-import { formatDateDisplay } from '../lib/dateUtils';
-import { calculateCostOfGoodsSold, calculateNetProfit } from '../lib/accounting';
+import { calculateCostOfGoodsSold } from '../lib/accounting';
 import { formatWholeCurrency } from '../lib/utils';
 
 const TypedAreaChart = AreaChart as any;
@@ -29,7 +28,6 @@ export default function Reports() {
   const settings = getSettings();
 
   const allSales = useMemo(() => getSales(), []);
-  const allPurchases = useMemo(() => getPurchases(), []);
   const allExpenses = useMemo(() => getExpenses(), []);
   const allCustomers = useMemo(() => getCustomers(), []);
   const allProducts = useMemo(() => getProducts(), []);
@@ -56,23 +54,22 @@ export default function Reports() {
     return totalSales > 0 ? (totalSales - costOfGoodsSold) / totalSales : 0;
   }, [totalSales, costOfGoodsSold]);
 
-  // Realized Profits (Cash profit collected minus expenses)
-  const realizedProfits = useMemo(() => {
-    const collectedCash = filteredSales.reduce((sum, s) => sum + s.paid, 0);
-    const grossRealized = collectedCash * marginRatio;
-    return Math.max(0, grossRealized - totalExpenses);
-  }, [filteredSales, marginRatio, totalExpenses]);
+  // Realized Profits from actual posted customer payments in the selected period.
+  const realizedProfitReport = useMemo(() => {
+    return getRealizedProfitReport(startDate, endDate);
+  }, [startDate, endDate]);
+  const realizedProfits = realizedProfitReport.netRealized;
 
   // Deferred Profits (Profit expected from remaining receivables)
   const deferredProfits = useMemo(() => {
     const remainingReceivables = filteredSales.reduce((sum, s) => sum + s.remaining, 0);
-    return Math.max(0, remainingReceivables * marginRatio);
+    return remainingReceivables * Math.max(0, marginRatio);
   }, [filteredSales, marginRatio]);
 
   // Receivables Reconciliation
   const reconciliation = useMemo(() => {
-    return getReceivablesReconciliationReport();
-  }, []);
+    return getReceivablesReconciliationReport(startDate, endDate);
+  }, [startDate, endDate]);
 
   // Collection Rate Report
   const collectionReport = useMemo(() => {
@@ -125,7 +122,7 @@ export default function Reports() {
 
   // Aging Buckets and Total Overdue
   const { agingData, totalOverdue } = useMemo(() => {
-    const report = getAgingReport();
+    const report = getAgingReport(endDate || new Date().toISOString().slice(0, 10));
     const buckets = {
       '0-30': 0,
       '31-60': 0,
@@ -146,7 +143,7 @@ export default function Reports() {
       ],
       totalOverdue: sum
     };
-  }, []);
+  }, [endDate]);
 
   // Top Customers by total financing contract value
   const topCustomers = useMemo(() => {
@@ -257,7 +254,7 @@ export default function Reports() {
           </div>
           <div>
             <p className="text-emerald-800 text-xs font-bold">أرباح محصلة نقدياً</p>
-            <p className="text-xl font-black text-emerald-900">{formatCurrency(realizedProfits)}</p>
+            <p className={`text-xl font-black ${realizedProfits < 0 ? 'text-rose-700' : 'text-emerald-900'}`}>{formatCurrency(realizedProfits)}</p>
             <p className="text-xs text-emerald-600 mt-1">صافي أرباح كاش محققة</p>
           </div>
         </div>
@@ -414,7 +411,7 @@ export default function Reports() {
             <div className="flex justify-between border-b border-slate-100 pb-2">
               <span className="text-slate-500 text-sm">الفروقات المالية المكتشفة:</span>
               <span className={`font-bold ${reconciliation.hasAlert ? 'text-rose-600' : 'text-slate-800'}`}>
-                {formatCurrency(reconciliation.variance)}
+                {formatCurrency(Math.abs(reconciliation.variance))}
               </span>
             </div>
             <div className="flex justify-between pt-2">

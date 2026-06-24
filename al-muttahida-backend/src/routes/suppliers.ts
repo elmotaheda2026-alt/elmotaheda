@@ -133,8 +133,8 @@ router.delete('/:id', requireAnyPermission('users:manage', 'purchases:manage'), 
       return res.status(404).json({ message: 'Supplier not found' });
     }
 
-    if (Number(existing.balance || 0) > 0) {
-      return res.status(409).json({ message: 'لا يمكن حذف المورد قبل تصفية الرصيد المستحق له.' });
+    if (Number(existing.balance || 0) !== 0) {
+      return res.status(400).json({ message: 'لا يمكن حذف المورد لأن لديه رصيد مستحق' });
     }
 
     const purchases = await db.all<{ id: string; remaining: number }>(

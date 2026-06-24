@@ -253,6 +253,7 @@ export default function Invoices() {
     barcode: item.barcode,
     quantity: item.quantity,
     unitPrice: item.unitPrice,
+    unitCost: Number(item.product?.purchasePrice || 0),
     discount: item.discount,
     tax: item.tax,
     total: item.total,

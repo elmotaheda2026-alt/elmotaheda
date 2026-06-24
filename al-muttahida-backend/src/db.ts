@@ -230,6 +230,7 @@ export async function initDb(): Promise<void> {
     tax DECIMAL(18,2) NOT NULL,
     total DECIMAL(18,2) NOT NULL
   );
+  IF COL_LENGTH('sale_items', 'unit_cost') IS NULL ALTER TABLE sale_items ADD unit_cost DECIMAL(18,2) NOT NULL DEFAULT 0;
   IF COL_LENGTH('sale_items', 'product_name') IS NOT NULL ALTER TABLE sale_items ALTER COLUMN product_name NVARCHAR(MAX);
 
   IF COL_LENGTH('sale_items', 'barcode') IS NOT NULL ALTER TABLE sale_items ALTER COLUMN barcode NVARCHAR(100) NULL;

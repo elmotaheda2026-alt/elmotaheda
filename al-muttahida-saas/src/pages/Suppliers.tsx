@@ -55,8 +55,8 @@ export default function Suppliers() {
   };
 
   const handleDelete = async (supplier: Supplier) => {
-    if (Number(supplier.balance || 0) > 0) {
-      alert('لا يمكن حذف المورد قبل تصفية الرصيد المستحق له.');
+    if (Number(supplier.balance || 0) !== 0) {
+      alert('لا يمكن حذف المورد قبل تصفية رصيد حساب المورد.');
       return;
     }
 

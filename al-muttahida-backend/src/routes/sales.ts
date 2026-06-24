@@ -32,6 +32,7 @@ const saleItemSchema = z.object({
   barcode: z.string().optional().nullable(),
   quantity: z.number().positive(),
   unitPrice: z.number().nonnegative(),
+  unitCost: z.number().nonnegative().optional().default(0),
   discount: z.number().nonnegative().default(0),
   tax: z.number().nonnegative().default(0),
   total: z.number().nonnegative(),
@@ -150,6 +151,7 @@ type SaleItemRow = {
   barcode?: string | null;
   quantity: number;
   unit_price: number;
+  unit_cost?: number | null;
   discount: number;
   tax: number;
   total: number;
@@ -172,6 +174,7 @@ function mapSaleItems(items: SaleItemRow[]) {
     barcode: item.barcode || '',
     quantity: Number(item.quantity),
     unitPrice: Number(item.unit_price),
+    unitCost: Number(item.unit_cost || 0),
     discount: Number(item.discount),
     tax: Number(item.tax),
     total: Number(item.total),
@@ -233,8 +236,8 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
   for (const item of items) {
     await db.run(
       `INSERT INTO sale_items (
-        id, sale_id, product_id, product_name, barcode, quantity, unit_price, discount, tax, total
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, sale_id, product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       uid(),
       saleId,
       item.productId,
@@ -242,6 +245,7 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
       item.barcode || null,
       item.quantity,
       item.unitPrice,
+      item.unitCost || (await db.get<{ purchase_price: number }>('SELECT purchase_price FROM products WHERE id = ?', item.productId))?.purchase_price || 0,
       item.discount,
       item.tax,
       item.total,

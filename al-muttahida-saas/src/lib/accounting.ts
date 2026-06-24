@@ -22,7 +22,7 @@ export function calculateCostOfGoodsSold(sales: Sale[], products: Product[]): nu
       (saleSum, sale) =>
         saleSum +
         (sale.items || []).reduce((itemSum, item) => {
-          const purchasePrice = purchasePriceByProduct.get(item.productId) || 0;
+          const purchasePrice = Number(item.unitCost ?? purchasePriceByProduct.get(item.productId) ?? 0);
           return itemSum + item.quantity * purchasePrice;
         }, 0),
       0,
