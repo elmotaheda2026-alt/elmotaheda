@@ -1,5 +1,6 @@
 import { Payment, Sale, Customer, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, applyPaymentToSale, createAuditLog, getNextReceiptNumber } from './core';
+import { createNotification } from './notifications';
 import { api, isApiMode } from '../apiClient';
 
 export function getPayments(): Payment[] {
@@ -79,6 +80,12 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
     createdBy: newPayment.createdBy || 'system',
   });
 
+  void createNotification({
+    type: newPayment.type === 'in' ? 'success' : 'warning',
+    title: `حركة خزينة ${newPayment.type === 'in' ? 'وارد' : 'صادر'}`,
+    message: `${newPayment.type === 'in' ? 'وارد' : 'صادر'} ${Number(newPayment.amount || 0).toLocaleString('ar-EG')} جنيه - ${newPayment.description}${newPayment.receiptNumber ? ` - إيصال ${newPayment.receiptNumber}` : ''}`,
+  });
+
   return newPayment;
 }
 
@@ -127,3 +134,5 @@ export function reversePayment(paymentId: string, reversedBy: string, reason = '
 
   return reversed;
 }
+
+

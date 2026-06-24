@@ -4,6 +4,7 @@ import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput } from '../utils.js';
+import { createSystemNotification, formatMoney } from '../financialNotifications.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -71,6 +72,11 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     );
 
     await audit('expense.create', 'expense', id, req.user?.name || 'system', data);
+    await createSystemNotification(
+      'warning',
+      'سند صرف جديد',
+      `صادر ${formatMoney(data.amount)} - ${data.category}: ${data.description}`,
+    );
     return res.status(201).json({ id });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -136,3 +142,4 @@ router.delete('/:id', requirePermission('payments:write'), async (req: AuthedReq
 });
 
 export default router;
+

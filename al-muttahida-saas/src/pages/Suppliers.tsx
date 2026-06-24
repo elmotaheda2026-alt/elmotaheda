@@ -54,14 +54,19 @@ export default function Suppliers() {
     setShowModal(true);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('åá ÃäÊ ãÊÃßÏ ãä ÍĞİ åĞÇ ÇáãæÑÏ¿ ÓíÊã ÍĞİ ÇáãÔÊÑíÇÊ æÇáãÏİæÚÇÊ ÇáãÑÊÈØÉ Èå ãä ÇáäÙÇã.')) return;
+  const handleDelete = async (supplier: Supplier) => {
+    if (Number(supplier.balance || 0) > 0) {
+      alert('Ù„Ø§ ÙŠÙ…ÙƒÙ† Ø­Ø°Ù Ø§Ù„Ù…ÙˆØ±Ø¯ Ù‚Ø¨Ù„ ØªØµÙÙŠØ© Ø§Ù„Ø±ØµÙŠØ¯ Ø§Ù„Ù…Ø³ØªØ­Ù‚ Ù„Ù‡.');
+      return;
+    }
+
+    if (!confirm('Ù‡Ù„ Ø£Ù†Øª Ù…ØªØ£ÙƒØ¯ Ù…Ù† Ø­Ø°Ù Ù‡Ø°Ø§ Ø§Ù„Ù…ÙˆØ±Ø¯ØŸ Ø³ÙŠØªÙ… Ø­Ø°Ù Ø§Ù„Ù…Ø´ØªØ±ÙŠØ§Øª ÙˆØ§Ù„Ù…Ø¯ÙÙˆØ¹Ø§Øª Ø§Ù„Ù…Ø±ØªØ¨Ø·Ø© Ø¨Ù‡ Ù…Ù† Ø§Ù„Ù†Ø¸Ø§Ù….')) return;
 
     try {
-      await deleteSupplier(id);
+      await deleteSupplier(supplier.id);
       await loadSuppliers();
     } catch (err: any) {
-      alert(err.message || 'ÍÏË ÎØÃ ÃËäÇÁ ÍĞİ ÇáãæÑÏ.');
+      alert(err.message || 'Ø­Ø¯Ø« Ø®Ø·Ø£ Ø£Ø«Ù†Ø§Ø¡ Ø­Ø°Ù Ø§Ù„Ù…ÙˆØ±Ø¯.');
     }
   };
 
@@ -156,7 +161,7 @@ export default function Suppliers() {
                   </button>
                 )}
                 {(hasPermission(user, 'users:manage') || hasPermission(user, 'purchases:manage')) && (
-                  <button onClick={() => handleDelete(supplier.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                  <button onClick={() => handleDelete(supplier)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
                     <Trash2 size={16} />
                   </button>
                 )}

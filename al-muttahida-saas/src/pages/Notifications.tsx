@@ -1,23 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { Bell, Check, Trash2, AlertTriangle, Info, CheckCircle } from 'lucide-react';
 import { Notification } from '../types';
-import { getNotifications, markNotificationRead, markAllNotificationsRead } from '../lib/storage';
+import { getNotifications, markNotificationRead, markAllNotificationsRead, syncNotifications } from '../lib/storage';
 import { formatDateTimeDisplay } from '../lib/dateUtils';
 
 export default function Notifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
   useEffect(() => {
-    setNotifications(getNotifications());
+    let active = true;
+    const loadNotifications = async () => {
+      try {
+        await syncNotifications();
+      } catch (error) {
+        console.error('Failed to sync notifications:', error);
+      }
+      if (active) setNotifications(getNotifications());
+    };
+
+    loadNotifications();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const handleMarkRead = (id: string) => {
-    markNotificationRead(id);
+  const handleMarkRead = async (id: string) => {
+    await markNotificationRead(id);
     setNotifications(getNotifications());
   };
 
-  const handleMarkAllRead = () => {
-    markAllNotificationsRead();
+  const handleMarkAllRead = async () => {
+    await markAllNotificationsRead();
     setNotifications(getNotifications());
   };
 
@@ -102,3 +115,5 @@ export default function Notifications() {
     </div>
   );
 }
+
+

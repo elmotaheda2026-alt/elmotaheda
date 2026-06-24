@@ -4,6 +4,7 @@ import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput } from '../utils.js';
+import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -228,6 +229,12 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       type: data.type,
     });
 
+    await createSystemNotification(
+      data.type === 'in' ? 'success' : 'warning',
+      `حركة خزينة ${financialMovementLabel(data.type)}`,
+      `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - ${data.description} - إيصال ${receiptNumber}`,
+    );
+
     return res.status(201).json({ id, receiptNumber });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -389,6 +396,11 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
     );
 
     await audit('payment.reverse', 'payment', original.id, req.user?.name || 'system', { reverseId });
+    await createSystemNotification(
+      reverseType === 'in' ? 'success' : 'warning',
+      'عكس حركة مالية',
+      `${financialMovementLabel(reverseType)} ${formatMoney(original.amount)} لعكس الإيصال ${original.receipt_number || original.id} - إيصال ${receiptNumber}`,
+    );
     return res.json({ message: 'Reversed', reverseId });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -396,3 +408,5 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
 });
 
 export default router;
+
+

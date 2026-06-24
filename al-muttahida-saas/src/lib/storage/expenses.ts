@@ -1,5 +1,6 @@
 import { Expense } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
+import { createNotification } from './notifications';
 import { api, isApiMode } from '../apiClient';
 
 export function getExpenses(): Expense[] {
@@ -34,5 +35,11 @@ export async function createExpense(expense: Omit<Expense, 'id' | 'createdAt'>):
   };
   expenses.push(newExpense);
   setStorage(DB_KEYS.EXPENSES, expenses);
+  void createNotification({
+    type: 'warning',
+    title: 'سند صرف جديد',
+    message: `صادر ${Number(newExpense.amount || 0).toLocaleString('ar-EG')} جنيه - ${newExpense.category}: ${newExpense.description}`,
+  });
   return newExpense;
 }
+

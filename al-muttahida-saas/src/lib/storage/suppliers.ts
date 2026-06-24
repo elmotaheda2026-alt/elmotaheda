@@ -91,8 +91,11 @@ export async function deleteSupplier(id: string): Promise<boolean> {
   }
 
   const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
-  const supplierExists = suppliers.some((supplier) => supplier.id === id);
-  if (!supplierExists) return false;
+  const supplier = suppliers.find((item) => item.id === id);
+  if (!supplier) return false;
+  if (Number(supplier.balance || 0) > 0) {
+    throw new Error('لا يمكن حذف المورد قبل تصفية الرصيد المستحق له.');
+  }
 
   const purchases = getStorage<Purchase>(DB_KEYS.PURCHASES);
   const linkedPurchaseIds = new Set(purchases.filter((purchase) => purchase.supplierId === id).map((purchase) => purchase.id));

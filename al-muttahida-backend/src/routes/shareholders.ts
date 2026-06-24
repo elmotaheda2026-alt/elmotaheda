@@ -5,6 +5,7 @@ import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid } from '../utils.js';
+import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -225,6 +226,14 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
     );
 
     await audit('shareholder_tx.create', 'shareholder_transaction', id, req.user?.name || 'system', data);
+    if (data.type !== 'profit_distribution') {
+      const movementType = data.type === 'capital_deposit' ? 'in' : 'out';
+      await createSystemNotification(
+        movementType === 'in' ? 'success' : 'warning',
+        `حركة شريك ${financialMovementLabel(movementType)}`,
+        `${financialMovementLabel(movementType)} ${formatMoney(data.amount)} - ${shareholder.name}: ${data.description}`,
+      );
+    }
     return res.status(201).json({ id });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -232,3 +241,4 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
 });
 
 export default router;
+

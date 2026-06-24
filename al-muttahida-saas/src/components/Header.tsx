@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, LogOut, Mail, Menu, Search, Shield, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getNotifications } from '../lib/storage';
+import { getNotifications, syncNotifications } from '../lib/storage';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -15,7 +15,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
-  const notifications = getNotifications().slice(0, 5);
+  const [notifications, setNotifications] = useState(() => getNotifications().slice(0, 5));
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
   const roleLabel =
     user?.role === 'admin'
@@ -31,6 +31,25 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
               : user?.role === 'finance_manager'
                 ? 'مدير مالي'
                 : 'مستخدم';
+
+  useEffect(() => {
+    let active = true;
+    const loadNotifications = async () => {
+      try {
+        await syncNotifications();
+      } catch (error) {
+        console.error('Failed to sync notifications:', error);
+      }
+      if (active) setNotifications(getNotifications().slice(0, 5));
+    };
+
+    loadNotifications();
+    const interval = window.setInterval(loadNotifications, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -164,3 +183,5 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
     </header>
   );
 }
+
+

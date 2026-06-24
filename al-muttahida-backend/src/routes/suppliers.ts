@@ -128,9 +128,13 @@ router.delete('/:id', requireAnyPermission('users:manage', 'purchases:manage'), 
 
   try {
     const db = await dbPromise;
-    const existing = await db.get<{ id: string; name: string }>('SELECT id, name FROM suppliers WHERE id = ?', req.params.id);
+    const existing = await db.get<{ id: string; name: string; balance: number }>('SELECT id, name, balance FROM suppliers WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Supplier not found' });
+    }
+
+    if (Number(existing.balance || 0) > 0) {
+      return res.status(409).json({ message: 'لا يمكن حذف المورد قبل تصفية الرصيد المستحق له.' });
     }
 
     const purchases = await db.all<{ id: string; remaining: number }>(

@@ -500,7 +500,8 @@ export default function CollectionStatement() {
                                     </div>
                                     <div className="flex items-center gap-1.5 text-slate-500 border-r border-slate-200 pr-4 print:pr-2 print:gap-1">
                                       <MapPin size={14} className="print:w-3 print:h-3 text-slate-400" />
-                                      <span className="text-sm font-medium text-slate-600 truncate max-w-[280px] print:max-w-[150px] print:text-[9px]">{group[0].customerAddress}</span>
+                                      <span className="text-sm font-medium text-slate-600 truncate max-w-[280px] print:hidden">{group[0].customerAddress}</span>
+                                      <span className="hidden print:inline text-slate-600 font-medium print:text-[9px] print:whitespace-normal">{group[0].customerAddress}</span>
                                     </div>
                                   </div>
 

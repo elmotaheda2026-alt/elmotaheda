@@ -1,6 +1,7 @@
 import { Shareholder, ShareholderTransaction, Payment } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
 import { api, isApiMode } from '../apiClient';
+import { createNotification } from './notifications';
 
 export function getShareholders(): Shareholder[] {
   return getStorage<Shareholder>(DB_KEYS.SHAREHOLDERS);
@@ -152,6 +153,11 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
       };
       payments.push(treasuryTx);
       setStorage(DB_KEYS.PAYMENTS, payments);
+      void createNotification({
+        type: treasuryTx.type === 'in' ? 'success' : 'warning',
+        title: `حركة شريك ${treasuryTx.type === 'in' ? 'وارد' : 'صادر'}`,
+        message: `${treasuryTx.type === 'in' ? 'وارد' : 'صادر'} ${Number(treasuryTx.amount || 0).toLocaleString('ar-EG')} جنيه - ${shareholder.name}: ${data.description}`,
+      });
     }
     
     return newTx;
@@ -208,6 +214,11 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
     };
     payments.push(treasuryTx);
     setStorage(DB_KEYS.PAYMENTS, payments);
+    void createNotification({
+      type: treasuryTx.type === 'in' ? 'success' : 'warning',
+      title: `حركة شريك ${treasuryTx.type === 'in' ? 'وارد' : 'صادر'}`,
+      message: `${treasuryTx.type === 'in' ? 'وارد' : 'صادر'} ${Number(treasuryTx.amount || 0).toLocaleString('ar-EG')} جنيه - ${shareholder.name}: ${data.description}`,
+    });
   }
 
   return newTx;
@@ -257,4 +268,5 @@ export async function deleteShareholderTransaction(txId: string): Promise<Shareh
 
   return tx;
 }
+
 
