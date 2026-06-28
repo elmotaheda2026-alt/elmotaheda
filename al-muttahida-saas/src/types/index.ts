@@ -281,6 +281,11 @@ export interface Setting {
   currency: string;
   invoicePrefix: string;
   invoiceFooter?: string;
+  whatsappRemindersEnabled?: boolean;
+  whatsappPhoneNumberId?: string;
+  whatsappAccessToken?: string;
+  whatsappTemplateName?: string;
+  whatsappTemplateLanguage?: string;
 }
 
 export interface Notification {

@@ -211,13 +211,34 @@ export function initializeDatabase(): void {
       currency: 'جنيه',
       invoicePrefix: 'INV',
       invoiceFooter: 'شكراً للتعامل معنا - شركة المتحدة',
+      whatsappRemindersEnabled: false,
+      whatsappPhoneNumberId: '',
+      whatsappAccessToken: '',
+      whatsappTemplateName: 'installment_reminder',
+      whatsappTemplateLanguage: 'ar',
     };
     localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   } else {
     try {
       const parsed = JSON.parse(settings);
+      let changed = false;
       if (parsed.taxRate === 14) {
         parsed.taxRate = 0;
+        changed = true;
+      }
+      if (parsed.whatsappRemindersEnabled === undefined) {
+        parsed.whatsappRemindersEnabled = false;
+        changed = true;
+      }
+      if (parsed.whatsappTemplateName === undefined) {
+        parsed.whatsappTemplateName = 'installment_reminder';
+        changed = true;
+      }
+      if (parsed.whatsappTemplateLanguage === undefined) {
+        parsed.whatsappTemplateLanguage = 'ar';
+        changed = true;
+      }
+      if (changed) {
         localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(parsed));
       }
     } catch (e) {}

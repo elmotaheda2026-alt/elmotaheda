@@ -162,6 +162,15 @@ export default function Payments() {
 
   const pendingSchedules = selectedSchedules.filter((schedule) => schedule.status !== 'paid');
 
+  const toYYYYMMDD = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const filteredPayments = payments.filter((payment) => {
     const customerName =
       customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '';
@@ -178,8 +187,10 @@ export default function Payments() {
     );
   });
 
-  const totalIn = payments.filter((payment) => payment.type === 'in').reduce((sum, payment) => sum + payment.amount, 0);
-  const totalOut = payments.filter((payment) => payment.type === 'out').reduce((sum, payment) => sum + payment.amount, 0);
+  const todayYYYYMMDD = today();
+  const todayPayments = payments.filter((payment) => toYYYYMMDD(payment.date) === todayYYYYMMDD);
+  const totalIn = todayPayments.filter((payment) => payment.type === 'in').reduce((sum, payment) => sum + payment.amount, 0);
+  const totalOut = todayPayments.filter((payment) => payment.type === 'out').reduce((sum, payment) => sum + payment.amount, 0);
 
   const openModal = (type: PaymentType) => {
     setPaymentType(type);
@@ -344,7 +355,7 @@ export default function Payments() {
   const handleIncomingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (isDateClosed(incomingForm.date)) {
+    if (user?.role !== 'admin' && isDateClosed(incomingForm.date)) {
       setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
       return;
     }
@@ -456,7 +467,7 @@ export default function Payments() {
   const handleOutgoingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (isDateClosed(outgoingForm.date)) {
+    if (user?.role !== 'admin' && isDateClosed(outgoingForm.date)) {
       setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
       return;
     }
@@ -511,15 +522,6 @@ export default function Payments() {
     }));
 
     setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
-  };
-
-  const toYYYYMMDD = (dateStr: string) => {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return '';
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
   };
 
   const closingDateYYYYMMDD = toYYYYMMDD(closingDate);

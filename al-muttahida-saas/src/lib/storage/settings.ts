@@ -14,6 +14,11 @@ export function getSettings(): Setting {
         currency: 'جنيه',
         invoicePrefix: 'INV',
         invoiceFooter: 'شكراً للتعامل معنا - شركة المتحدة',
+        whatsappRemindersEnabled: false,
+        whatsappPhoneNumberId: '',
+        whatsappAccessToken: '',
+        whatsappTemplateName: 'installment_reminder',
+        whatsappTemplateLanguage: 'ar',
       };
 }
 

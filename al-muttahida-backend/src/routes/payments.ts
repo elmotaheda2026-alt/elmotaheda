@@ -11,8 +11,17 @@ router.use(requireAuth);
 
 async function nextReceiptNumber() {
   const db = await dbPromise;
-  const row = await db.get<{ c: number }>("SELECT COUNT(*) as c FROM payments");
-  return `RCPT-${5000 + (row?.c || 0) + 1}`;
+  const rows = await db.all<{ receipt_number: string }>(
+    "SELECT receipt_number FROM payments WHERE receipt_number LIKE 'RCPT-%'"
+  );
+  let maxNum = 5000;
+  for (const r of rows) {
+    const num = parseInt(r.receipt_number.replace('RCPT-', ''), 10);
+    if (!isNaN(num) && num > maxNum) {
+      maxNum = num;
+    }
+  }
+  return `RCPT-${maxNum + 1}`;
 }
 
 const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
@@ -99,7 +108,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
   const receiptNumber = await nextReceiptNumber();
 
   try {
-    if (await isPeriodClosed(db, data.date)) {
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, data.date)) {
       return res.status(400).json({ message: 'لا يمكن تسجيل عملية دفع في تاريخ مغلق مالياً' });
     }
     let finalCustomerId = data.customerId || null;
@@ -273,7 +282,7 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
   const reverseType = original.type === 'in' ? 'out' : 'in';
 
   try {
-    if (await isPeriodClosed(db, original.date) || await isPeriodClosed(db, now.slice(0, 10))) {
+    if (req.user?.role !== 'admin' && (await isPeriodClosed(db, original.date) || await isPeriodClosed(db, now.slice(0, 10)))) {
       return res.status(400).json({ message: 'لا يمكن عكس حركة مالية في تاريخ مغلق مالياً' });
     }
     // 1. If reversing a sale payment, deduct from paid and add back to remaining

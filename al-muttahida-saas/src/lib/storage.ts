@@ -14,3 +14,5 @@ export * from './storage/dashboard';
 export * from './storage/reports';
 export * from './storage/shareholders';
 export * from './storage/operations';
+
+export * from './storage/backup';

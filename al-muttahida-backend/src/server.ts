@@ -23,6 +23,7 @@ import expensesRoutes from './routes/expenses.js';
 import salesRepsRoutes from './routes/sales-reps.js';
 import shareholdersRoutes from './routes/shareholders.js';
 import settingsRoutes from './routes/settings.js';
+import backupRoutes from './routes/backup.js';
 import notificationsRoutes from './routes/notifications.js';
 import collectionTasksRoutes from './routes/collection-tasks.js';
 
@@ -65,6 +66,7 @@ async function bootstrap() {
   app.use('/sales-reps', salesRepsRoutes);
   app.use('/shareholders', shareholdersRoutes);
   app.use('/settings', settingsRoutes);
+  app.use('/settings', backupRoutes);
   app.use('/notifications', notificationsRoutes);
   app.use('/collection-tasks', collectionTasksRoutes);
   // Central error handling

@@ -25,12 +25,15 @@ import Shareholders from './pages/Shareholders';
 import ProductsInventory from './pages/ProductsInventory';
 
 import ProtectedRoute from './components/ProtectedRoute';
+import WhatsappReminderRunner from './components/WhatsappReminderRunner';
 
 function AppRoutes() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, settings } = useAuth();
 
   return (
-    <Routes>
+    <>
+      <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
+      <Routes>
       <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
 
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
@@ -54,7 +57,8 @@ function AppRoutes() {
         <Route path="collection-statement" element={<ProtectedRoute permission="payments:read"><CollectionStatement /></ProtectedRoute>} />
         <Route path="shareholders" element={<ProtectedRoute permission="shareholders:manage"><Shareholders /></ProtectedRoute>} />
       </Route>
-    </Routes>
+      </Routes>
+    </>
   );
 }
 

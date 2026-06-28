@@ -1,6 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
 const API_USER_KEY = 'api_user';
+const FORCE_LOCAL_RESTORE_KEY = 'almuttahida_force_local_restore';
 
 export function isApiMode() {
   return DATA_MODE === 'api';
@@ -122,6 +123,8 @@ export const api = {
   getSettings: () => request<any>('/settings'),
   updateSettings: (payload: any) => request<{ message: string }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   clearAllData: () => request<{ message: string }>('/settings/clear-data', { method: 'POST' }),
+  exportBackup: () => request<any>('/settings/backup'),
+  restoreBackup: (payload: any) => request<{ message: string }>('/settings/restore-backup', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Notifications
   listNotifications: () => request<any[]>('/notifications'),

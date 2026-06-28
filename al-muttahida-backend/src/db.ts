@@ -6,8 +6,10 @@ import { config } from './config.js';
  * configuration from `config.sql`. The returned object mimics the
  * minimal API used by the route handlers (`all`, `get`, `run`).
  */
+export const poolPromise = sql.connect(config.sql);
+
 export const dbPromise = (async () => {
-  const pool = await sql.connect(config.sql);
+  const pool = await poolPromise;
 
   function prepareRequest(query: string, params: any[]) {
     const request = pool.request();
