@@ -42,20 +42,20 @@ const menuGroups: {
     title: 'المبيعات والعملاء',
     defaultOpen: true,
     items: [
-      { icon: UserCircle, label: 'ملفات العملاء', path: '/customers', permission: 'sales:read' },
-      { icon: Receipt, label: 'مركز التعاقد', path: '/invoices', permission: 'sales:read' },
-      { icon: Truck, label: 'شركاء التوريد', path: '/suppliers', permission: 'sales:read' },
-      { icon: UserCheck, label: 'فريق المبيعات', path: '/sales-reps', permission: 'sales:read' },
-      { icon: Package, label: 'دليل الأصناف / المخزون', path: '/products-inventory', permission: 'inventory:manage' },
+      { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
+      { icon: Receipt, label: 'العقود', path: '/invoices', permission: 'sales:read' },
+      { icon: Truck, label: 'الموردين', path: '/suppliers', permission: 'sales:read' },
+      { icon: UserCheck, label: 'المناديب', path: '/sales-reps', permission: 'sales:read' },
+      { icon: Package, label: 'الأصناف', path: '/products-inventory', permission: 'inventory:manage' },
     ],
   },
   {
     title: 'الخزينة والتحصيل',
     defaultOpen: false,
     items: [
-      { icon: Banknote, label: 'الخزينة اليومية', path: '/payments', permission: 'payments:read' },
+      { icon: Banknote, label: 'الخزينة', path: '/payments', permission: 'payments:read' },
       { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
-      { icon: ClipboardList, label: 'المصروفات المعتمدة', path: '/expenses', permission: 'payments:write' },
+      { icon: ClipboardList, label: 'المصروفات', path: '/expenses', permission: 'payments:write' },
     ],
   },
   {
@@ -73,9 +73,9 @@ const menuGroups: {
     title: 'الإدارة',
     defaultOpen: false,
     items: [
-      { icon: Users, label: 'إدارة المستخدمين', path: '/users', permission: 'users:manage' },
+      { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
       { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
-      { icon: Settings, label: 'تهيئة النظام', path: '/settings', permission: 'settings:manage' },
+      { icon: Settings, label: 'الإعدادات', path: '/settings', permission: 'settings:manage' },
     ],
   },
 ];

@@ -531,28 +531,24 @@ export default function Payments() {
   const closingNet = closingTotalIn - closingTotalOut;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">إدارة المدفوعات</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            إدارة المقبوضات والمدفوعات مع ربط ذكي بالفواتير والأقساط الشهرية.
-          </p>
-        </div>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+        <h2 className="text-xl font-black text-slate-900">الخزينة</h2>
         <div className="flex gap-2">
           <button
             onClick={() => openModal('in')}
-            className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700"
+            className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold shadow-sm"
           >
-            <Plus size={18} />
-            سداد عميل
+            <Plus size={16} />
+            <span>سداد عميل</span>
           </button>
           <button
             onClick={() => openModal('out')}
-            className="inline-flex items-center gap-2 rounded-2xl bg-rose-600 px-4 py-2 text-white hover:bg-rose-700"
+            className="flex items-center gap-1.5 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-bold shadow-sm"
           >
-            <Plus size={18} />
-            دفعة مورد
+            <Plus size={16} />
+            <span>دفعة مورد</span>
           </button>
           {hasPermission(user, 'closing:write') && (
             <button
@@ -561,10 +557,10 @@ export default function Payments() {
                 setClosingNotes('');
                 setShowClosingModal(true);
               }}
-              className="inline-flex items-center gap-2 rounded-2xl bg-slate-700 px-4 py-2 text-white hover:bg-slate-800 transition-colors duration-200"
+              className="flex items-center gap-1.5 bg-slate-700 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors text-sm font-bold shadow-sm"
             >
-              <Lock size={18} />
-              إغلاق اليومية
+              <Lock size={16} />
+              <span>إغلاق اليومية</span>
             </button>
           )}
         </div>

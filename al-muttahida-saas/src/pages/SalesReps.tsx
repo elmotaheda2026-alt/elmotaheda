@@ -74,151 +74,174 @@ export default function SalesReps() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">مناديب المبيعات</h2>
-          <p className="text-gray-500 text-sm mt-1">إجمالي {reps.length} مندوب</p>
-        </div>
+      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+        <h2 className="text-xl font-black text-slate-900">المناديب</h2>
         <button
           onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
         >
-          <Plus size={20} />
+          <Plus size={16} />
           <span>إضافة مندوب</span>
         </button>
       </div>
 
-      {/* Search */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      {/* Toolbar / Search */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div className="relative max-w-sm">
+          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
             placeholder="بحث عن مندوب..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+            className="input-ui pr-10 pl-4 py-2 text-sm w-full"
           />
         </div>
       </div>
 
-      {/* Reps Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredReps.map(rep => (
-          <div key={rep.id} className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full flex items-center justify-center">
-                  <span className="text-white font-bold text-lg">{rep.name.charAt(0)}</span>
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-800">{rep.name}</h3>
-                  <p className="text-xs text-gray-500">{rep.area}</p>
-                </div>
-              </div>
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${rep.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                {rep.isActive ? 'نشط' : 'غير نشط'}
-              </span>
-            </div>
-
-            <div className="space-y-2 text-sm">
-              <p className="text-gray-600">📱 {rep.phone}</p>
-              <p className="text-gray-600">📍 {rep.area}</p>
-              <div className="flex justify-between pt-2 border-t border-gray-100">
-                <span className="text-gray-500">الهدف:</span>
-                <span className="font-bold text-indigo-600">{rep.target.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">المحقق:</span>
-                <span className="font-bold text-green-600">{rep.achieved.toLocaleString()}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-                <div className="bg-green-500 h-2 rounded-full" style={{ width: `${Math.min((rep.achieved / rep.target) * 100, 100)}%` }} />
-              </div>
-            </div>
-
-            <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
-              <button onClick={() => handleEdit(rep)} className="flex-1 flex items-center justify-center gap-1 px-3 py-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                <Edit size={16} />
-                تعديل
-              </button>
-              <button onClick={() => handleDelete(rep.id)} className="flex-1 flex items-center justify-center gap-1 px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                <Trash2 size={16} />
-                حذف
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Reps Table */}
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[800px]">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الاسم</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">رقم الهاتف</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">المنطقة</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الهدف الشهري</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">المحقق</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">نسبة التحقيق</th>
+                <th className="px-5 py-3 text-center text-sm font-black text-slate-700">الحالة</th>
+                <th className="px-5 py-3 text-center text-sm font-black text-slate-700">إجراءات</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredReps.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-5 py-12 text-center text-slate-500">لا يوجد مناديب مطابِقين</td>
+                </tr>
+              ) : (
+                filteredReps.map(rep => {
+                  const percentage = rep.target > 0 ? Math.min((rep.achieved / rep.target) * 100, 100) : 0;
+                  return (
+                    <tr key={rep.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-5 py-3">
+                        <span className="font-bold text-slate-900 text-sm">{rep.name}</span>
+                      </td>
+                      <td className="px-5 py-3 text-sm text-slate-700 font-mono">{rep.phone}</td>
+                      <td className="px-5 py-3 text-sm text-slate-600">{rep.area || '—'}</td>
+                      <td className="px-5 py-3 text-sm text-slate-900 font-bold">{rep.target.toLocaleString()}</td>
+                      <td className="px-5 py-3 text-sm text-emerald-600 font-bold">{rep.achieved.toLocaleString()}</td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-600 w-10 text-left">{percentage.toFixed(0)}%</span>
+                          <div className="w-20 bg-slate-200 rounded-full h-1.5">
+                            <div className="bg-emerald-500 h-1.5 rounded-full" style={{ width: `${percentage}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${rep.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-100 text-slate-500'}`}>
+                          {rep.isActive ? 'نشط' : 'موقوف'}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
+                            <Edit size={15} />
+                          </button>
+                          <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="حذف">
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="p-6 border-b border-gray-100">
-              <h3 className="text-xl font-bold text-gray-800">
+          <div className="bg-white rounded-xl w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-gray-100 bg-slate-50">
+              <h3 className="text-base font-black text-slate-800">
                 {editingRep ? 'تعديل مندوب' : 'إضافة مندوب جديد'}
               </h3>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-5 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">الاسم</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">الاسم</label>
                 <input
                   type="text"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  className="input-ui text-sm h-10 w-full"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">رقم الهاتف</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">رقم الهاتف</label>
                 <input
                   type="tel"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  className="input-ui text-sm h-10 w-full"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">المنطقة</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">المنطقة</label>
                 <input
                   type="text"
                   value={formData.area}
                   onChange={(e) => setFormData({ ...formData, area: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  className="input-ui text-sm h-10 w-full"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الهدف الشهري</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">الهدف الشهري</label>
                   <input
                     type="number"
                     value={formData.target === 0 ? '' : formData.target}
                     onChange={(e) => setFormData({ ...formData, target: parseFloat(e.target.value) || 0 })}
                     onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    className="input-ui text-sm h-10 w-full"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">نسبة العمولة %</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">نسبة العمولة %</label>
                   <input
                     type="number"
                     value={formData.commission === 0 ? '' : formData.commission}
                     onChange={(e) => setFormData({ ...formData, commission: parseFloat(e.target.value) || 0 })}
                     onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    className="input-ui text-sm h-10 w-full"
                   />
                 </div>
               </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => { setShowModal(false); setEditingRep(null); }} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="isActive"
+                  checked={formData.isActive}
+                  onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
+                  className="h-4 w-4 rounded text-indigo-600"
+                />
+                <label htmlFor="isActive" className="text-sm font-bold text-slate-700 cursor-pointer">مندوب نشط حالياً</label>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => { setShowModal(false); setEditingRep(null); }} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-bold">
                   إلغاء
                 </button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-bold">
                   {editingRep ? 'تحديث' : 'إضافة'}
                 </button>
               </div>

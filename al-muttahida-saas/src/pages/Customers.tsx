@@ -252,266 +252,189 @@ export default function Customers() {
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
-  // Get next customer number for display
   const nextCustomerNumber = selectedCustomer?.customerNumber || generateCustomerNumber();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">ملفات العملاء</h2>
-          <p className="text-gray-500 text-sm mt-1">إدارة بيانات العملاء والضامنين وسجلاتهم المالية</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setSearchModal(true)}
-            className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-          >
-            <Search size={18} />
-            <span>بحث</span>
-          </button>
-          <button
-            onClick={handleNew}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            <Plus size={20} />
-            <span>عميل جديد</span>
-          </button>
-        </div>
+      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+        <h2 className="text-xl font-black text-slate-900">العملاء</h2>
+        <button
+          onClick={handleNew}
+          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
+        >
+          <Plus size={16} />
+          <span>عميل جديد</span>
+        </button>
       </div>
 
-      {!showForm && (
-        <>
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-              <Users size={20} className="text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">إجمالي العملاء</p>
-              <p className="text-xl font-bold text-gray-800">{customers.length}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
-              <Gavel size={20} className="text-red-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">محالون للقضاء</p>
-              <p className="text-xl font-bold text-red-600">{customers.filter(c => c.isSued).length}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
-              <DollarSign size={20} className="text-emerald-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">إجمالي الديون</p>
-              <p className="text-xl font-bold text-emerald-600">
-                {customers.filter(c => c.balanceType === 'debtor').length}
-              </p>
-            </div>
-          </div>
+      {/* Toolbar / Search */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div className="relative max-w-sm">
+          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="بحث باسم العميل، رقم العميل، أو الهاتف..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="input-ui pr-10 pl-4 py-2 text-sm w-full"
+          />
         </div>
       </div>
-        </>
-      )}
 
       {/* Customers List */}
-      {!showForm && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-5 border-b border-gray-100">
-            <h3 className="font-bold text-gray-800">قائمة العملاء</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-50">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">رقم العميل</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الاسم</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">رقم الهاتف</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">العنوان</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الرصيد</th>
+                <th className="px-5 py-3 text-center text-sm font-black text-slate-700">إجراءات</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredCustomers.length === 0 ? (
                 <tr>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">رقم العميل</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">الاسم</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">رقم الهاتف</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">العنوان</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">الرصيد</th>
-                  <th className="px-5 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">إجراءات</th>
+                  <td colSpan={6} className="px-4 py-12 text-center text-slate-500">
+                    <Users size={32} className="mx-auto mb-2 text-slate-300" />
+                    <p className="text-sm font-bold">لا يوجد عملاء مطابِقين</p>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filteredCustomers.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
-                      <Users size={40} className="mx-auto mb-3 text-gray-300" />
-                      <p>لا يوجد عملاء</p>
+              ) : (
+                filteredCustomers.map(customer => (
+                  <tr key={customer.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-5 py-4 text-sm font-semibold text-indigo-600">
+                      {customer.customerNumber}
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${customer.isSued ? 'bg-red-100' : 'bg-indigo-100'}`}>
+                          {customer.isSued ? <Gavel size={16} className="text-red-600" /> : <User size={16} className="text-indigo-600" />}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className={`font-medium text-sm ${customer.isSued ? 'text-red-600 line-through' : 'text-gray-800'}`}>{customer.name}</span>
+                          {customer.isSued && <span className="text-xs text-red-500 font-medium flex items-center gap-1"><AlertTriangle size={10} /> محال للقضاء</span>}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4 text-sm text-gray-600 font-mono">{customer.phone}</td>
+                    <td className="px-5 py-4 text-sm text-gray-500">{customer.address || '—'}</td>
+                    <td className="px-5 py-4">
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${customer.balanceType === 'debtor' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                        {formatCurrency(customer.balance)} {customer.balanceType === 'debtor' ? 'مدين' : 'دائن'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleEdit(customer)}
+                          className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                          title="تعديل"
+                        >
+                          <Edit size={15} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(customer.id)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="حذف"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
-                ) : (
-                  filteredCustomers.map(customer => (
-                    <tr key={customer.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-5 py-4 text-sm font-semibold text-indigo-600">
-                        {customer.customerNumber}
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${customer.isSued ? 'bg-red-100' : 'bg-indigo-100'}`}>
-                            {customer.isSued ? <Gavel size={16} className="text-red-600" /> : <User size={16} className="text-indigo-600" />}
-                          </div>
-                          <div className="flex flex-col">
-                            <span className={`font-medium text-sm ${customer.isSued ? 'text-red-600 line-through' : 'text-gray-800'}`}>{customer.name}</span>
-                            {customer.isSued && <span className="text-xs text-red-500 font-medium flex items-center gap-1"><AlertTriangle size={10} /> محال للقضاء</span>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-4 text-sm text-gray-600 font-mono">{customer.phone}</td>
-                      <td className="px-5 py-4 text-sm text-gray-500">{customer.address || '—'}</td>
-                      <td className="px-5 py-4">
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${customer.balanceType === 'debtor' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                          {formatCurrency(customer.balance)} {customer.balanceType === 'debtor' ? 'مدين' : 'دائن'}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            onClick={() => handleEdit(customer)}
-                            className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                            title="تعديل"
-                          >
-                            <Edit size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(customer.id)}
-                            className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                            title="حذف"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-
-
-      {/* Customer Form */}
-      {showForm && (
-        <div ref={formRef} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden scroll-mt-4">
-          {/* Form Header */}
-          <div className="bg-indigo-600 text-white py-4 px-6 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-white/20 rounded-lg flex items-center justify-center">
-                <UserCircle size={20} />
-              </div>
-              <h2 className="font-bold text-lg">
-                {isEditing ? 'تعديل بيانات العميل' : 'إضافة عميل جديد'}
-              </h2>
-            </div>
-            <div className="flex items-center gap-2">
-              {isEditing && (
-                <button
-                  type="button"
-                  onClick={() => handleDelete(selectedCustomer!.id)}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium"
-                >
-                  <Trash2 size={15} />
-                  <span>حذف</span>
-                </button>
+                ))
               )}
-              <button
-                type="button"
-                onClick={handleNew}
-                className="flex items-center gap-1.5 px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors text-sm font-medium"
-              >
-                <Plus size={15} />
-                <span>جديد</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleClose}
-                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-          </div>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-          <form onSubmit={handleSubmit} className="p-6">
-            {error && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium flex items-center gap-2">
-                <AlertTriangle className="text-red-500 shrink-0" size={18} />
-                <span>{error}</span>
+      {/* Customer Form Modal */}
+      {showForm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Form Header */}
+            <div className="bg-indigo-600 text-white py-4 px-6 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-white/20 rounded-lg flex items-center justify-center">
+                  <UserCircle size={20} />
+                </div>
+                <h2 className="font-bold text-lg">
+                  {isEditing ? 'تعديل بيانات العميل' : 'إضافة عميل جديد'}
+                </h2>
               </div>
-            )}
-            <div className="flex gap-6">
-              {/* Right Side - Photo placeholder */}
-              <div className="w-32 flex flex-col gap-3">
-                <button
-                  type="submit"
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
-                >
-                  <Save size={18} />
-                  <span>حفظ</span>
-                </button>
+              <div className="flex items-center gap-2">
+                {isEditing && (
                   <button
                     type="button"
-                    onClick={handleClose}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors font-medium"
+                    onClick={() => handleDelete(selectedCustomer!.id)}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium"
                   >
-                    <X size={18} />
-                    <span>إغلاق</span>
+                    <Trash2 size={15} />
+                    <span>حذف</span>
                   </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+              {error && (
+                <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium flex items-center gap-2 shrink-0">
+                  <AlertTriangle className="text-red-500 shrink-0" size={18} />
+                  <span>{error}</span>
+                </div>
+              )}
+              <div className="flex flex-col lg:flex-row gap-6">
+                {/* Right Side - Photo placeholder */}
+                <div className="w-full lg:w-40 shrink-0">
+                  <div className="border-2 border-dashed border-indigo-200 rounded-xl p-4 text-center bg-indigo-50">
+                    <div className="w-full aspect-square bg-gradient-to-br from-indigo-100 to-indigo-200 rounded-lg flex items-center justify-center mb-3">
+                      <User size={48} className="text-indigo-400" />
+                    </div>
+                    <button
+                      type="button"
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 mb-2"
+                    >
+                      من ملف
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 mb-2"
+                    >
+                      حذف
+                    </button>
+                    <div className="text-xs text-gray-400 my-2">أو</div>
+                    <button
+                      type="button"
+                      className="w-full px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                    >
+                      <Camera size={14} className="inline ml-1" />
+                      الكاميرا
+                    </button>
+                  </div>
                 </div>
 
                 {/* Left Side - Form Fields */}
-                <div className="flex-1">
-                  {/* Customer Number & Photo */}
-                  <div className="flex gap-6 mb-6">
-                    {/* Photo Area */}
-                    <div className="w-40">
-                    <div className="border-2 border-dashed border-indigo-200 rounded-xl p-4 text-center bg-indigo-50">
-                      <div className="w-full aspect-square bg-gradient-to-br from-indigo-100 to-indigo-200 rounded-lg flex items-center justify-center mb-3">
-                        <User size={48} className="text-indigo-400" />
-                        </div>
-                        <button
-                          type="button"
-                          className="w-full px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 mb-2"
-                        >
-                          من ملف
-                        </button>
-                        <button
-                          type="button"
-                          className="w-full px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 mb-2"
-                        >
-                          حذف
-                        </button>
-                        <div className="text-xs text-gray-400 my-2">أو</div>
-                        <button
-                          type="button"
-                          className="w-full px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-                        >
-                          <Camera size={14} className="inline ml-1" />
-                          الكاميرا
-                        </button>
-                      </div>
+                <div className="flex-1 space-y-6">
+                  {/* Customer Number & Name */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+                      <label className="block text-sm font-medium text-gray-600 mb-2">رقم العميل</label>
+                      <div className="text-2xl font-bold text-indigo-600">{nextCustomerNumber}</div>
                     </div>
-
-                    {/* Customer Number */}
-                    <div className="flex-1">
-                      <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-4">
-                        <label className="block text-sm font-medium text-gray-600 mb-2">رقم العميل</label>
-                        <div className="text-2xl font-bold text-indigo-600">{nextCustomerNumber}</div>
-                      </div>
-
+                    <div className="md:col-span-2 space-y-4">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-gray-600 mb-1">اسم العميل *</label>
@@ -525,7 +448,7 @@ export default function Customers() {
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-600 mb-1">النوع</label>
-                          <div className="flex gap-4">
+                          <div className="flex gap-4 h-10 items-center">
                             <label className="flex items-center gap-2 cursor-pointer">
                               <input
                                 type="radio"
@@ -533,9 +456,8 @@ export default function Customers() {
                                 value="male"
                                 checked={formData.gender === 'male'}
                                 onChange={() => setFormData({ ...formData, gender: 'male' })}
-                                className="w-4 h-4 text-pink-600"
+                                className="w-4 h-4 text-indigo-600"
                               />
-                              <UserCircle size={16} className="text-blue-600" />
                               <span className="text-sm">ذكر</span>
                             </label>
                             <label className="flex items-center gap-2 cursor-pointer">
@@ -545,9 +467,8 @@ export default function Customers() {
                                 value="female"
                                 checked={formData.gender === 'female'}
                                 onChange={() => setFormData({ ...formData, gender: 'female' })}
-                                className="w-4 h-4 text-pink-600"
+                                className="w-4 h-4 text-indigo-600"
                               />
-                              <User size={16} className="text-pink-600" />
                               <span className="text-sm">أنثى</span>
                             </label>
                           </div>
@@ -555,40 +476,39 @@ export default function Customers() {
                       </div>
 
                       {/* Legal Status Toggle */}
-                      <div className="mt-4 p-4 rounded-xl border border-red-200 bg-red-50 flex flex-col sm:flex-row items-center justify-between gap-4">
-                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-red-100 text-red-600 rounded-full flex items-center justify-center shrink-0">
-                               <Gavel size={20} />
-                            </div>
-                            <div>
-                               <h4 className="font-bold text-red-800">الشئون القانونية والنزاعات</h4>
-                               <p className="text-xs text-red-600">تفعيل هذا الخيار سيضع العميل في القائمة السوداء ويمنع التعامل معه.</p>
-                            </div>
-                         </div>
-                         <label className="flex items-center cursor-pointer">
-                            <div className="relative">
-                               <input 
-                                 type="checkbox" 
-                                 className="sr-only" 
-                                 checked={formData.isSued} 
-                                 onChange={(e) => setFormData({...formData, isSued: e.target.checked})} 
-                               />
-                               <div className={`block w-14 h-8 rounded-full transition-colors ${formData.isSued ? 'bg-red-500' : 'bg-gray-300'}`}></div>
-                               <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.isSued ? 'transform translate-x-6' : ''}`}></div>
-                            </div>
-                         </label>
+                      <div className="p-4 rounded-xl border border-red-200 bg-red-50 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-red-100 text-red-600 rounded-full flex items-center justify-center shrink-0">
+                            <Gavel size={20} />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-red-800 text-sm">الشئون القانونية والنزاعات</h4>
+                            <p className="text-xs text-red-600">تفعيل هذا الخيار سيضع العميل في القائمة السوداء ويمنع التعامل معه.</p>
+                          </div>
+                        </div>
+                        <label className="flex items-center cursor-pointer">
+                          <div className="relative">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only" 
+                              checked={formData.isSued} 
+                              onChange={(e) => setFormData({...formData, isSued: e.target.checked})} 
+                            />
+                            <div className={`block w-14 h-8 rounded-full transition-colors ${formData.isSued ? 'bg-red-500' : 'bg-gray-300'}`}></div>
+                            <div className={`dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.isSued ? 'transform translate-x-6' : ''}`}></div>
+                          </div>
+                        </label>
                       </div>
-
                     </div>
                   </div>
 
                   {/* Personal Info Section */}
-                  <div className="border border-gray-300 rounded-xl p-4 mb-4">
+                  <div className="border border-gray-300 rounded-xl p-4">
                     <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                      <CreditCard size={18} className="text-pink-600" />
+                      <CreditCard size={18} className="text-indigo-600" />
                       البيانات الشخصية
                     </h3>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-600 mb-1">العنوان *</label>
                         <input
@@ -652,12 +572,12 @@ export default function Customers() {
                   </div>
 
                   {/* ID & Financial Info Section */}
-                  <div className="border border-gray-300 rounded-xl p-4 mb-4">
+                  <div className="border border-gray-300 rounded-xl p-4">
                     <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                      <FileText size={18} className="text-pink-600" />
+                      <FileText size={18} className="text-indigo-600" />
                       البيانات الثبوتية والمالية
                     </h3>
-                    <div className="grid grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-600 mb-1">الرقم القومى *</label>
                         <input
@@ -698,12 +618,12 @@ export default function Customers() {
                   </div>
 
                   {/* Notes */}
-                  <div className="mb-4">
+                  <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">ملاحظات</label>
                     <textarea
                       value={formData.notes}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                      rows={3}
+                      rows={2}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none"
                     />
                   </div>
@@ -711,101 +631,95 @@ export default function Customers() {
                   {/* Guarantors Section */}
                   <div className="border border-gray-300 rounded-xl p-4">
                     <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                      <Users size={18} className="text-pink-600" />
+                      <Users size={18} className="text-indigo-600" />
                       الضامنين
                     </h3>
-
-                    {/* First & Second Guarantor */}
-                    <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                       {/* Guarantor 1 */}
-                      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                        <h4 className="font-medium text-gray-700 mb-3">الضامن الأول</h4>
-                        <div className="space-y-3">
-                          <input
-                            type="text"
-                            placeholder="الاسم"
-                            value={formData.guarantors[0]?.name || ''}
-                            onChange={(e) => updateGuarantor(0, 'name', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="العنوان"
-                            value={formData.guarantors[0]?.address || ''}
-                            onChange={(e) => updateGuarantor(0, 'address', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="الرقم القومى"
-                            value={formData.guarantors[0]?.nationalId || ''}
-                            onChange={(e) => updateGuarantor(0, 'nationalId', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="tel"
-                            placeholder="رقم الهاتف"
-                            value={formData.guarantors[0]?.phone || ''}
-                            onChange={(e) => updateGuarantor(0, 'phone', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="صلة القرابة"
-                            value={formData.guarantors[0]?.relationship || ''}
-                            onChange={(e) => updateGuarantor(0, 'relationship', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                        </div>
+                      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
+                        <h4 className="font-medium text-gray-700">الضامن الأول</h4>
+                        <input
+                          type="text"
+                          placeholder="الاسم"
+                          value={formData.guarantors[0]?.name || ''}
+                          onChange={(e) => updateGuarantor(0, 'name', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="text"
+                          placeholder="العنوان"
+                          value={formData.guarantors[0]?.address || ''}
+                          onChange={(e) => updateGuarantor(0, 'address', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="text"
+                          placeholder="الرقم القومى"
+                          value={formData.guarantors[0]?.nationalId || ''}
+                          onChange={(e) => updateGuarantor(0, 'nationalId', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="tel"
+                          placeholder="رقم الهاتف"
+                          value={formData.guarantors[0]?.phone || ''}
+                          onChange={(e) => updateGuarantor(0, 'phone', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="text"
+                          placeholder="صلة القرابة"
+                          value={formData.guarantors[0]?.relationship || ''}
+                          onChange={(e) => updateGuarantor(0, 'relationship', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
                       </div>
 
                       {/* Guarantor 2 */}
-                      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                        <h4 className="font-medium text-gray-700 mb-3">الضامن الثانى</h4>
-                        <div className="space-y-3">
-                          <input
-                            type="text"
-                            placeholder="الاسم"
-                            value={formData.guarantors[1]?.name || ''}
-                            onChange={(e) => updateGuarantor(1, 'name', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="العنوان"
-                            value={formData.guarantors[1]?.address || ''}
-                            onChange={(e) => updateGuarantor(1, 'address', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="الرقم القومى"
-                            value={formData.guarantors[1]?.nationalId || ''}
-                            onChange={(e) => updateGuarantor(1, 'nationalId', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="tel"
-                            placeholder="رقم الهاتف"
-                            value={formData.guarantors[1]?.phone || ''}
-                            onChange={(e) => updateGuarantor(1, 'phone', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="صلة القرابة"
-                            value={formData.guarantors[1]?.relationship || ''}
-                            onChange={(e) => updateGuarantor(1, 'relationship', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                          />
-                        </div>
+                      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
+                        <h4 className="font-medium text-gray-700">الضامن الثانى</h4>
+                        <input
+                          type="text"
+                          placeholder="الاسم"
+                          value={formData.guarantors[1]?.name || ''}
+                          onChange={(e) => updateGuarantor(1, 'name', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="text"
+                          placeholder="العنوان"
+                          value={formData.guarantors[1]?.address || ''}
+                          onChange={(e) => updateGuarantor(1, 'address', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="text"
+                          placeholder="الرقم القومى"
+                          value={formData.guarantors[1]?.nationalId || ''}
+                          onChange={(e) => updateGuarantor(1, 'nationalId', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="tel"
+                          placeholder="رقم الهاتف"
+                          value={formData.guarantors[1]?.phone || ''}
+                          onChange={(e) => updateGuarantor(1, 'phone', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
+                        <input
+                          type="text"
+                          placeholder="صلة القرابة"
+                          value={formData.guarantors[1]?.relationship || ''}
+                          onChange={(e) => updateGuarantor(1, 'relationship', e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+                        />
                       </div>
                     </div>
 
                     {/* Guarantor 3 */}
-                    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                      <h4 className="font-medium text-gray-700 mb-3">الضامن الثالث</h4>
-                      <div className="grid grid-cols-5 gap-3">
+                    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
+                      <h4 className="font-medium text-gray-700">الضامن الثالث</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                         <input
                           type="text"
                           placeholder="الاسم"
@@ -844,9 +758,28 @@ export default function Customers() {
                       </div>
                     </div>
                   </div>
+                </div>
               </div>
-            </div>
-          </form>
+
+              {/* Form Actions Footer */}
+              <div className="border-t border-slate-100 pt-4 flex gap-3 shrink-0 justify-end bg-slate-50 p-4 -mx-6 -mb-6">
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="px-6 py-2 border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors font-bold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-bold flex items-center gap-1.5"
+                >
+                  <Save size={16} />
+                  <span>حفظ البيانات</span>
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

@@ -8,10 +8,7 @@ import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Customers from './pages/Customers';
 import Suppliers from './pages/Suppliers';
-import Products from './pages/Products';
-import Inventory from './pages/Inventory';
 import Sales from './pages/Sales';
-import Purchases from './pages/Purchases';
 import Invoices from './pages/Invoices';
 import Payments from './pages/Payments';
 import Expenses from './pages/Expenses';
@@ -41,11 +38,8 @@ function AppRoutes() {
         <Route path="users" element={<ProtectedRoute permission="users:manage"><Users /></ProtectedRoute>} />
         <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
         <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
-        <Route path="products" element={<ProtectedRoute permission="inventory:manage"><Products /></ProtectedRoute>} />
-        <Route path="inventory" element={<ProtectedRoute permission="inventory:manage"><Inventory /></ProtectedRoute>} />
         <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
         <Route path="sales" element={<ProtectedRoute permission="sales:read"><Sales /></ProtectedRoute>} />
-        <Route path="purchases" element={<ProtectedRoute permission="purchases:manage"><Purchases /></ProtectedRoute>} />
         <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
         <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
         <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
