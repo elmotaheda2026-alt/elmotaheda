@@ -59,59 +59,67 @@ export default function Expenses() {
   const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">سندات الصرف</h2>
-          <p className="text-gray-500 text-sm mt-1">إجمالي {expenses.length} سند - {formatCurrency(totalExpenses)}</p>
+      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-black text-slate-900">المصروفات</h2>
+          <span className="text-xs bg-slate-100 px-2 py-1 rounded-md font-bold text-slate-600">
+            إجمالي المصروفات: {formatCurrency(totalExpenses)}
+          </span>
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
         >
-          <Plus size={20} />
+          <Plus size={16} />
           <span>إضافة سند صرف</span>
         </button>
       </div>
 
-      {/* Search */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      {/* Toolbar / Search */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div className="relative max-w-sm">
+          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
             placeholder="بحث..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+            className="input-ui pr-10 pl-4 py-2 text-sm w-full"
           />
         </div>
       </div>
 
       {/* Expenses Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-indigo-50">
+            <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">التاريخ</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">التصنيف</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">الوصف</th>
-                <th className="px-4 py-4 text-right text-sm font-bold text-gray-700">المبلغ</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">التاريخ</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">التصنيف</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الوصف</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">المبلغ</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredExpenses.map(expense => (
-                <tr key={expense.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-4 text-gray-600">{formatDateDisplay(expense.date)}</td>
-                  <td className="px-4 py-4">
-                    <span className="px-3 py-1 bg-gray-100 rounded-full text-xs">{expense.category}</span>
-                  </td>
-                  <td className="px-4 py-4 text-gray-800">{expense.description}</td>
-                  <td className="px-4 py-4 font-bold text-red-600">{formatCurrency(expense.amount)}</td>
+            <tbody className="divide-y divide-slate-100">
+              {filteredExpenses.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-5 py-12 text-center text-slate-500">لا توجد سندات صرف مطابِقة</td>
                 </tr>
-              ))}
+              ) : (
+                filteredExpenses.map(expense => (
+                  <tr key={expense.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-5 py-3 text-sm text-slate-600 font-mono">{formatDateDisplay(expense.date)}</td>
+                    <td className="px-5 py-3">
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full text-xs font-bold">{expense.category}</span>
+                    </td>
+                    <td className="px-5 py-3 text-sm text-slate-900 font-bold">{expense.description}</td>
+                    <td className="px-5 py-3 text-sm font-black text-red-600">{formatCurrency(expense.amount)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -120,17 +128,17 @@ export default function Expenses() {
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="p-6 border-b border-gray-100 bg-indigo-600 rounded-t-2xl">
-              <h3 className="text-xl font-bold text-white">إضافة سند صرف جديد</h3>
+          <div className="bg-white rounded-xl w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-gray-100 bg-slate-50">
+              <h3 className="text-base font-black text-slate-800">إضافة سند صرف جديد</h3>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-5 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">التصنيف</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">التصنيف</label>
                 <select
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  className="input-ui text-sm h-10 w-full"
                   required
                 >
                   <option value="">اختر التصنيف</option>
@@ -140,39 +148,39 @@ export default function Expenses() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">الوصف</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">الوصف</label>
                 <input
                   type="text"
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  className="input-ui text-sm h-10 w-full"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">المبلغ</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">المبلغ</label>
                 <input
                   type="number"
                   value={formData.amount === 0 ? '' : formData.amount}
                   onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  className="input-ui text-sm h-10 w-full"
                   onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">التاريخ</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">التاريخ</label>
                 <DatePicker
                   value={formData.date}
                   onChange={(date) => setFormData({ ...formData, date })}
                   className="w-full border-gray-300 px-4 py-2"
                 />
               </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-bold">
                   إلغاء
                 </button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-bold">
                   حفظ
                 </button>
               </div>

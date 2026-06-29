@@ -100,6 +100,10 @@
   margin-right: 18rem;
 }
 
+[dir="rtl"] .mr-64 {
+  margin-right: 16rem;
+}
+
 [dir="rtl"] .ml-64 {
   margin-left: 16rem;
 }

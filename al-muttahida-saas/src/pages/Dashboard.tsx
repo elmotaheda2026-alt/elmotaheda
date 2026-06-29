@@ -1,219 +1,293 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  TrendingUp,
-  TrendingDown,
-  Users,
-  ShoppingCart,
-  Package,
-  DollarSign,
-  AlertTriangle,
-  ArrowUpRight,
-  ArrowDownRight,
-  Wallet,
-  Receipt,
-  Banknote,
+  Activity,
+  ArrowLeft,
+  Boxes,
+  CheckCircle2,
+  ClipboardCheck,
+  CreditCard,
+  FileText,
+  LifeBuoy,
+  PackagePlus,
+  ReceiptText,
+  RefreshCw,
+  ShieldCheck,
   ShoppingBag,
+  Sparkles,
+  UserPlus,
+  Users,
+  WalletCards,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { getDashboardStats, getLowStockProducts, getSales, getPurchases } from '../lib/storage';
-import { formatDateDisplay } from '../lib/dateUtils';
-import { formatWholeCurrency } from '../lib/utils';
+import { getPurchases, getSales } from '../lib/storage';
+
+type QuickAction = {
+  title: string;
+  description: string;
+  path: string;
+  icon: React.ElementType;
+  tone: string;
+};
+
+type AttentionItem = {
+  title: string;
+  description: string;
+  path: string;
+  icon: React.ElementType;
+};
+
+const quickActions: QuickAction[] = [
+  {
+    title: 'إنشاء فاتورة',
+    description: 'ابدأ عملية بيع جديدة من شاشة الفواتير.',
+    path: '/sales',
+    icon: ReceiptText,
+    tone: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+  },
+  {
+    title: 'إضافة عميل',
+    description: 'سجل بيانات عميل جديد وجهز ملف التعامل.',
+    path: '/customers',
+    icon: UserPlus,
+    tone: 'bg-sky-50 text-sky-700 border-sky-100',
+  },
+  {
+    title: 'تسجيل دفعة',
+    description: 'انتقل مباشرة لإدارة التحصيلات والمدفوعات.',
+    path: '/payments',
+    icon: CreditCard,
+    tone: 'bg-violet-50 text-violet-700 border-violet-100',
+  },
+  {
+    title: 'إضافة منتج',
+    description: 'حدث الأصناف أو أضف منتجًا جديدًا للمخزون.',
+    path: '/products-inventory',
+    icon: PackagePlus,
+    tone: 'bg-amber-50 text-amber-700 border-amber-100',
+  },
+  {
+    title: 'مراجعة الطلبات',
+    description: 'راجع عمليات البيع والشراء قيد المتابعة.',
+    path: '/invoices',
+    icon: ClipboardCheck,
+    tone: 'bg-rose-50 text-rose-700 border-rose-100',
+  },
+  {
+    title: 'فتح التقارير',
+    description: 'اعرض التقارير عند الحاجة من مكان واحد.',
+    path: '/reports',
+    icon: FileText,
+    tone: 'bg-slate-100 text-slate-700 border-slate-200',
+  },
+];
+
+const workflow = ['عميل', 'عرض سعر', 'فاتورة', 'تحصيل', 'متابعة'];
 
 export default function Dashboard() {
   const { settings } = useAuth();
   const navigate = useNavigate();
-  const stats = getDashboardStats();
-  const lowStock = getLowStockProducts().slice(0, 5);
-  const recentSales = getSales().slice(-5).reverse();
-  const recentPurchases = getPurchases().slice(-5).reverse();
+  const hasLowStock = false;
+  const hasSales = getSales().length > 0;
+  const hasPurchases = getPurchases().length > 0;
 
-  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
+  const attentionItems: AttentionItem[] = [
+    {
+      title: 'فواتير تحتاج مراجعة',
+      description: hasSales ? 'توجد عمليات بيع يمكن مراجعة حالتها وتفاصيلها.' : 'ابدأ بتسجيل أول عملية بيع عند جاهزية البيانات.',
+      path: '/sales',
+      icon: ReceiptText,
+    },
+    {
+      title: 'طلبات بانتظار إجراء',
+      description: hasPurchases ? 'راجع طلبات الشراء وتأكد من اكتمال خطواتها.' : 'يمكنك تجهيز طلبات الشراء من شاشة المشتريات.',
+      path: '/invoices',
+      icon: ShoppingBag,
+    },
+    {
+      title: 'بيانات مخزون تحتاج متابعة',
+      description: hasLowStock ? 'هناك أصناف تستحق مراجعة المخزون وتحديث بياناتها.' : 'المخزون جاهز للمتابعة من شاشة إدارة الأصناف.',
+      path: '/products-inventory',
+      icon: Boxes,
+    },
+  ];
 
-  const StatCard = ({ title, value, icon: Icon, trend, trendValue, color, iconColor }: any) => (
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-md hover:border-sky-100 transition-all">
-      <div className="flex items-center justify-between mb-4">
-        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${color}`}>
-          <Icon size={24} className={iconColor} />
-        </div>
-        {trend && (
-          <div className={`flex items-center gap-1 text-sm font-semibold ${trend === 'up' ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {trend === 'up' ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
-            {trendValue}
-          </div>
-        )}
-      </div>
-      <h3 className="text-slate-500 font-medium text-sm mb-1">{title}</h3>
-      <p className="text-2xl font-bold text-slate-800">{formatCurrency(value)}</p>
-    </div>
-  );
+  const recentActivities = [
+    {
+      title: hasSales ? 'تم تسجيل حركة بيع مؤخرًا' : 'شاشة المبيعات جاهزة لاستقبال العمليات',
+      description: 'راجع التفاصيل أو أنشئ عملية جديدة عند الحاجة.',
+      icon: ReceiptText,
+      path: '/sales',
+    },
+    {
+      title: hasPurchases ? 'تم تحديث حركة شراء مؤخرًا' : 'شاشة المشتريات جاهزة للتوريد',
+      description: 'تابع الموردين وطلبات الشراء من نفس المسار.',
+      icon: ShoppingBag,
+      path: '/reports',
+    },
+    {
+      title: 'بيانات العملاء متاحة للإدارة',
+      description: 'افتح ملفات العملاء لمراجعة البيانات والتعاملات.',
+      icon: Users,
+      path: '/customers',
+    },
+  ];
+
+  const systemStatus = [
+    { label: 'النظام يعمل بشكل طبيعي', icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' },
+    { label: 'قاعدة البيانات متصلة', icon: Activity, color: 'text-sky-600 bg-sky-50' },
+    { label: 'الصلاحيات مفعلة', icon: ShieldCheck, color: 'text-violet-600 bg-violet-50' },
+    { label: 'النسخ الاحتياطي جاهز', icon: RefreshCw, color: 'text-amber-600 bg-amber-50' },
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Welcome Section */}
-      <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-8 text-white shadow-lg relative overflow-hidden">
-        <div className="relative z-10">
-          <h2 className="text-2xl font-bold mb-2">مرحباً بك في {settings.companyName}</h2>
-          <p className="text-slate-300 font-medium">إليك ملخص نشاط شركتك اليوم</p>
-        </div>
-      </div>
-
-      {/* Stats Grid */}
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="إجمالي المبيعات"
-          value={stats.totalSales}
-          icon={ShoppingBag}
-          trend="up"
-          trendValue="+12%"
-          color="bg-emerald-50"
-          iconColor="text-emerald-600"
-        />
-        <StatCard
-          title="إجمالي المشتريات"
-          value={stats.totalPurchases}
-          icon={ShoppingCart}
-          trend="down"
-          trendValue="-5%"
-          color="bg-orange-50"
-          iconColor="text-orange-600"
-        />
-        <StatCard
-          title="إجمالي الأرباح"
-          value={stats.totalProfit}
-          icon={DollarSign}
-          trend="up"
-          trendValue="+8%"
-          color="bg-sky-50"
-          iconColor="text-sky-600"
-        />
-        <StatCard
-          title="المدفوعات المستحقة"
-          value={stats.pendingPayments}
-          icon={Wallet}
-          color="bg-rose-50"
-          iconColor="text-rose-600"
-        />
-      </div>
-
-      {/* Second Row Stats - Combined & Cleaned */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div
-          onClick={() => navigate('/customers')}
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow cursor-pointer flex items-center gap-4"
-        >
-          <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
-            <Users size={24} className="text-indigo-600" />
-          </div>
-          <div>
-            <p className="text-gray-500 text-sm">إجمالي العملاء</p>
-            <p className="text-2xl font-bold text-gray-800">{stats.totalCustomers}</p>
-          </div>
-        </div>
-
-        <div
-          onClick={() => navigate('/suppliers')}
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow cursor-pointer flex items-center gap-4"
-        >
-          <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center shrink-0">
-            <Package size={24} className="text-purple-600" />
-          </div>
-          <div>
-            <p className="text-gray-500 text-sm">الموردين المسجلين</p>
-            <p className="text-2xl font-bold text-gray-800">{stats.totalSuppliers}</p>
-          </div>
-        </div>
-
-        <div
-          onClick={() => navigate('/products')}
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow cursor-pointer flex items-center gap-4"
-        >
-          <div className="w-12 h-12 bg-teal-100 rounded-xl flex items-center justify-center shrink-0">
-            <Receipt size={24} className="text-teal-600" />
-          </div>
-          <div>
-            <p className="text-gray-500 text-sm">عدد الأصناف</p>
-            <p className="text-2xl font-bold text-gray-800">{stats.totalProducts}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Charts and Tables Row */}
-      <div className={`grid grid-cols-1 ${lowStock.length > 0 ? 'lg:grid-cols-2' : ''} gap-6`}>
-        {/* Recent Sales */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-          <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="font-bold text-gray-800">آخر المبيعات</h3>
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="bg-slate-950 px-6 py-7 text-white sm:px-8">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="max-w-3xl">
+              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-sm font-semibold text-slate-100">
+                <Sparkles size={16} />
+                مركز التشغيل اليومي
+              </div>
+              <h1 className="text-2xl font-black leading-relaxed sm:text-3xl">
+                مرحبًا بك في {settings.companyName}
+              </h1>
+              <p className="mt-2 text-base font-medium leading-8 text-slate-300">
+                لوحة موحدة تساعدك تبدأ العمل بسرعة، تراجع ما يحتاج انتباهك، وتنتقل لأهم أقسام النظام بدون عرض أي أرقام تخص الشركة.
+              </p>
+            </div>
             <button
               onClick={() => navigate('/sales')}
-              className="text-sm text-indigo-600 hover:text-indigo-700 font-bold"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 font-bold text-slate-900 transition hover:bg-slate-100 sm:w-auto"
             >
-              عرض الكل
+              <ReceiptText size={20} />
+              بدء عملية جديدة
             </button>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {recentSales.length === 0 ? (
-              <div className="p-12 text-center text-gray-400">لا توجد عمليات مبيعات مسجلة حتى الآن</div>
-            ) : (
-              recentSales.map(sale => (
-                <div key={sale.id} className="p-5 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center border border-green-100">
-                      <Banknote size={20} className="text-green-600" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-slate-800">{sale.customerName}</p>
-                      <p className="text-xs text-slate-500 font-medium">فاتورة: {sale.invoiceNumber}</p>
-                    </div>
-                  </div>
-                  <div className="text-left">
-                    <p className="font-black text-green-600 text-lg">{formatCurrency(sale.total)}</p>
-                    <p className="text-xs text-slate-400 font-bold">{formatDateDisplay(sale.date)}</p>
-                  </div>
-                </div>
-              ))
-            )}
           </div>
         </div>
 
-        {/* Low Stock Alert - Only show if there's data */}
-        {lowStock.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                <AlertTriangle size={20} className="text-orange-500" />
-                تنبيهات المخزون
-              </h3>
-              <button
-                onClick={() => navigate('/inventory')}
-                className="text-sm text-indigo-600 hover:text-indigo-700 font-bold"
-              >
-                عرض الكل
-              </button>
+        <div className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          {systemStatus.map(item => (
+            <div key={item.label} className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${item.color}`}>
+                <item.icon size={20} />
+              </div>
+              <p className="font-bold text-slate-700">{item.label}</p>
             </div>
-            <div className="divide-y divide-gray-50">
-              {lowStock.map(product => (
-                <div key={product.id} className="p-5 flex items-center justify-between hover:bg-orange-50/30 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-orange-50 rounded-full flex items-center justify-center border border-orange-100">
-                      <Package size={20} className="text-orange-600" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-slate-800">{product.name}</p>
-                      <p className="text-xs text-slate-500 font-medium">{product.barcode || '-'}</p>
-                    </div>
-                  </div>
-                  <div className="text-left">
-                    <p className="font-black text-red-600 text-lg">{product.quantity}</p>
-                    <p className="text-xs text-slate-400 font-bold">الكمية المتوفرة</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-black text-slate-900">إجراءات سريعة</h2>
+            <p className="text-sm font-semibold text-slate-500">اختصارات مباشرة لأهم مهام التشغيل اليومية.</p>
           </div>
-        )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {quickActions.map(action => (
+            <button
+              key={action.title}
+              onClick={() => navigate(action.path)}
+              className="group flex min-h-[132px] items-start gap-4 rounded-xl border border-slate-200 bg-white p-5 text-right shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+            >
+              <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border ${action.tone}`}>
+                <action.icon size={23} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-black text-slate-900">{action.title}</h3>
+                  <ArrowLeft size={18} className="mt-1 shrink-0 text-slate-300 transition group-hover:-translate-x-1 group-hover:text-slate-500" />
+                </div>
+                <p className="mt-2 text-sm font-medium leading-7 text-slate-500">{action.description}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black text-slate-900">ما يحتاج انتباهك</h2>
+              <p className="text-sm font-semibold text-slate-500">تنبيهات تشغيلية عامة بدون مبالغ أو أعداد.</p>
+            </div>
+            <LifeBuoy className="text-slate-400" size={24} />
+          </div>
+
+          <div className="space-y-3">
+            {attentionItems.map(item => (
+              <button
+                key={item.title}
+                onClick={() => navigate(item.path)}
+                className="flex w-full items-center gap-4 rounded-xl border border-slate-100 bg-slate-50 p-4 text-right transition hover:border-slate-200 hover:bg-white"
+              >
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white text-slate-700 shadow-sm">
+                  <item.icon size={21} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-black text-slate-800">{item.title}</h3>
+                  <p className="mt-1 text-sm font-medium leading-6 text-slate-500">{item.description}</p>
+                </div>
+                <ArrowLeft size={18} className="shrink-0 text-slate-300" />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-5">
+            <h2 className="text-xl font-black text-slate-900">سير العمل</h2>
+            <p className="text-sm font-semibold text-slate-500">مسار مختصر يوضح دورة التشغيل داخل النظام.</p>
+          </div>
+
+          <div className="space-y-3">
+            {workflow.map((step, index) => (
+              <div key={step} className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
+                  <WalletCards size={19} />
+                </div>
+                <div className="flex-1 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+                  <p className="font-black text-slate-800">{step}</p>
+                </div>
+                {index < workflow.length - 1 && <ArrowLeft size={18} className="hidden text-slate-300 sm:block" />}
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-black text-slate-900">آخر الأنشطة</h2>
+            <p className="text-sm font-semibold text-slate-500">متابعة عامة لحركة النظام بدون عرض تفاصيل حساسة.</p>
+          </div>
+          <Activity className="text-slate-400" size={24} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          {recentActivities.map(activity => (
+            <button
+              key={activity.title}
+              onClick={() => navigate(activity.path)}
+              className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4 text-right transition hover:border-slate-200 hover:bg-white"
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-slate-700 shadow-sm">
+                <activity.icon size={20} />
+              </div>
+              <div>
+                <h3 className="font-black text-slate-800">{activity.title}</h3>
+                <p className="mt-1 text-sm font-medium leading-6 text-slate-500">{activity.description}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

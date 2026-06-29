@@ -258,96 +258,60 @@ export default function Customers() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">ملفات العملاء</h2>
-          <p className="text-gray-500 text-sm mt-1">إدارة بيانات العملاء والضامنين وسجلاتهم المالية</p>
-        </div>
+      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+        <h2 className="text-xl font-black text-slate-900">{showForm ? (isEditing ? 'تعديل عميل' : 'إضافة عميل جديد') : 'العملاء'}</h2>
         <div className="flex gap-2">
-          <button
-            onClick={() => setSearchModal(true)}
-            className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-          >
-            <Search size={18} />
-            <span>بحث</span>
-          </button>
-          <button
-            onClick={handleNew}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            <Plus size={20} />
-            <span>عميل جديد</span>
-          </button>
+          {!showForm && (
+            <button
+              onClick={handleNew}
+              className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
+            >
+              <Plus size={16} />
+              <span>عميل جديد</span>
+            </button>
+          )}
         </div>
       </div>
 
       {!showForm && (
         <>
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-              <Users size={20} className="text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">إجمالي العملاء</p>
-              <p className="text-xl font-bold text-gray-800">{customers.length}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
-              <Gavel size={20} className="text-red-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">محالون للقضاء</p>
-              <p className="text-xl font-bold text-red-600">{customers.filter(c => c.isSued).length}</p>
+          {/* Toolbar / Search */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+            <div className="relative max-w-sm">
+              <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="بحث باسم العميل، رقم العميل، أو الهاتف..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="input-ui pr-10 pl-4 py-2 text-sm w-full"
+              />
             </div>
           </div>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
-              <DollarSign size={20} className="text-emerald-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">إجمالي الديون</p>
-              <p className="text-xl font-bold text-emerald-600">
-                {customers.filter(c => c.balanceType === 'debtor').length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
         </>
       )}
 
       {/* Customers List */}
       {!showForm && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-5 border-b border-gray-100">
-            <h3 className="font-bold text-gray-800">قائمة العملاء</h3>
-          </div>
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50">
+              <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">رقم العميل</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">الاسم</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">رقم الهاتف</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">العنوان</th>
-                  <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">الرصيد</th>
-                  <th className="px-5 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">إجراءات</th>
+                  <th className="px-5 py-3 text-right text-sm font-black text-slate-700">رقم العميل</th>
+                  <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الاسم</th>
+                  <th className="px-5 py-3 text-right text-sm font-black text-slate-700">رقم الهاتف</th>
+                  <th className="px-5 py-3 text-right text-sm font-black text-slate-700">العنوان</th>
+                  <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الرصيد</th>
+                  <th className="px-5 py-3 text-center text-sm font-black text-slate-700">إجراءات</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-slate-100">
                 {filteredCustomers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
-                      <Users size={40} className="mx-auto mb-3 text-gray-300" />
-                      <p>لا يوجد عملاء</p>
+                    <td colSpan={6} className="px-4 py-12 text-center text-slate-500">
+                      <Users size={32} className="mx-auto mb-2 text-slate-300" />
+                      <p className="text-sm font-bold">لا يوجد عملاء مطابِقين</p>
                     </td>
                   </tr>
                 ) : (

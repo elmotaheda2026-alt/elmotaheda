@@ -105,101 +105,100 @@ export default function Users() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-800">إدارة المستخدمين</h2>
-          <p className="text-gray-500 text-sm mt-1">إجمالي {users.length} مستخدم</p>
-        </div>
+      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+        <h2 className="text-xl font-black text-slate-900">المستخدمين</h2>
         <button
           onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
         >
-          <Plus size={20} />
+          <Plus size={16} />
           <span>إضافة مستخدم</span>
         </button>
       </div>
 
-      {/* Search */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      {/* Toolbar / Search */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div className="relative max-w-sm">
+          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
             placeholder="بحث عن مستخدم..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+            className="input-ui pr-10 pl-4 py-2 text-sm w-full"
           />
         </div>
       </div>
 
       {/* Users Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-indigo-50">
+            <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">المستخدم</th>
-                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">اسم المستخدم</th>
-                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">الدور</th>
-                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">الحالة</th>
-                <th className="px-6 py-4 text-right text-sm font-bold text-gray-700">الإجراءات</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">المستخدم</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">اسم المستخدم</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الدور</th>
+                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الحالة</th>
+                <th className="px-5 py-3 text-center text-sm font-black text-slate-700">الإجراءات</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-slate-100">
               {filteredUsers.map(user => (
-                <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4">
+                <tr key={user.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="px-5 py-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
-                        <span className="text-indigo-600 font-bold">{user.name.charAt(0)}</span>
+                      <div className="w-8 h-8 bg-indigo-50 rounded-full flex items-center justify-center">
+                        <span className="text-indigo-600 font-black text-sm">{user.name.charAt(0)}</span>
                       </div>
                       <div>
-                        <p className="font-medium text-gray-800">{user.name}</p>
-                        <p className="text-xs text-gray-500">{user.phone || 'بدون هاتف'}</p>
+                        <p className="font-bold text-slate-900 text-sm">{user.name}</p>
+                        <p className="text-xs text-slate-500">{user.phone || 'بدون هاتف'}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-gray-600">{user.username}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      user.role === 'admin' ? 'bg-purple-100 text-purple-700' :
-                      user.role === 'manager' ? 'bg-blue-100 text-blue-700' :
-                      user.role === 'accountant' ? 'bg-emerald-100 text-emerald-700' :
-                      'bg-gray-100 text-gray-700'
+                  <td className="px-5 py-3 text-sm text-slate-700 font-mono">{user.username}</td>
+                  <td className="px-5 py-3">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                      user.role === 'admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                      user.role === 'manager' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                      user.role === 'accountant' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                      'bg-slate-100 text-slate-700'
                     }`}>
                       {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : user.role === 'accountant' ? 'محاسب' : 'مستخدم'}
                     </span>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-3">
                     <button
                       onClick={() => toggleUserStatus(user)}
-                      className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
-                        user.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold ${
+                        user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
                       }`}
                     >
-                      {user.isActive ? <UserCheck size={14} /> : <UserX size={14} />}
+                      {user.isActive ? <UserCheck size={13} /> : <UserX size={13} />}
                       {user.isActive ? 'نشط' : 'غير نشط'}
                     </button>
                   </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
+                  <td className="px-5 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1">
                       {hasPermission(currentUser, 'users:manage') && (
                         <button
                           onClick={() => handleEdit(user)}
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="تعديل"
                         >
-                          <Edit size={18} />
+                          <Edit size={15} />
                         </button>
                       )}
                       {hasPermission(currentUser, 'users:manage') && currentUser?.id !== user.id && (
                         <button
                           onClick={() => handleDelete(user.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="حذف"
                         >
-                          <Trash2 size={18} />
+                          <Trash2 size={15} />
                         </button>
                       )}
                     </div>

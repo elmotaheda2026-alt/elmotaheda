@@ -325,19 +325,10 @@ export default function CollectionStatement() {
         }
       }
     `}</style>
-      <div className={`space-y-6 ${printingInvoice ? 'print:hidden' : ''}`}>
-        {/* HEADER SECTION - COMPACT */}
-        <section className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm print:hidden">
-          <div>
-            <h2 className="text-2xl font-bold text-slate-900">متابعة التحصيل</h2>
-            <p className="text-sm text-slate-500 mt-1">عرض ومتابعة الفواتير وأقساط العملاء.</p>
-          </div>
-          <div className="grid grid-cols-3 gap-3 w-full lg:w-auto">
-            <StatCard label="إجمالي المتبقي" value={formatCurrency(totalDue)} tone="red" />
-            <StatCard label="الفواتير المفتوحة" value={String(dueInvoices)} tone="amber" />
-            <StatCard label="الأشهر المتأخرة" value={String(overdueMonths)} tone="slate" />
-          </div>
-        </section>
+      <div className={`space-y-4 ${printingInvoice ? 'print:hidden' : ''}`}>
+        <div className="flex justify-between items-center print:hidden border-b border-slate-100 pb-2">
+          <h2 className="text-xl font-black text-slate-900">متابعة التحصيل</h2>
+        </div>
 
         {/* TABS SECTION */}
         <div className="flex gap-2 border-b border-slate-200 pb-[1px] print:hidden">

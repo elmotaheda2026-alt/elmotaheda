@@ -12,7 +12,7 @@ export default function Layout() {
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       </div>
 
-      <div className="lg:mr-72 print:m-0">
+      <div className="lg:mr-64 print:m-0">
         <div className="print:hidden">
           <Header onMenuClick={() => setSidebarOpen(true)} />
         </div>
