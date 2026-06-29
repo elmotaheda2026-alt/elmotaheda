@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { Permission } from '../types.js';
@@ -63,10 +63,22 @@ router.post('/seed-admin', async (_req, res) => {
     return res.status(404).json({ message: 'Not found' });
   }
   const db = await dbPromise;
-  const existing = await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM users');
-  if ((existing?.count || 0) > 0) return res.status(409).json({ message: 'Users already exist' });
-
   const hashed = await hashPassword('admin123');
+  const existing = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
+
+  if (existing?.id) {
+    await db.run(
+      `UPDATE users
+       SET name = ?, password_hash = ?, role = ?, is_active = 1
+       WHERE username = ?`,
+      'مدير النظام',
+      hashed,
+      'admin',
+      'admin',
+    );
+    return res.json({ message: 'Admin updated', username: 'admin', password: 'admin123' });
+  }
+
   const id = uid();
   await db.run(
     `INSERT INTO users (id, name, username, password_hash, role, is_active, created_at)` +
@@ -102,3 +114,4 @@ router.post('/login', async (req, res) => {
 });
 
 export default router;
+

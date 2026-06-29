@@ -65,6 +65,7 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   listSales: () => request<any[]>('/sales?includeItems=true'),
+  listSalesForCollection: () => request<any[]>('/sales?includeItems=false'),
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -144,3 +145,4 @@ export const api = {
   closePeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string; notes?: string }) =>
     request<{ message: string }>('/closing/close', { method: 'POST', body: JSON.stringify(payload) }),
 };
+

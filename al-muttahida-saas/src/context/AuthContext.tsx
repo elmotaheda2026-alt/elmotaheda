@@ -51,9 +51,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(mappedUser);
       return true;
     } catch (e) {
-      // Attempt to fallback to local storage login regardless of mode
-      console.warn('API login failed, attempting local fallback', e);
-      // Ensure database is initialized for local fallback
+      if (isApiMode()) {
+        console.warn('API login failed', e);
+        clearApiToken();
+        setUser(null);
+        return false;
+      }
+
       db.initializeDatabase();
       const loggedInUser = db.login(username, password);
       if (loggedInUser) {
@@ -96,3 +100,4 @@ export function useAuth() {
   }
   return context;
 }
+

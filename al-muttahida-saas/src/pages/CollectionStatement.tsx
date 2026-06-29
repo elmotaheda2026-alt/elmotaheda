@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
-import { getCustomers, getSales, getSalesReps, syncCustomers, syncSales, syncSalesReps } from '../lib/storage';
+import { getCustomers, getSales, getSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
-import { isApiMode } from '../lib/apiClient';
+import { api, isApiMode } from '../lib/apiClient';
 
 interface CollectionInvoiceView {
   saleId: string;
@@ -95,7 +95,15 @@ export default function CollectionStatement() {
   useEffect(() => {
     const loadData = async () => {
       if (isApiMode()) {
-        await Promise.allSettled([syncCustomers(), syncSales(), syncSalesReps()]);
+        const [apiCustomers, apiSales, apiSalesReps] = await Promise.all([
+          api.listCustomers(),
+          api.listSalesForCollection(),
+          api.listSalesReps(),
+        ]);
+        setCustomers(apiCustomers);
+        setSales(apiSales.filter((sale) => sale.status !== 'cancelled').slice().reverse());
+        setSalesReps(apiSalesReps);
+        return;
       }
 
       setCustomers(getCustomers());
@@ -1003,3 +1011,5 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
     </div>
   );
 }
+
+
