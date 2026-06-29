@@ -73,7 +73,7 @@ const menuGroups: {
     title: 'الإدارة',
     defaultOpen: false,
     items: [
-      { icon: Users, label: 'إدارة المستخدمين', path: '/users', permission: 'users:manage' },
+      { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
       { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
       { icon: Settings, label: 'الإعدادات', path: '/settings', permission: 'settings:manage' },
     ],
