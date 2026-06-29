@@ -63,6 +63,13 @@ const formatLocalDate = (date: Date): string =>
 
 const today = () => formatLocalDate(new Date());
 
+const sortSalesNewestFirst = (entries: Sale[]) =>
+  entries.slice().sort((a, b) => {
+    const bTime = new Date(b.createdAt || b.date).getTime();
+    const aTime = new Date(a.createdAt || a.date).getTime();
+    return bTime - aTime;
+  });
+
 function addMonths(dateStr: string, months: number): string {
   const origDate = new Date(dateStr);
   if (isNaN(origDate.getTime())) {
@@ -113,6 +120,26 @@ export default function Invoices() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+
+  const refreshSalesList = async () => {
+    await syncSales();
+    const refreshedSales = sortSalesNewestFirst(getSales());
+    setSales(refreshedSales);
+    return refreshedSales;
+  };
+
+  const openContractsSearch = async () => {
+    setModalSearchQuery('');
+    try {
+      await refreshSalesList();
+    } catch (err: any) {
+      setMessage({
+        type: 'error',
+        text: err.message || 'ÊÚÐÑ ÊÍãíá ÓÌá ÇáÊÚÇÞÏÇÊ. ÊÃßÏ ãä ÇÊÕÇá ÇáÎÇÏã Ëã ÍÇæá ãÑÉ ÃÎÑì.',
+      });
+    }
+    setShowSearchModal(true);
+  };
 
   const handleLoadForEdit = (sale: Sale) => {
     setEditingSaleId(sale.id);
@@ -187,7 +214,7 @@ export default function Invoices() {
       setProducts(loadedProducts);
       setSuppliers(loadedSuppliers);
       setSalesReps(loadedSalesReps);
-      setSales(loadedSales.slice().reverse());
+      setSales(sortSalesNewestFirst(loadedSales));
       setInvoiceNumber(getNextSaleInvoiceNumber());
 
       if (loadedCustomers.length > 0) {
@@ -464,8 +491,7 @@ export default function Invoices() {
         const refreshedProducts = getProducts();
         setProducts(refreshedProducts);
 
-        const refreshedSales = getSales();
-        setSales(refreshedSales.slice().reverse());
+        setSales(sortSalesNewestFirst(getSales()));
 
         setMessage({
           type: 'success',
@@ -589,8 +615,7 @@ export default function Invoices() {
     const refreshedProducts = getProducts();
     setProducts(refreshedProducts);
 
-    const refreshedSales = getSales();
-    setSales(refreshedSales.slice().reverse());
+    setSales(sortSalesNewestFirst(getSales()));
 
     setMessage({
       type: 'success',
@@ -602,6 +627,7 @@ export default function Invoices() {
     
     // Set for printing
     setSavedSaleForPrinting(createdSale);
+    resetForm();
   };
 
   return (
@@ -616,10 +642,7 @@ export default function Invoices() {
             <div className="mt-4 flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setModalSearchQuery('');
-                  setShowSearchModal(true);
-                }}
+                onClick={openContractsSearch}
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-2xl text-sm transition-all shadow-sm active:scale-95"
               >
                 <Search size={16} />

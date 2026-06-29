@@ -55,7 +55,7 @@ export interface Customer {
   age: number;
   pensionDate: string;
   balance: number;
-  balanceType: 'debtor' | 'creditor';
+  balanceType: 'debtor';
   notes?: string;
   image?: string;
   guarantors: [Guarantor | null, Guarantor | null, Guarantor | null];

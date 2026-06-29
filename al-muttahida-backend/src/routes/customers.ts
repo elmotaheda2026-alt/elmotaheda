@@ -31,7 +31,7 @@ const customerSchema = z.object({
   age: z.number().int(),
   pensionDate: z.string().default(''),
   balance: z.number().default(0),
-  balanceType: z.enum(['debtor', 'creditor']).default('debtor'),
+  balanceType: z.literal('debtor').default('debtor'),
   notes: z.string().optional().nullable(),
   image: z.string().optional().nullable(),
   guarantors: z.array(guarantorSchema).length(3).optional().nullable(),

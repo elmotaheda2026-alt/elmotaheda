@@ -64,7 +64,7 @@ export default function Customers() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
-  const [filterTab, setFilterTab] = useState<'all' | 'debtor' | 'creditor' | 'sued'>('all');
+  const [filterTab, setFilterTab] = useState<'all' | 'debtor' | 'sued'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +83,7 @@ export default function Customers() {
     age: '',
     pensionDate: '',
     balance: '',
-    balanceType: 'debtor' as 'debtor' | 'creditor',
+    balanceType: 'debtor' as 'debtor',
     notes: '',
     guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null],
     isSued: false,
@@ -140,7 +140,7 @@ export default function Customers() {
       age: parseInt(formData.age) || 0,
       pensionDate: '',
       balance: isEditing && selectedCustomer ? selectedCustomer.balance : 0,
-      balanceType: isEditing && selectedCustomer ? selectedCustomer.balanceType : 'debtor',
+      balanceType: 'debtor' as 'debtor',
       notes: formData.notes || undefined,
       guarantors: formData.guarantors,
       isSued: formData.isSued,
@@ -182,7 +182,7 @@ export default function Customers() {
       age: customer.age?.toString() || '',
       pensionDate: customer.pensionDate || '',
       balance: customer.balance?.toString() || '',
-      balanceType: customer.balanceType || 'debtor',
+      balanceType: 'debtor' as 'debtor',
       notes: customer.notes || '',
       guarantors: customer.guarantors || [null, null, null],
       isSued: customer.isSued || false,
@@ -255,8 +255,7 @@ export default function Customers() {
       
     if (!matchesSearch) return false;
     
-    if (filterTab === 'debtor') return c.balanceType === 'debtor' && c.balance > 0;
-    if (filterTab === 'creditor') return c.balanceType === 'creditor' && c.balance > 0;
+    if (filterTab === 'debtor') return c.balance > 0;
     if (filterTab === 'sued') return !!c.isSued;
     
     return true;
@@ -270,12 +269,7 @@ export default function Customers() {
   const totalCustomersCount = customers.length;
   const suedCustomersCount = customers.filter(c => c.isSued).length;
   const activeCustomersCount = customers.filter(c => c.balance > 0 && !c.isSued).length;
-  const totalDebtsAmount = customers.reduce((sum, c) => {
-    if (c.balanceType === 'debtor') {
-      return sum + (c.balance || 0);
-    }
-    return sum;
-  }, 0);
+  const totalDebtsAmount = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
 
   return (
     <div className="space-y-5">
@@ -368,12 +362,6 @@ export default function Customers() {
               مدينون
             </button>
             <button
-              onClick={() => setFilterTab('creditor')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'creditor' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
-            >
-              دائنون
-            </button>
-            <button
               onClick={() => setFilterTab('sued')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'sued' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
             >
@@ -448,8 +436,8 @@ export default function Customers() {
                       <td className="px-6 py-4 text-sm text-slate-600 font-mono">{customer.phone}</td>
                       <td className="px-6 py-4 text-sm text-slate-500 truncate max-w-[200px]">{customer.address || '—'}</td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black shadow-sm/5 border ${customer.balanceType === 'debtor' ? (customer.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/50' : 'bg-slate-50 text-slate-500 border-slate-100') : 'bg-emerald-50 text-emerald-700 border-emerald-100/50'}`}>
-                          {formatCurrency(customer.balance)} {customer.balanceType === 'debtor' ? (customer.balance > 0 ? 'مدين' : '') : 'دائن'}
+                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black shadow-sm/5 border ${customer.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/50' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                          {formatCurrency(customer.balance)} {customer.balance > 0 ? 'مدين' : ''}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -543,8 +531,8 @@ export default function Customers() {
                 {/* Card Balance Badge */}
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-[10px] font-bold text-slate-400">الرصيد المالي:</span>
-                  <span className={`px-3 py-1 rounded-full text-xs font-black border ${customer.balanceType === 'debtor' ? (customer.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/50' : 'bg-slate-50 text-slate-500 border-slate-100') : 'bg-emerald-50 text-emerald-700 border-emerald-100/50'}`}>
-                    {formatCurrency(customer.balance)} {customer.balanceType === 'debtor' ? (customer.balance > 0 ? 'مدين' : '') : 'دائن'}
+                  <span className={`px-3 py-1 rounded-full text-xs font-black border ${customer.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/50' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                    {formatCurrency(customer.balance)} {customer.balance > 0 ? 'مدين' : ''}
                   </span>
                 </div>
               </div>
@@ -1021,7 +1009,7 @@ export default function Customers() {
                       </div>
                       <div className="text-left">
                         <div className="text-sm font-semibold text-indigo-600">{customer.customerNumber}</div>
-                        <div className={`text-sm ${customer.balanceType === 'debtor' ? 'text-red-600' : 'text-emerald-600'}`}>
+                        <div className={`text-sm ${customer.balance > 0 ? 'text-red-600' : 'text-slate-500'}`}>
                           {formatCurrency(customer.balance)}
                         </div>
                       </div>
