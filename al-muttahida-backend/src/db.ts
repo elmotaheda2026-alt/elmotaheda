@@ -191,17 +191,33 @@ export async function initDb(): Promise<void> {
     created_by NVARCHAR(200) NOT NULL,
     created_at NVARCHAR(40) NOT NULL
   );
-  IF COL_LENGTH('sales', 'notes') IS NOT NULL ALTER TABLE sales ALTER COLUMN notes NVARCHAR(MAX);
-  IF COL_LENGTH('sales', 'customer_name') IS NOT NULL ALTER TABLE sales ALTER COLUMN customer_name NVARCHAR(MAX);
-  IF COL_LENGTH('sales', 'date') IS NOT NULL ALTER TABLE sales ALTER COLUMN date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('sales', 'installment_start_date') IS NOT NULL ALTER TABLE sales ALTER COLUMN installment_start_date NVARCHAR(50) NULL;
-  IF COL_LENGTH('purchases', 'date') IS NOT NULL ALTER TABLE purchases ALTER COLUMN date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('installment_schedules', 'due_date') IS NOT NULL ALTER TABLE installment_schedules ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('payments', 'date') IS NOT NULL ALTER TABLE payments ALTER COLUMN date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('expenses', 'date') IS NOT NULL ALTER TABLE expenses ALTER COLUMN date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('shareholder_transactions', 'date') IS NOT NULL ALTER TABLE shareholder_transactions ALTER COLUMN date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('collection_tasks', 'due_date') IS NOT NULL ALTER TABLE collection_tasks ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
-  IF COL_LENGTH('closing_periods', 'period_date') IS NOT NULL ALTER TABLE closing_periods ALTER COLUMN period_date NVARCHAR(50) NOT NULL;
+  BEGIN TRY
+    IF COL_LENGTH('sales', 'notes') IS NOT NULL ALTER TABLE sales ALTER COLUMN notes NVARCHAR(MAX);
+    IF COL_LENGTH('sales', 'customer_name') IS NOT NULL ALTER TABLE sales ALTER COLUMN customer_name NVARCHAR(MAX);
+    IF COL_LENGTH('sales', 'date') IS NOT NULL ALTER TABLE sales ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('sales', 'installment_start_date') IS NOT NULL ALTER TABLE sales ALTER COLUMN installment_start_date NVARCHAR(50) NULL;
+  END TRY
+  BEGIN CATCH
+    PRINT 'Skipping sales column alter during startup migration';
+  END CATCH;
+
+  BEGIN TRY
+    IF COL_LENGTH('purchases', 'date') IS NOT NULL ALTER TABLE purchases ALTER COLUMN date NVARCHAR(50) NOT NULL;
+  END TRY
+  BEGIN CATCH
+    PRINT 'Skipping purchases column alter during startup migration';
+  END CATCH;
+  BEGIN TRY
+    IF COL_LENGTH('installment_schedules', 'due_date') IS NOT NULL ALTER TABLE installment_schedules ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('payments', 'date') IS NOT NULL ALTER TABLE payments ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('expenses', 'date') IS NOT NULL ALTER TABLE expenses ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('shareholder_transactions', 'date') IS NOT NULL ALTER TABLE shareholder_transactions ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('collection_tasks', 'due_date') IS NOT NULL ALTER TABLE collection_tasks ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('closing_periods', 'period_date') IS NOT NULL ALTER TABLE closing_periods ALTER COLUMN period_date NVARCHAR(50) NOT NULL;
+  END TRY
+  BEGIN CATCH
+    PRINT 'Skipping date column alters during startup migration';
+  END CATCH;
 
   IF COL_LENGTH('sales', 'subtotal') IS NULL ALTER TABLE sales ADD subtotal DECIMAL(18,2);
   IF COL_LENGTH('sales', 'discount') IS NULL ALTER TABLE sales ADD discount DECIMAL(18,2);
@@ -459,29 +475,44 @@ export async function initDb(): Promise<void> {
   );
   `);
 
-  // Auto-seed default admin if no users exist
+  // Ensure the default admin account exists on every start.
   try {
-    const existing = await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM users');
-    if ((existing?.count || 0) === 0) {
-      const { hashPassword, uid } = await import('./utils.js');
-      const username = 'admin';
-      const hashed = await hashPassword('admin123');
+    const admin = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
+    const { hashPassword, uid } = await import('./utils.js');
+    const hashed = await hashPassword('admin123');
+
+    if (admin?.id) {
+      await db.run(
+        `UPDATE users
+         SET name = ?, password_hash = ?, role = ?, is_active = 1
+         WHERE username = ?`,
+        'ãÏíÑ ÇáäÙÇã',
+        hashed,
+        'admin',
+        'admin',
+      );
+      // eslint-disable-next-line no-console
+      console.log('Ensured default admin user: admin / admin123');
+    } else {
       const id = uid();
       await db.run(
         `INSERT INTO users (id, name, username, password_hash, role, is_active, created_at)
          VALUES (?, ?, ?, ?, ?, 1, ?)`,
         id,
-        'Ù…Ø¯ÙŠØ± Ø§Ù„Ù†Ø¸Ø§Ù…',
-        username,
+        'ãÏíÑ ÇáäÙÇã',
+        'admin',
         hashed,
         'admin',
         new Date().toISOString(),
       );
       // eslint-disable-next-line no-console
-      console.log('Seeded default admin user: admin@almuttahida.com / admin123');
+      console.log('Seeded default admin user: admin / admin123');
     }
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('Error auto-seeding default admin:', err);
   }
 }
+
+
+
