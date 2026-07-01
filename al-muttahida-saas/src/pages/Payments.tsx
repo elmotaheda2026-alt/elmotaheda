@@ -41,6 +41,16 @@ interface OutgoingPaymentForm {
 
 const today = () => new Date().toISOString().split('T')[0];
 
+const normalizeArabic = (str: string): string => {
+  if (!str) return '';
+  return str
+    .replace(/[أإآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/[ىي]/g, 'ي')
+    .trim()
+    .toLowerCase();
+};
+
 export default function Payments() {
   const { settings, user } = useAuth();
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -67,6 +77,29 @@ export default function Payments() {
     description: '',
   });
 
+  // Autocomplete for customer payment selection
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+
+  const customerSuggestions = useMemo(() => {
+    const term = normalizeArabic(customerSearchTerm);
+    if (term.length < 1) return [];
+    return customers.filter((c) => normalizeArabic(c.name).includes(term));
+  }, [customers, customerSearchTerm]);
+
+  useEffect(() => {
+    const customer = customers.find((c) => c.id === incomingForm.customerId);
+    if (customer) {
+      if (customerSearchTerm !== customer.name) {
+        setCustomerSearchTerm(customer.name);
+      }
+    } else {
+      if (!showCustomerSuggestions && customerSearchTerm !== '') {
+        setCustomerSearchTerm('');
+      }
+    }
+  }, [incomingForm.customerId, customers, showCustomerSuggestions]);
+
   const [outgoingForm, setOutgoingForm] = useState<OutgoingPaymentForm>({
     supplierId: '',
     amount: 0,
@@ -77,9 +110,7 @@ export default function Payments() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const loadData = async () => {
-    if (isApiMode()) {
-      await Promise.all([syncCustomers(), syncSuppliers(), syncPayments(), syncSales(), syncClosingPeriods()]);
-    }
+    // 1. Load cached data immediately
     const nextPayments = getPayments().slice().reverse();
     const nextSales = getSales().slice().reverse();
     const nextCustomers = getCustomers();
@@ -91,12 +122,25 @@ export default function Payments() {
     setSuppliers(nextSuppliers);
     setClosedPeriods(getClosingPeriods());
 
-    if (!incomingForm.customerId && nextCustomers.length > 0) {
-      setIncomingForm((current) => ({ ...current, customerId: nextCustomers[0].id }));
-    }
+    // 2. Perform background sync if in API mode
+    if (isApiMode()) {
+      try {
+        await Promise.all([syncCustomers(), syncSuppliers(), syncPayments(), syncSales(), syncClosingPeriods()]);
+        
+        // 3. Update state with fresh synced data
+        const freshPayments = getPayments().slice().reverse();
+        const freshSales = getSales().slice().reverse();
+        const freshCustomers = getCustomers();
+        const freshSuppliers = getSuppliers();
 
-    if (!outgoingForm.supplierId && nextSuppliers.length > 0) {
-      setOutgoingForm((current) => ({ ...current, supplierId: nextSuppliers[0].id }));
+        setPayments(freshPayments);
+        setSales(freshSales);
+        setCustomers(freshCustomers);
+        setSuppliers(freshSuppliers);
+        setClosedPeriods(getClosingPeriods());
+      } catch (err) {
+        console.error('[Payments DEBUG] Sync FAILED:', err);
+      }
     }
   };
 
@@ -686,27 +730,54 @@ export default function Payments() {
                       <section className="space-y-5">
                         <div className="grid gap-4 md:grid-cols-2">
                           <Field label="العميل">
-                            <select
-                              value={incomingForm.customerId}
-                              onChange={(event) =>
-                                setIncomingForm({
-                                  customerId: event.target.value,
-                                  saleId: '',
-                                  installmentId: '',
-                                  amount: 0,
-                                  date: incomingForm.date,
-                                  description: '',
-                                })
-                              }
-                              className="input-ui"
-                            >
-                              <option value="">اختر العميل</option>
-                              {customers.map((customer) => (
-                                <option key={customer.id} value={customer.id}>
-                                  {customer.name}
-                                </option>
-                              ))}
-                            </select>
+                            <div className="relative w-full">
+                              <input
+                                value={customerSearchTerm}
+                                onChange={(e) => {
+                                  setCustomerSearchTerm(e.target.value);
+                                  setShowCustomerSuggestions(true);
+                                  if (e.target.value.trim() === '') {
+                                    setIncomingForm((current) => ({
+                                      ...current,
+                                      customerId: '',
+                                      saleId: '',
+                                      installmentId: '',
+                                      amount: 0,
+                                      description: '',
+                                    }));
+                                  }
+                                }}
+                                onFocus={() => setShowCustomerSuggestions(true)}
+                                onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 200)}
+                                className="input-ui w-full"
+                                placeholder="اكتب اسم العميل للبحث..."
+                              />
+                              {showCustomerSuggestions && customerSuggestions.length > 0 && (
+                                <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                                  {customerSuggestions.map((c) => (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setIncomingForm((current) => ({
+                                          ...current,
+                                          customerId: c.id,
+                                          saleId: '',
+                                          installmentId: '',
+                                          amount: 0,
+                                          description: '',
+                                        }));
+                                        setCustomerSearchTerm(c.name);
+                                        setShowCustomerSuggestions(false);
+                                      }}
+                                      className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                                    >
+                                      <span>{c.name}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </Field>
 
                           <Field label="الفاتورة">

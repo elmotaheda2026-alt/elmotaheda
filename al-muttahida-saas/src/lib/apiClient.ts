@@ -65,7 +65,12 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   listSales: () => request<any[]>('/sales?includeItems=true'),
-  listSalesForCollection: () => request<any[]>('/sales?includeItems=false'),
+  listSalesForCollection: (filters: { customerId?: string; search?: string } = {}) => {
+    const params = new URLSearchParams({ includeItems: 'false' });
+    if (filters.customerId) params.set('customerId', filters.customerId);
+    if (filters.search) params.set('search', filters.search);
+    return request<any[]>(`/sales?${params.toString()}`);
+  },
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),

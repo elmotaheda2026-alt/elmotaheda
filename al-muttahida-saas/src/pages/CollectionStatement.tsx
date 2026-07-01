@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel } from 'lucide-react';
+import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -73,11 +73,23 @@ const getCurrentMonthRange = () => {
   };
 };
 
+const normalizeArabic = (str: string): string => {
+  if (!str) return '';
+  return str
+    .replace(/[أإآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/[ىي]/g, 'ي')
+    .trim()
+    .toLowerCase();
+};
+
 export default function CollectionStatement() {
   const { settings } = useAuth();
   const currentMonthRange = useMemo(() => getCurrentMonthRange(), []);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
+  const [invoiceSales, setInvoiceSales] = useState<Sale[]>([]);
+  const [isInvoiceLoading, setIsInvoiceLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'due' | 'invoices' | 'legal'>('due');
 
   const [invoiceSearchTerm, setInvoiceSearchTerm] = useState('');
@@ -91,6 +103,28 @@ export default function CollectionStatement() {
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('all');
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
+  
+  // Collapsible cards & pagination states for "due" tab
+  const [expandedCustomerSaleId, setExpandedCustomerSaleId] = useState<string | null>(null);
+  const [dueCurrentPage, setDueCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 5;
+
+  // Reset pagination and expand states when filters change
+  useEffect(() => {
+    setDueCurrentPage(1);
+    setExpandedCustomerSaleId(null);
+  }, [dueSearchTerm, dueFromDate, dueToDate, selectedSalesRepId, hideSuedCustomers]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const suggestions = useMemo(() => {
+    const term = normalizeArabic(invoiceSearchTerm);
+    if (term.length < 1) return [];
+    return customers.filter(
+      (c) =>
+        normalizeArabic(c.name).includes(term) ||
+        (c.phone && c.phone.includes(term))
+    );
+  }, [customers, invoiceSearchTerm]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -136,6 +170,38 @@ export default function CollectionStatement() {
     };
   }, []);
 
+  const invoiceLookupTerm = invoiceSearchTerm.trim();
+  const hasInvoiceLookup = selectedCustomerId !== 'all' || invoiceLookupTerm.length >= 2;
+
+  useEffect(() => {
+    if (!isApiMode() || activeTab !== 'invoices') return;
+
+    if (!hasInvoiceLookup) {
+      setInvoiceSales([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadInvoiceSales = async () => {
+      setIsInvoiceLoading(true);
+      try {
+        const apiSales = await api.listSalesForCollection({
+          customerId: selectedCustomerId !== 'all' ? selectedCustomerId : undefined,
+          search: selectedCustomerId === 'all' ? invoiceLookupTerm : undefined,
+        });
+        if (!cancelled) {
+          setInvoiceSales(apiSales.filter((sale) => sale.status !== 'cancelled').slice().reverse());
+        }
+      } finally {
+        if (!cancelled) setIsInvoiceLoading(false);
+      }
+    };
+
+    void loadInvoiceSales();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, hasInvoiceLookup, invoiceLookupTerm, selectedCustomerId]);
   const customerMap = useMemo(() => {
     return new Map(customers.map((customer) => [customer.id, customer]));
   }, [customers]);
@@ -193,8 +259,54 @@ export default function CollectionStatement() {
     [customerMap, sales, salesRepMap],
   );
 
+  const invoiceRows = useMemo<CollectionInvoiceView[]>(() => {
+    if (!hasInvoiceLookup) return [];
+    if (!isApiMode()) return rows;
+
+    return invoiceSales.map((sale) => {
+      const customer = customerMap.get(sale.customerId);
+      const salesRepId = sale.financing?.salesRepId;
+      const salesRepName = sale.financing?.salesRepName || (salesRepId ? salesRepMap.get(salesRepId) : undefined);
+      const schedules = sale.financing?.schedules?.length
+        ? sale.financing.schedules
+        : [
+          {
+            id: `${sale.id}-single`,
+            monthIndex: 1,
+            label: 'دفعة واحدة',
+            dueDate: toISODateOnly(sale.date),
+            amount: sale.total,
+            paidAmount: sale.paid,
+            paidAt: sale.paid > 0 ? sale.date : undefined,
+            status: (sale.remaining <= 0 ? 'paid' : sale.paid > 0 ? 'partial' : 'unpaid') as InstallmentSchedule['status'],
+          },
+        ];
+
+      return {
+        saleId: sale.id,
+        customerId: sale.customerId,
+        invoiceNumber: sale.invoiceNumber,
+        customerName: sale.customerName,
+        customerPhone: customer?.phone || '-',
+        customerAddress: customer?.address || '-',
+        saleDate: sale.date,
+        total: sale.total,
+        paid: sale.paid,
+        remaining: sale.remaining,
+        paymentMethod: sale.financing?.paymentMethod || 'cash',
+        salesRepId,
+        salesRepName,
+        schedules,
+        guarantors: customer?.guarantors || [],
+        lastPaymentDate: schedules
+          .filter((s) => s.paidAt)
+          .reduce((latest, s) => (!latest || s.paidAt! > latest ? s.paidAt : latest), undefined as string | undefined),
+        isSued: customer?.isSued || false,
+      };
+    });
+  }, [customerMap, hasInvoiceLookup, invoiceSales, rows, salesRepMap]);
   const filteredRows = useMemo(() => {
-    return rows.filter((row) => {
+    return invoiceRows.filter((row) => {
       if (selectedCustomerId !== 'all' && row.customerId !== selectedCustomerId) return false;
       if (hideSuedCustomers && row.isSued) return false;
 
@@ -212,7 +324,7 @@ export default function CollectionStatement() {
         row.customerAddress.toLowerCase().includes(search)
       );
     });
-  }, [rows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
+  }, [invoiceRows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
 
   const dueRows = useMemo<DueCustomerRow[]>(() => {
     if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) return [];
@@ -277,6 +389,32 @@ export default function CollectionStatement() {
     return Array.from(groupsMap.values());
   }, [dueRows]);
 
+  const totalDuePages = Math.ceil(groupedDueRows.length / ITEMS_PER_PAGE);
+
+  const paginatedGroupedDueRows = useMemo(() => {
+    const startIndex = (dueCurrentPage - 1) * ITEMS_PER_PAGE;
+    return groupedDueRows.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [groupedDueRows, dueCurrentPage]);
+
+  // Generate pagination list with ellipses (...)
+  const getPaginatedPages = () => {
+    const pages: (number | string)[] = [];
+    const range = 1; // Show current page +/- 1
+    
+    for (let i = 1; i <= totalDuePages; i++) {
+      if (
+        i === 1 ||
+        i === totalDuePages ||
+        (i >= dueCurrentPage - range && i <= dueCurrentPage + range)
+      ) {
+        pages.push(i);
+      } else if (pages[pages.length - 1] !== '...') {
+        pages.push('...');
+      }
+    }
+    return pages;
+  };
+
   const suedCustomersList = useMemo(() => {
     return customers.filter(c => c.isSued).map(c => {
       const customerInvoices = rows.filter(r => r.customerId === c.id);
@@ -333,104 +471,76 @@ export default function CollectionStatement() {
         }
       }
     `}</style>
-      <div className={`space-y-4 ${printingInvoice ? 'print:hidden' : ''}`}>
-        <div className="flex justify-between items-center print:hidden border-b border-slate-100 pb-2">
-          <h2 className="text-xl font-black text-slate-900">متابعة التحصيل</h2>
-        </div>
-
-        {/* TABS SECTION */}
-        <div className="flex gap-2 border-b border-slate-200 pb-[1px] print:hidden">
+      <div className={`space-y-3 ${printingInvoice ? 'print:hidden' : ''}`}>
+        {/* TABS SECTION - Flush to top */}
+        <div className="flex gap-1 border-b border-slate-200 pb-[1px] print:hidden">
           <button
             onClick={() => setActiveTab('due')}
-            className={`flex items-center gap-2 px-5 py-3 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'due' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
+            className={`flex items-center gap-1.5 px-4 py-2 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'due' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
               }`}
           >
-            <LayoutList size={18} />
+            <LayoutList size={16} />
             العملاء المستحقون (فترة)
           </button>
           <button
             onClick={() => setActiveTab('invoices')}
-            className={`flex items-center gap-2 px-5 py-3 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'invoices' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
+            className={`flex items-center gap-1.5 px-4 py-2 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'invoices' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
               }`}
           >
-            <FileText size={18} />
+            <FileText size={16} />
             سجل فواتير العملاء
           </button>
           <button
             onClick={() => setActiveTab('legal')}
-            className={`flex items-center gap-2 px-5 py-3 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'legal' ? 'bg-red-50 text-red-700 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
+            className={`flex items-center gap-1.5 px-4 py-2 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'legal' ? 'bg-red-50 text-red-700 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
               }`}
           >
-            <Gavel size={18} />
+            <Gavel size={16} />
             الشئون القانونية (النزاعات)
           </button>
         </div>
 
         {/* TAB CONTENT: DUE */}
         {activeTab === 'due' && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {/* Filters for Due */}
-            <div className="bg-white px-5 py-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-end gap-4 print:hidden">
-              <label className="block flex-1 min-w-[220px]">
-                <span className="mb-1 block text-xs font-bold text-slate-500">بحث</span>
-                <div className="relative">
-                  <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    value={dueSearchTerm}
-                    onChange={(e) => setDueSearchTerm(e.target.value)}
-                    className="input-ui pr-10 h-10 text-sm"
-                    placeholder="بحث باسم العميل، رقم الفاتورة، أو الهاتف..."
-                  />
-                </div>
-              </label>
-              <label className="block flex-1 min-w-[155px]">
-                <span className="mb-1 block text-xs font-bold text-slate-500">من تاريخ</span>
-                <DatePicker value={dueFromDate} onChange={setDueFromDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
-              </label>
-              <label className="block flex-1 min-w-[155px]">
-                <span className="mb-1 block text-xs font-bold text-slate-500">إلى تاريخ</span>
-                <DatePicker value={dueToDate} onChange={setDueToDate} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
-              </label>
-              <label className="block flex-1 min-w-[160px]">
-                <span className="mb-1 block text-xs font-bold text-slate-500">المندوب</span>
-                <select
-                  value={selectedSalesRepId}
-                  onChange={(e) => setSelectedSalesRepId(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm"
-                >
-                  <option value="all">كل المناديب</option>
-                  {salesReps.map((rep) => (
-                    <option key={rep.id} value={rep.id}>
-                      {rep.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="flex items-center shrink-0 mb-1">
-                <label className="flex items-center gap-2 cursor-pointer bg-red-50 text-red-700 px-4 py-2 rounded-xl border border-red-100 hover:bg-red-100 transition-colors shadow-sm h-10">
-                  <input
-                    type="checkbox"
-                    checked={hideSuedCustomers}
-                    onChange={(e) => setHideSuedCustomers(e.target.checked)}
-                    className="h-4 w-4 rounded text-red-600 accent-red-600"
-                  />
-                  <span className="text-sm font-bold whitespace-nowrap">إخفاء القضايا</span>
-                </label>
+          <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {/* Compact Inline Filters */}
+            <div className="flex flex-wrap items-center gap-2 print:hidden">
+              <div className="relative flex-1 min-w-[180px]">
+                <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={dueSearchTerm}
+                  onChange={(e) => setDueSearchTerm(e.target.value)}
+                  className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400"
+                  placeholder="بحث بالاسم أو رقم الفاتورة..."
+                />
               </div>
-
-              <div className="w-full lg:w-auto flex-1"></div>
-
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
-                <div className="flex-1 sm:flex-none bg-red-50 text-red-700 px-4 py-2 rounded-xl border border-red-100 font-bold text-sm shadow-sm flex items-center justify-center gap-2 h-10">
-                  <span className="opacity-80 text-xs">المستحق:</span>
-                  <span className="text-base">{formatCurrency(dueTotalInPeriod)}</span>
-                </div>
-                <button onClick={() => window.print()} className="flex-1 sm:flex-none h-10 px-6 bg-slate-900 text-white rounded-xl hover:bg-slate-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
-                  <Printer size={16} />
-                  طباعة
-                </button>
-              </div>
+              <DatePicker value={dueFromDate} onChange={setDueFromDate} className="h-9 w-[130px] rounded-xl border-slate-200 px-3 text-sm font-semibold" />
+              <DatePicker value={dueToDate} onChange={setDueToDate} className="h-9 w-[130px] rounded-xl border-slate-200 px-3 text-sm font-semibold" />
+              <select
+                value={selectedSalesRepId}
+                onChange={(e) => setSelectedSalesRepId(e.target.value)}
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 font-semibold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[120px]"
+              >
+                <option value="all">كل المناديب</option>
+                {salesReps.map((rep) => (
+                  <option key={rep.id} value={rep.id}>
+                    {rep.name}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1.5 cursor-pointer text-red-600 bg-red-50 px-3 h-9 rounded-xl border border-red-100 hover:bg-red-100 transition-colors text-xs font-bold whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={hideSuedCustomers}
+                  onChange={(e) => setHideSuedCustomers(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded text-red-600 accent-red-600"
+                />
+                إخفاء القضايا
+              </label>
+              <button onClick={() => window.print()} className="h-9 px-4 bg-slate-800 text-white rounded-xl hover:bg-slate-900 flex items-center gap-1.5 font-bold text-xs shadow-sm transition-all whitespace-nowrap">
+                <Printer size={14} />
+                طباعة
+              </button>
             </div>
 
             {dueFromDate > dueToDate && (
@@ -439,145 +549,282 @@ export default function CollectionStatement() {
               </div>
             )}
 
-            {/* Table */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full bg-white">
-                  <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-right text-sm font-bold">القسط</th>
-                      <th className="px-4 py-3 text-right text-sm font-bold">تاريخ الاستحقاق</th>
-                      <th className="px-4 py-3 text-right text-sm font-bold text-center">قيمة القسط</th>
-                      <th className="px-4 py-3 text-right text-sm font-bold text-center">المتبقي</th>
-                      <th className="px-4 py-3 text-right text-sm font-bold text-center">الحالة</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {groupedDueRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
-                          <div className="flex flex-col items-center justify-center">
-                            <CheckCircle2 size={40} className="text-slate-300 mb-3" />
-                            <p>لا توجد أقساط مستحقة حالياً.</p>
+{/* Accordion Cards Layout */}
+            <div className="space-y-2 print:hidden">
+              {groupedDueRows.length === 0 ? (
+                <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-500 shadow-sm">
+                  <div className="flex flex-col items-center justify-center">
+                    <CheckCircle2 size={40} className="text-slate-300 mb-3" />
+                    <p className="font-bold">لا توجد أقساط مستحقة حالياً.</p>
+                  </div>
+                </div>
+              ) : (
+                // Use paginatedGroupedDueRows on screen, but print all rows for full reports
+                paginatedGroupedDueRows.map((group, gIdx) => {
+                  const isExpanded = expandedCustomerSaleId === group[0].saleId;
+                  const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+
+                  return (
+                    <div
+                      key={group[0].saleId}
+                      className="bg-white rounded-[24px] border border-slate-200/80 shadow-sm hover:shadow-md hover:border-sky-100 transition-all duration-300 overflow-hidden"
+                    >
+                      {/* CARD HEADER (Clickable to Expand) */}
+                      <div
+                        onClick={() => setExpandedCustomerSaleId(isExpanded ? null : group[0].saleId)}
+                        className="p-3 px-4 flex items-center justify-between gap-4 flex-wrap cursor-pointer hover:bg-slate-50/50 transition-colors select-none print:bg-slate-50/30"
+                      >
+                        <div className="flex items-center gap-4 flex-wrap print:gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${group[0].isSued ? 'bg-red-50 text-red-600' : 'bg-sky-50 text-sky-600'}`}>
+                              {group[0].isSued ? <Gavel size={20} /> : <User size={20} />}
+                            </div>
+                            <div className="flex flex-col">
+                              <span className={`text-lg font-black print:text-sm ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>
+                                {group[0].customerName}
+                              </span>
+                              {group[0].isSued && (
+                                <span className="text-[10px] text-red-500 font-bold flex items-center gap-0.5 print:text-[8px]">
+                                  <AlertTriangle size={10} /> محال للقضاء يمنع التعامل
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-slate-600 border-r border-slate-100 pr-4 print:pr-2">
+                            <Phone size={14} className="text-slate-400" />
+                            <span className="text-sm font-bold text-slate-700 print:text-[10px]">{group[0].customerPhone}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-sky-600 border-r border-slate-100 pr-4 print:pr-2">
+                            <Briefcase size={14} className="text-sky-400" />
+                            <span className="text-sm font-bold text-sky-700 print:text-[10px]">{group[0].salesRepName || '---'}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-slate-500 border-r border-slate-100 pr-4 print:pr-2">
+                            <MapPin size={14} className="text-slate-400" />
+                            <span className="text-sm font-medium text-slate-600">{group[0].customerAddress}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 print:gap-1.5">
+                          <div className="flex items-center gap-1.5 font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl text-xs print:px-1.5 print:text-[9px]">
+                            <Clock3 size={14} />
+                            <span>أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 bg-red-50 px-3 py-1.5 rounded-xl border border-red-100 text-xs font-bold print:px-1.5 print:text-[9px]">
+                            <Wallet size={14} className="text-red-500" />
+                            <span className="text-red-500">المستحق:</span>
+                            <span className="text-red-700 font-black">{formatCurrency(totalRemaining)}</span>
+                          </div>
+                          <div className="text-slate-400 hover:text-slate-700 w-8 h-8 rounded-full flex items-center justify-center hover:bg-slate-100 transition-colors print:hidden">
+                            {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* COLLAPSIBLE BODY */}
+                      <div className={`${isExpanded ? 'block' : 'hidden print:block'} border-t border-slate-100 bg-slate-50/30 p-4 space-y-3`}>
+                        {/* Guarantors Section */}
+                        {group[0].guarantors.some((g) => g && g.name) && (
+                          <div className="flex items-center gap-2 text-sm text-slate-500 bg-white p-3.5 rounded-2xl border border-slate-100 shadow-2sm">
+                            <Shield size={16} className="text-amber-500 shrink-0" />
+                            <span className="font-bold text-slate-500 print:text-[10px]">الضامنين:</span>
+                            <div className="flex items-center gap-3 flex-wrap">
+                              {group[0].guarantors
+                                .filter((g) => g && g.name)
+                                .map((g, idx, arr) => (
+                                  <span key={idx} className="text-slate-700 font-semibold print:text-[10px]">
+                                    {g!.name} ({g!.phone}){idx < arr.length - 1 ? '، ' : ''}
+                                  </span>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Installments Table */}
+                        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+                          <table className="w-full text-right text-sm">
+                            <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                              <tr>
+                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">القسط</th>
+                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">تاريخ الاستحقاق</th>
+                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">قيمة القسط</th>
+                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">المتبقي</th>
+                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">الحالة</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {group.map((row) => (
+                                <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="px-4 py-3 font-semibold text-slate-800">{row.installmentLabel}</td>
+                                  <td className="px-4 py-3 text-slate-600">{formatDateDisplay(row.dueDate)}</td>
+                                  <td className="px-4 py-3 text-slate-600 text-center">{formatCurrency(row.installmentAmount)}</td>
+                                  <td className="px-4 py-3 font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
+                                  <td className="px-4 py-3 text-center">
+                                    <MonthBadge status={row.status} />
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Print-Only Classic Table Layout (Exactly matches the old format) */}
+            <div className="hidden print:block bg-white rounded-2xl border border-slate-200 overflow-hidden w-full">
+              <table className="w-full bg-white text-right text-sm">
+                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-2 text-right text-xs font-bold">القسط</th>
+                    <th className="px-4 py-2 text-right text-xs font-bold">تاريخ الاستحقاق</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold">قيمة القسط</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold">المتبقي</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold">الحالة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {groupedDueRows.map((group, gIdx) => (
+                    <React.Fragment key={group[0].saleId}>
+                      {/* Group Header for Customer Info */}
+                      <tr className="bg-slate-50/80 border-t-2 border-slate-200">
+                        <td colSpan={5} className="px-4 py-2">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center justify-between gap-4 flex-wrap">
+                              <div className="flex items-center gap-3 flex-wrap">
+                                <span className={`font-black text-sm ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>
+                                  {group[0].customerName}
+                                </span>
+                                <span className="text-xs text-slate-700 font-bold">هاتف: {group[0].customerPhone}</span>
+                                <span className="text-xs text-sky-700 font-bold">مندوب: {group[0].salesRepName || '---'}</span>
+                                <span className="text-xs text-slate-600 font-medium">عنوان: {group[0].customerAddress}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded">أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
+                                <span className="text-xs text-red-700 font-bold bg-red-50 px-2 py-0.5 rounded">المستحق: {formatCurrency(group.reduce((sum, r) => sum + r.remainingAmount, 0))}</span>
+                              </div>
+                            </div>
+                            {group[0].guarantors.some((g) => g && g.name) && (
+                              <div className="text-[11px] text-slate-500 border-t border-dashed border-slate-200 pt-1 mt-1">
+                                <span className="font-bold text-slate-600">الضامنين: </span>
+                                {group[0].guarantors
+                                  .filter((g) => g && g.name)
+                                  .map((g, idx, arr) => `${g!.name} (${g!.phone})${idx < arr.length - 1 ? '، ' : ''}`)}
+                              </div>
+                            )}
                           </div>
                         </td>
                       </tr>
-                    ) : (
-                      groupedDueRows.map((group, gIdx) => (
-                        <React.Fragment key={group[0].saleId}>
-                          {/* Group Header for Customer Info - Professional, Tighter & More Compact UI */}
-                          <tr className="bg-slate-50/80 border-t-2 border-slate-200">
-                            <td colSpan={6} className="px-4 py-2.5 print:py-1">
-                              <div className="flex flex-col gap-1.5 print:gap-0.5">
-                                {/* Row 1: Name, Phone, Rep, Address (Right) & Badges (Left) */}
-                                <div className="flex items-center justify-between gap-4 flex-wrap">
-                                  <div className="flex items-center gap-4 flex-wrap print:gap-2">
-                                    <div className="flex items-center gap-1.5">
-                                      {group[0].isSued ? (
-                                        <Gavel size={18} className="text-red-600 print:w-3.5 print:h-3.5" />
-                                      ) : (
-                                        <User size={18} className="text-sky-600 print:w-3.5 print:h-3.5" />
-                                      )}
-                                      <div className="flex flex-col">
-                                        <span className={`text-lg font-black print:text-xs ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>
-                                          {group[0].customerName}
-                                        </span>
-                                        {group[0].isSued && (
-                                          <span className="text-[10px] text-red-500 font-bold flex items-center gap-0.5 print:text-[7px]">
-                                            <AlertTriangle size={8} /> محال للقضاء يمنع التعامل
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 text-slate-600 border-r border-slate-200 pr-4 print:pr-2 print:gap-1">
-                                      <Phone size={14} className="print:w-3 print:h-3 text-slate-400" />
-                                      <span className="text-sm font-bold text-slate-700 print:text-[10px]">{group[0].customerPhone}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 text-sky-600 border-r border-slate-200 pr-4 print:pr-2 print:gap-1">
-                                      <Briefcase size={14} className="print:w-3 print:h-3 text-sky-400" />
-                                      <span className="text-sm font-bold text-sky-700 print:text-[10px]">{group[0].salesRepName || '---'}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 text-slate-500 border-r border-slate-200 pr-4 print:pr-2 print:gap-1">
-                                      <MapPin size={14} className="print:w-3 print:h-3 text-slate-400" />
-                                      <span className="text-sm font-medium text-slate-600 truncate max-w-[280px] print:hidden">{group[0].customerAddress}</span>
-                                      <span className="hidden print:inline text-slate-600 font-medium print:text-[9px] print:whitespace-normal">{group[0].customerAddress}</span>
-                                    </div>
-                                  </div>
+                      {/* Installment Rows */}
+                      {group.map((row) => (
+                        <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="border-b border-slate-100 last:border-b-0">
+                          <td className="px-4 py-2 text-xs font-semibold text-slate-800">{row.installmentLabel}</td>
+                          <td className="px-4 py-2 text-xs text-slate-600">{formatDateDisplay(row.dueDate)}</td>
+                          <td className="px-4 py-2 text-xs text-slate-600 text-center">{formatCurrency(row.installmentAmount)}</td>
+                          <td className="px-4 py-2 text-xs font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
+                          <td className="px-4 py-2 text-center text-xs">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              row.status === 'paid' ? 'bg-emerald-50 text-emerald-700' :
+                              row.status === 'partial' ? 'bg-amber-50 text-amber-700' :
+                              'bg-red-50 text-red-700'
+                            }`}>
+                              {row.status === 'paid' ? 'مدفوع' : row.status === 'partial' ? 'جزئي' : 'غير مدفوع'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-                                  <div className="flex items-center gap-2 flex-wrap print:gap-1">
-                                    <div className="flex items-center gap-1.5 font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded text-sm print:bg-emerald-50/50 print:px-1.5 print:text-[9px] print:gap-0.5">
-                                      <Clock3 size={14} className="print:w-3 print:h-3" />
-                                      <span>أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 bg-red-50 px-2.5 py-1 rounded border border-red-100 shadow-sm text-sm font-bold print:px-1.5 print:text-[9px] print:gap-0.5">
-                                      <Wallet size={14} className="text-red-500 print:w-3 print:h-3" />
-                                      <span className="text-red-400">إجمالي المستحق:</span>
-                                      <span className="text-red-700 font-black">
-                                        {formatCurrency(group.reduce((sum, r) => sum + r.remainingAmount, 0))}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
+            {/* Pagination Controls */}
+            {totalDuePages > 1 && (
+              <div className="flex items-center justify-between border border-slate-200/60 bg-white px-4 py-2.5 rounded-2xl print:hidden">
+                <div>
+                  <p className="text-xs text-slate-500 font-bold whitespace-nowrap">
+                    عرض <span className="text-slate-900">{(dueCurrentPage - 1) * ITEMS_PER_PAGE + 1}</span> -{' '}
+                    <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * ITEMS_PER_PAGE)}</span> من{' '}
+                    <span className="text-slate-900">{groupedDueRows.length}</span> عميل
+                  </p>
+                </div>
+                <nav className="inline-flex rounded-xl gap-1" aria-label="Pagination">
+                  <button
+                    disabled={dueCurrentPage === 1}
+                    onClick={() => {
+                      setDueCurrentPage(prev => Math.max(prev - 1, 1));
+                      setExpandedCustomerSaleId(null);
+                    }}
+                    className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
+                  >
+                    السابق
+                  </button>
+                  {getPaginatedPages().map((page, idx) => {
+                    if (page === '...') {
+                      return (
+                        <span key={`dots-${idx}`} className="h-8 w-6 flex items-center justify-center text-slate-400 text-xs font-bold">
+                          ...
+                        </span>
+                      );
+                    }
+                    return (
+                      <button
+                        key={`page-${page}`}
+                        onClick={() => {
+                          setDueCurrentPage(page as number);
+                          setExpandedCustomerSaleId(null);
+                        }}
+                        className={`h-8 w-8 rounded-lg text-xs font-bold transition-all ${
+                          dueCurrentPage === page
+                            ? 'bg-sky-600 text-white shadow-sm'
+                            : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-3sm'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+                  <button
+                    disabled={dueCurrentPage === totalDuePages}
+                    onClick={() => {
+                      setDueCurrentPage(prev => Math.min(prev + 1, totalDuePages));
+                      setExpandedCustomerSaleId(null);
+                    }}
+                    className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
+                  >
+                    التالي
+                  </button>
+                </nav>
+              </div>
+            )}
 
-                                {/* Row 2: Guarantors (Only if exists) */}
-                                {group[0].guarantors.some((g) => g && g.name) && (
-                                  <div className="flex items-center gap-1.5 text-sm text-slate-500 pr-5 border-t border-dashed border-slate-100 pt-1.5 mt-1.5 print:mt-1 print:pt-1 print:pr-2">
-                                    <Shield size={14} className="text-amber-500 shrink-0 print:w-3 print:h-3" />
-                                    <span className="font-bold text-slate-500 print:text-[10px]">الضامنين:</span>
-                                    <div className="flex items-center gap-3 flex-wrap print:gap-1.5">
-                                      {group[0].guarantors
-                                        .filter((g) => g && g.name)
-                                        .map((g, idx, arr) => (
-                                          <span key={idx} className="text-slate-700 font-semibold print:text-[9px]">
-                                            {g!.name} ({g!.phone}){idx < arr.length - 1 ? '، ' : ''}
-                                          </span>
-                                        ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                          {group.map((row, rIdx) => (
-                            <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-sky-50/30 even:bg-slate-50/50 transition-colors border-b border-slate-100 last:border-b-0">
-                              <td className="px-4 py-3 text-sm text-slate-700 font-medium">{row.installmentLabel}</td>
-                              <td className="px-4 py-3 text-sm text-slate-700">{formatDateDisplay(row.dueDate)}</td>
-                              <td className="px-4 py-3 text-sm text-slate-700 text-center">{formatCurrency(row.installmentAmount)}</td>
-                              <td className="px-4 py-3 text-sm font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
-                              <td className="px-4 py-3 text-center">
-                                <MonthBadge status={row.status} />
-                              </td>
-                            </tr>
-                          ))}
-                        </React.Fragment>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+            {/* Quick Metrics Footer */}
+            <div className="bg-slate-50 border border-slate-200 px-6 py-5 rounded-2xl flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-6 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-black text-slate-900">{dueRows.length}</span>
+                  <span className="text-sm font-bold text-slate-500">أقساط مستحقة</span>
+                </div>
+                <div className="w-px h-6 bg-slate-200 hidden sm:block"></div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-black text-slate-900">{groupedDueRows.length}</span>
+                  <span className="text-sm font-bold text-slate-500">عملاء مستحقين</span>
+                </div>
               </div>
 
-              {/* Improved Table Footer */}
-              <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl font-black text-slate-900">{dueRows.length}</span>
-                    <span className="text-sm font-bold text-slate-500">أقساط مستحقة</span>
-                  </div>
-                  <div className="w-px h-6 bg-slate-200"></div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl font-black text-slate-900">{groupedDueRows.length}</span>
-                    <span className="text-sm font-bold text-slate-500">عملاء مستحقين</span>
-                  </div>
+              <div className="flex items-center gap-4 bg-white px-5 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="text-left">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">إجمالي مبالغ الأقساط</div>
+                  <div className="text-xl font-black text-red-600">{formatCurrency(dueTotalInPeriod)}</div>
                 </div>
-
-                <div className="flex items-center gap-4 bg-white px-5 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="text-left">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">إجمالي مبالغ الأقساط</div>
-                    <div className="text-xl font-black text-red-600">{formatCurrency(dueTotalInPeriod)}</div>
-                  </div>
-                  <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
-                    <Wallet size={20} />
-                  </div>
+                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
+                  <Wallet size={20} />
                 </div>
               </div>
             </div>
@@ -593,56 +840,90 @@ export default function CollectionStatement() {
                 <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   value={invoiceSearchTerm}
-                  onChange={(e) => setInvoiceSearchTerm(e.target.value)}
-                  className="input-ui pr-10 h-10 text-sm"
-                  placeholder="بحث برقم الفاتورة، اسم، رقم، أو عنوان..."
+                  onChange={(e) => {
+                    setInvoiceSearchTerm(e.target.value);
+                    setShowSuggestions(true);
+                    if (e.target.value.trim() === '') {
+                      setSelectedCustomerId('all');
+                    }
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                  className="input-ui pr-10 h-10 text-sm w-full"
+                  placeholder="ابحث عن العميل بالاسم أو رقم الفاتورة..."
                 />
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                    {suggestions.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCustomerId(c.id);
+                          setInvoiceSearchTerm(c.name);
+                          setShowSuggestions(false);
+                        }}
+                        className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                      >
+                        <span>{c.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <select
-                value={selectedCustomerId}
-                onChange={(e) => setSelectedCustomerId(e.target.value)}
-                className="w-full md:w-64 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 font-bold outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 transition shadow-sm"
-              >
-                <option value="all">كل العملاء</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </option>
-                ))}
-              </select>
 
-              <div className="flex gap-2 w-full md:w-auto justify-center mr-auto">
-                <label className="flex items-center gap-2 cursor-pointer bg-red-50 px-4 py-2 rounded-xl border border-red-100 hover:bg-red-100 transition-colors">
+              <div className="flex gap-3 w-full md:w-auto justify-center mr-auto">
+                <label className="flex items-center gap-2 cursor-pointer bg-red-50/50 hover:bg-red-50 text-red-800 px-4 py-2 rounded-xl border border-red-100/60 transition-all select-none shadow-sm">
                   <input
                     type="checkbox"
                     checked={hideSuedCustomers}
                     onChange={(e) => setHideSuedCustomers(e.target.checked)}
-                    className="h-4 w-4 rounded text-red-600 accent-red-600"
+                    className="h-4 w-4 rounded text-red-600 accent-red-600 cursor-pointer"
                   />
-                  <span className="text-sm font-bold text-red-800 whitespace-nowrap">إخفاء القضايا</span>
+                  <span className="text-sm font-bold whitespace-nowrap">إخفاء القضايا</span>
                 </label>
 
-                <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 transition-colors">
+                <label className="flex items-center gap-2 cursor-pointer bg-sky-50/50 hover:bg-sky-50 text-sky-800 px-4 py-2 rounded-xl border border-sky-100/60 transition-all select-none shadow-sm">
                   <input
                     type="checkbox"
                     checked={showOnlyDue}
                     onChange={(e) => setShowOnlyDue(e.target.checked)}
-                    className="h-4 w-4 rounded text-sky-600"
+                    className="h-4 w-4 rounded text-sky-600 accent-sky-600 cursor-pointer"
                   />
-                  <span className="text-sm font-bold text-slate-700 whitespace-nowrap">إظهار المتبقي فقط</span>
+                  <span className="text-sm font-bold whitespace-nowrap">إظهار المتبقي فقط</span>
                 </label>
               </div>
             </div>
 
             {/* Invoice Cards */}
             <div className="space-y-4">
-              {filteredRows.length === 0 ? (
+              {!hasInvoiceLookup ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white p-16 text-center shadow-sm">
+                  <div className="w-16 h-16 rounded-2xl bg-sky-50 flex items-center justify-center mx-auto mb-5">
+                    <Search size={32} className="text-sky-400" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">ابحث عن عميل لعرض فواتيره</h3>
+                  <p className="text-slate-500 text-sm max-w-md mx-auto">اكتب اسم العميل أو رقم الفاتورة في خانة البحث بالأعلى، أو اختر عميل من القائمة لعرض كشف حسابه وحالة أقساطه.</p>
+                </div>
+              ) : isInvoiceLoading ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-16 text-center shadow-sm">
+                  <Clock3 size={40} className="text-sky-400 mx-auto mb-4 animate-pulse" />
+                  <p className="text-slate-500 font-medium">جاري تحميل فواتير العميل...</p>
+                </div>
+              ) : filteredRows.length === 0 ? (
                 <div className="rounded-2xl border border-slate-200 bg-white p-16 text-center shadow-sm">
                   <Search size={40} className="text-slate-300 mx-auto mb-4" />
                   <p className="text-slate-500 font-medium">لا توجد نتائج مطابقة للبحث الحالي.</p>
                 </div>
-              ) : (
-                filteredRows.map((row) => (
+              ) : filteredRows.map((row) => {
+                  // Calculate installment metrics
+                  const totalInstallments = row.schedules.length;
+                  const paidInstallments = row.schedules.filter((s) => s.status === 'paid').length;
+                  const partialInstallments = row.schedules.filter((s) => s.status === 'partial').length;
+                  const unpaidInstallments = row.schedules.filter((s) => s.status === 'unpaid').length;
+                  const paymentProgress = row.total > 0 ? Math.min((row.paid / row.total) * 100, 100) : 0;
+
+                  return (
                   <section key={row.saleId} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
                     <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
                       <div className="space-y-2">
@@ -688,6 +969,60 @@ export default function CollectionStatement() {
                       </div>
                     </div>
 
+                    {/* Installments Summary Dashboard */}
+                    {row.paymentMethod === 'installment' && (
+                      <div className="mt-4 bg-gradient-to-r from-slate-50 to-slate-100/50 p-4 rounded-xl border border-slate-200/60 shadow-inner">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <div className="flex flex-wrap gap-4 items-center">
+                            <div className="bg-white px-3.5 py-2 rounded-lg border border-slate-200 shadow-sm flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm">
+                                {paidInstallments}
+                              </div>
+                              <div>
+                                <p className="text-[10px] text-slate-400 font-bold">الأقساط المدفوعة</p>
+                                <p className="text-xs font-semibold text-slate-700">{paidInstallments} من {totalInstallments}</p>
+                              </div>
+                            </div>
+
+                            {partialInstallments > 0 && (
+                              <div className="bg-white px-3.5 py-2 rounded-lg border border-slate-200 shadow-sm flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-sm">
+                                  {partialInstallments}
+                                </div>
+                                <div>
+                                  <p className="text-[10px] text-slate-400 font-bold">أقساط مدفوعة جزئياً</p>
+                                  <p className="text-xs font-semibold text-slate-700">{partialInstallments} قسط</p>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="bg-white px-3.5 py-2 rounded-lg border border-slate-200 shadow-sm flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center font-bold text-sm">
+                                {unpaidInstallments}
+                              </div>
+                              <div>
+                                <p className="text-[10px] text-slate-400 font-bold">الأقساط المتبقية</p>
+                                <p className="text-xs font-semibold text-slate-700">{unpaidInstallments} قسط غير مدفوع</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex-1 min-w-[200px] bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                            <div className="flex justify-between items-center mb-1.5 text-xs">
+                              <span className="text-slate-500 font-bold">نسبة التحصيل من الأقساط</span>
+                              <span className="text-emerald-600 font-black">{paymentProgress.toFixed(1)}%</span>
+                            </div>
+                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                              <div
+                                className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                                style={{ width: `${paymentProgress}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {row.schedules.map((schedule) => (
                         <div key={schedule.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4 transition-colors hover:border-sky-100 hover:bg-sky-50/30">
@@ -714,8 +1049,8 @@ export default function CollectionStatement() {
                       ))}
                     </div>
                   </section>
-                ))
-              )}
+                );
+              })}
             </div>
           </div>
         )}

@@ -302,9 +302,33 @@ async function getMappedSale(id: string) {
 router.get('/', requirePermission('sales:read'), async (req, res) => {
   try {
     const db = await dbPromise;
-    const rows = await db.all<SaleRow>('SELECT * FROM sales ORDER BY created_at DESC');
     const includeItems = String(req.query.includeItems) === 'true';
-    const allSchedules = await db.all<(ScheduleRow & { sale_id: string })>('SELECT * FROM installment_schedules ORDER BY month_index ASC');
+    const customerId = typeof req.query.customerId === 'string' ? req.query.customerId.trim() : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const whereParts: string[] = [];
+    const args: any[] = [];
+
+    if (customerId) {
+      whereParts.push('customer_id = ?');
+      args.push(customerId);
+    }
+
+    if (search) {
+      whereParts.push('(customer_name LIKE ? OR invoice_number LIKE ?)');
+      args.push(`%${search}%`, `%${search}%`);
+    }
+
+    const where = whereParts.length ? ` WHERE ${whereParts.join(' AND ')}` : '';
+    const rows = await db.all<SaleRow>(`SELECT * FROM sales${where} ORDER BY created_at DESC`, ...args);
+    const saleIds = rows.map((row) => row.id);
+    const allSchedules = saleIds.length
+      ? whereParts.length
+        ? await db.all<(ScheduleRow & { sale_id: string })>(
+          `SELECT * FROM installment_schedules WHERE sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY month_index ASC`,
+          ...saleIds,
+        )
+        : await db.all<(ScheduleRow & { sale_id: string })>('SELECT * FROM installment_schedules ORDER BY month_index ASC')
+      : [];
     const schedulesBySale = new Map<string, ScheduleRow[]>();
     allSchedules.forEach((schedule) => {
       const current = schedulesBySale.get(schedule.sale_id) || [];

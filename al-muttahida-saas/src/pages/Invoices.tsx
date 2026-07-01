@@ -86,6 +86,16 @@ function addMonths(dateStr: string, months: number): string {
   return `${year}-${pad(month)}-${pad(day)}`;
 }
 
+const normalizeArabic = (str: string): string => {
+  if (!str) return '';
+  return str
+    .replace(/[أإآا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/[ىي]/g, 'ي')
+    .trim()
+    .toLowerCase();
+};
+
 export default function Invoices() {
   const { settings, user } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -94,6 +104,107 @@ export default function Invoices() {
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('');
+  const [procurementSupplierId, setProcurementSupplierId] = useState('');
+  const [quickProduct, setQuickProduct] = useState<QuickProductForm>({
+    name: '',
+    purchasePrice: 0,
+    salePrice: 0,
+    supplierId: '',
+  });
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+
+  const customerSuggestions = useMemo(() => {
+    const term = normalizeArabic(customerSearchTerm);
+    if (term.length < 1) return [];
+    return customers.filter(
+      (c) =>
+        normalizeArabic(c.name).includes(term) ||
+        (c.phone && c.phone.includes(term))
+    );
+  }, [customers, customerSearchTerm]);
+
+  useEffect(() => {
+    const customer = customers.find((c) => c.id === selectedCustomerId);
+    if (customer) {
+      if (customerSearchTerm !== customer.name) {
+        setCustomerSearchTerm(customer.name);
+      }
+    } else {
+      if (!showCustomerSuggestions && customerSearchTerm !== '') {
+        setCustomerSearchTerm('');
+      }
+    }
+  }, [selectedCustomerId, customers, showCustomerSuggestions]);
+
+  // Autocomplete for Sales Representative
+  const [salesRepSearchTerm, setSalesRepSearchTerm] = useState('');
+  const [showSalesRepSuggestions, setShowSalesRepSuggestions] = useState(false);
+
+  const salesRepSuggestions = useMemo(() => {
+    const term = normalizeArabic(salesRepSearchTerm);
+    if (term.length < 1) return [];
+    return salesReps.filter((r) => normalizeArabic(r.name).includes(term));
+  }, [salesReps, salesRepSearchTerm]);
+
+  useEffect(() => {
+    const rep = salesReps.find((r) => r.id === selectedSalesRepId);
+    if (rep) {
+      if (salesRepSearchTerm !== rep.name) {
+        setSalesRepSearchTerm(rep.name);
+      }
+    } else {
+      if (!showSalesRepSuggestions && salesRepSearchTerm !== '') {
+        setSalesRepSearchTerm('');
+      }
+    }
+  }, [selectedSalesRepId, salesReps, showSalesRepSuggestions]);
+
+  // Autocomplete for Supplier
+  const [supplierSearchTerm, setSupplierSearchTerm] = useState('');
+  const [showSupplierSuggestions, setShowSupplierSuggestions] = useState(false);
+
+  const supplierSuggestions = useMemo(() => {
+    const term = normalizeArabic(supplierSearchTerm);
+    if (term.length < 1) return [];
+    return suppliers.filter((s) => normalizeArabic(s.name).includes(term));
+  }, [suppliers, supplierSearchTerm]);
+
+  useEffect(() => {
+    const supplier = suppliers.find((s) => s.id === procurementSupplierId);
+    if (supplier) {
+      if (supplierSearchTerm !== supplier.name) {
+        setSupplierSearchTerm(supplier.name);
+      }
+    } else {
+      if (!showSupplierSuggestions && supplierSearchTerm !== '') {
+        setSupplierSearchTerm('');
+      }
+    }
+  }, [procurementSupplierId, suppliers, showSupplierSuggestions]);
+
+  // Autocomplete for Quick Product Supplier (On-demand)
+  const [quickSupplierSearchTerm, setQuickSupplierSearchTerm] = useState('');
+  const [showQuickSupplierSuggestions, setShowQuickSupplierSuggestions] = useState(false);
+
+  const quickSupplierSuggestions = useMemo(() => {
+    const term = normalizeArabic(quickSupplierSearchTerm);
+    if (term.length < 1) return [];
+    return suppliers.filter((s) => normalizeArabic(s.name).includes(term));
+  }, [suppliers, quickSupplierSearchTerm]);
+
+  useEffect(() => {
+    const supplier = suppliers.find((s) => s.id === quickProduct.supplierId);
+    if (supplier) {
+      if (quickSupplierSearchTerm !== supplier.name) {
+        setQuickSupplierSearchTerm(supplier.name);
+      }
+    } else {
+      if (!showQuickSupplierSuggestions && quickSupplierSearchTerm !== '') {
+        setQuickSupplierSearchTerm('');
+      }
+    }
+  }, [quickProduct.supplierId, suppliers, showQuickSupplierSuggestions]);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [paymentDate, setPaymentDate] = useState(today());
@@ -106,14 +217,7 @@ export default function Invoices() {
   const [lineDiscount, setLineDiscount] = useState<number | ''>('');
   const [lineTax, setLineTax] = useState<number | ''>('');
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
-  const [procurementSupplierId, setProcurementSupplierId] = useState('');
   const [showQuickProduct, setShowQuickProduct] = useState(false);
-  const [quickProduct, setQuickProduct] = useState<QuickProductForm>({
-    name: '',
-    purchasePrice: 0,
-    salePrice: 0,
-    supplierId: '',
-  });
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [savedSaleForPrinting, setSavedSaleForPrinting] = useState<Sale | null>(null);
   const [sales, setSales] = useState<Sale[]>([]);
@@ -135,7 +239,7 @@ export default function Invoices() {
     } catch (err: any) {
       setMessage({
         type: 'error',
-        text: err.message || '���� ����� ��� ���������. ���� �� ����� ������ �� ���� ��� ����.',
+        text: err.message || '���� ����� ��� ���������. ���� �� ����� ������ �� ���� ��� ����.',
       });
     }
     setShowSearchModal(true);
@@ -217,12 +321,9 @@ export default function Invoices() {
       setSales(sortSalesNewestFirst(loadedSales));
       setInvoiceNumber(getNextSaleInvoiceNumber());
 
-      if (loadedCustomers.length > 0) {
-        setSelectedCustomerId(loadedCustomers[0].id);
-      }
+
 
       if (loadedSuppliers.length > 0) {
-        setProcurementSupplierId(loadedSuppliers[0].id);
         setQuickProduct((current) => ({ ...current, supplierId: current.supplierId || loadedSuppliers[0].id }));
       }
     };
@@ -695,25 +796,77 @@ export default function Invoices() {
           <Panel title="1. بيانات العميل والفاتورة" icon={<CalendarDays size={18} className="text-sky-600" />}>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <Field label="العميل">
-                <select value={selectedCustomerId} onChange={(e) => setSelectedCustomerId(e.target.value)} className="input-ui">
-                  <option value="">اختر العميل</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative w-full">
+                  <input
+                    value={customerSearchTerm}
+                    onChange={(e) => {
+                      setCustomerSearchTerm(e.target.value);
+                      setShowCustomerSuggestions(true);
+                      if (e.target.value.trim() === '') {
+                        setSelectedCustomerId('');
+                      }
+                    }}
+                    onFocus={() => setShowCustomerSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 200)}
+                    className="input-ui w-full"
+                    placeholder="اكتب اسم العميل للبحث..."
+                  />
+                  {showCustomerSuggestions && customerSuggestions.length > 0 && (
+                    <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                      {customerSuggestions.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCustomerId(c.id);
+                            setCustomerSearchTerm(c.name);
+                            setShowCustomerSuggestions(false);
+                          }}
+                          className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                        >
+                          <span>{c.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </Field>
 
               <Field label="مندوب المبيعات">
-                <select value={selectedSalesRepId} onChange={(e) => setSelectedSalesRepId(e.target.value)} className="input-ui">
-                  <option value="">بدون مندوب</option>
-                  {salesReps.map((rep) => (
-                    <option key={rep.id} value={rep.id}>
-                      {rep.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative w-full">
+                  <input
+                    value={salesRepSearchTerm}
+                    onChange={(e) => {
+                      setSalesRepSearchTerm(e.target.value);
+                      setShowSalesRepSuggestions(true);
+                      if (e.target.value.trim() === '') {
+                        setSelectedSalesRepId('');
+                      }
+                    }}
+                    onFocus={() => setShowSalesRepSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSalesRepSuggestions(false), 200)}
+                    className="input-ui w-full"
+                    placeholder="اكتب اسم المندوب..."
+                  />
+                  {showSalesRepSuggestions && salesRepSuggestions.length > 0 && (
+                    <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                      {salesRepSuggestions.map((rep) => (
+                        <button
+                          key={rep.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSalesRepId(rep.id);
+                            setSalesRepSearchTerm(rep.name);
+                            setShowSalesRepSuggestions(false);
+                          }}
+                          className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                        >
+                          <span>{rep.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </Field>
 
               <Field label="تاريخ الفاتورة">
@@ -890,18 +1043,40 @@ export default function Invoices() {
                     </Field>
                     {/* sale price removed for on_demand quick products */}
                     <Field label="المورد المتوقع">
-                      <select
-                        value={quickProduct.supplierId}
-                        onChange={(e) => setQuickProduct((current) => ({ ...current, supplierId: e.target.value }))}
-                        className="input-ui"
-                      >
-                        <option value="">اختر المورد</option>
-                        {suppliers.map((supplier) => (
-                           <option key={supplier.id} value={supplier.id}>
-                            {supplier.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative w-full">
+                        <input
+                          value={quickSupplierSearchTerm}
+                          onChange={(e) => {
+                            setQuickSupplierSearchTerm(e.target.value);
+                            setShowQuickSupplierSuggestions(true);
+                            if (e.target.value.trim() === '') {
+                              setQuickProduct((current) => ({ ...current, supplierId: '' }));
+                            }
+                          }}
+                          onFocus={() => setShowQuickSupplierSuggestions(true)}
+                          onBlur={() => setTimeout(() => setShowQuickSupplierSuggestions(false), 200)}
+                          className="input-ui w-full"
+                          placeholder="اكتب اسم المورد للبحث..."
+                        />
+                        {showQuickSupplierSuggestions && quickSupplierSuggestions.length > 0 && (
+                          <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-slate-100">
+                            {quickSupplierSuggestions.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => {
+                                  setQuickProduct((current) => ({ ...current, supplierId: s.id }));
+                                  setQuickSupplierSearchTerm(s.name);
+                                  setShowQuickSupplierSuggestions(false);
+                                }}
+                                className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                              >
+                                <span>{s.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </Field>
                   </div>
 
@@ -1002,18 +1177,40 @@ export default function Invoices() {
               <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
                 <div className="space-y-4">
                   <Field label="المورد الذي سيُنشأ له الشراء">
-                    <select
-                      value={procurementSupplierId}
-                      onChange={(e) => setProcurementSupplierId(e.target.value)}
-                      className="input-ui"
-                    >
-                      <option value="">اختر المورد</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative w-full">
+                      <input
+                        value={supplierSearchTerm}
+                        onChange={(e) => {
+                          setSupplierSearchTerm(e.target.value);
+                          setShowSupplierSuggestions(true);
+                          if (e.target.value.trim() === '') {
+                            setProcurementSupplierId('');
+                          }
+                        }}
+                        onFocus={() => setShowSupplierSuggestions(true)}
+                        onBlur={() => setTimeout(() => setShowSupplierSuggestions(false), 200)}
+                        className="input-ui w-full"
+                        placeholder="اكتب اسم المورد للبحث..."
+                      />
+                      {showSupplierSuggestions && supplierSuggestions.length > 0 && (
+                        <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-slate-100">
+                          {supplierSuggestions.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => {
+                                setProcurementSupplierId(s.id);
+                                setSupplierSearchTerm(s.name);
+                                setShowSupplierSuggestions(false);
+                              }}
+                              className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                            >
+                              <span>{s.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </Field>
 
                   <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
