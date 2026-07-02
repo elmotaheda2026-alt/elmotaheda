@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { startBackend, stopBackend, checkHealth } = require('./backend-loader.cjs');
@@ -158,6 +158,8 @@ ipcMain.on('start-app', async (event, config) => {
 // ── App lifecycle ───────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
+
   // Try to load saved config
   appConfig = loadConfig();
 
