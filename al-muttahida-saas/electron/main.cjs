@@ -58,15 +58,22 @@ function showSetupWindow() {
   });
 }
 
-// ── Main Application Window ─────────────────────────────────────
+let currentApiUrl = '';
+
+ipcMain.on('get-api-url', (event) => {
+  event.returnValue = currentApiUrl;
+});
 
 function createMainWindow(apiBaseUrl) {
+  currentApiUrl = apiBaseUrl;
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload-main.cjs'),
     },
     title: 'Al Muttahida ERP',
   });
@@ -77,20 +84,11 @@ function createMainWindow(apiBaseUrl) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Load the built frontend (dist/index.html)
-    // Inject the API base URL into the page
+    // Load the built frontend (dist/index.html) directly from its source
     const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
 
     if (fs.existsSync(indexPath)) {
-      // Read HTML and inject the API URL as a global variable
-      let html = fs.readFileSync(indexPath, 'utf-8');
-      const injectScript = `<script>window.__API_BASE_URL__="${apiBaseUrl}";</script>`;
-      html = html.replace('<head>', `<head>${injectScript}`);
-
-      // Write to a temp file and load it
-      const tempPath = path.join(app.getPath('userData'), 'index.html');
-      fs.writeFileSync(tempPath, html, 'utf-8');
-      mainWindow.loadFile(tempPath);
+      mainWindow.loadFile(indexPath);
     } else {
       // Fallback: try loading the URL directly
       mainWindow.loadURL(apiBaseUrl.replace(':4000', ':5173'));
