@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "main": "electron/main.js",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "pnpm install --prefer-offline && vite",
     "build": "pnpm install --prefer-offline && rimraf node_modules/.vite-temp && tsc -b && vite build",
