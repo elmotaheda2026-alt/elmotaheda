@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps } from '../lib/storage';
@@ -76,9 +76,9 @@ const getCurrentMonthRange = () => {
 const normalizeArabic = (str: string): string => {
   if (!str) return '';
   return str
-    .replace(/[أإآا]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/[ىي]/g, 'ي')
+    .replace(/[ط£ط¥ط¢ط§]/g, 'ط§')
+    .replace(/ط©/g, 'ظ‡')
+    .replace(/[ظ‰ظٹ]/g, 'ظٹ')
     .trim()
     .toLowerCase();
 };
@@ -91,6 +91,10 @@ export default function CollectionStatement() {
   const [invoiceSales, setInvoiceSales] = useState<Sale[]>([]);
   const [isInvoiceLoading, setIsInvoiceLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'due' | 'invoices' | 'legal'>('due');
+  const [serverDueRows, setServerDueRows] = useState<DueCustomerRow[]>([]);
+  const [isDueLoading, setIsDueLoading] = useState(false);
+  const [dueLoadError, setDueLoadError] = useState('');
+  const [hasLoadedAllSales, setHasLoadedAllSales] = useState(false);
 
   const [invoiceSearchTerm, setInvoiceSearchTerm] = useState('');
   const [dueSearchTerm, setDueSearchTerm] = useState('');
@@ -129,13 +133,11 @@ export default function CollectionStatement() {
   useEffect(() => {
     const loadData = async () => {
       if (isApiMode()) {
-        const [apiCustomers, apiSales, apiSalesReps] = await Promise.all([
+        const [apiCustomers, apiSalesReps] = await Promise.all([
           api.listCustomers(),
-          api.listSalesForCollection(),
           api.listSalesReps(),
         ]);
         setCustomers(apiCustomers);
-        setSales(apiSales.filter((sale) => sale.status !== 'cancelled').slice().reverse());
         setSalesReps(apiSalesReps);
         return;
       }
@@ -202,6 +204,74 @@ export default function CollectionStatement() {
       cancelled = true;
     };
   }, [activeTab, hasInvoiceLookup, invoiceLookupTerm, selectedCustomerId]);
+
+  useEffect(() => {
+    if (!isApiMode() || activeTab !== 'due') return;
+
+    if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) {
+      setServerDueRows([]);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    const handle = window.setTimeout(() => {
+      const loadDueRows = async () => {
+        setIsDueLoading(true);
+        setDueLoadError('');
+        try {
+          const apiDueRows = await api.listCollectionDue(
+            {
+              from: dueFromDate,
+              to: dueToDate,
+              search: dueSearchTerm.trim() || undefined,
+              salesRepId: selectedSalesRepId,
+              hideSued: hideSuedCustomers,
+            },
+            { signal: controller.signal },
+          );
+          if (!cancelled) setServerDueRows(apiDueRows);
+        } catch (error) {
+          if (!cancelled) {
+            setServerDueRows([]);
+            setDueLoadError(error instanceof DOMException && error.name === 'AbortError' ? 'Request timed out. Please try a smaller date range.' : 'Failed to load due installments.');
+          }
+        } finally {
+          window.clearTimeout(timeout);
+          if (!cancelled) setIsDueLoading(false);
+        }
+      };
+
+      void loadDueRows();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+      window.clearTimeout(handle);
+    };
+  }, [activeTab, dueFromDate, dueSearchTerm, dueToDate, hideSuedCustomers, selectedSalesRepId]);
+
+  useEffect(() => {
+    if (!isApiMode() || activeTab !== 'legal' || hasLoadedAllSales) return;
+
+    let cancelled = false;
+    const loadAllSalesForLegal = async () => {
+      const apiSales = await api.listSalesForCollection();
+      if (!cancelled) {
+        setSales(apiSales.filter((sale) => sale.status !== 'cancelled').slice().reverse());
+        setHasLoadedAllSales(true);
+      }
+    };
+
+    void loadAllSalesForLegal();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, hasLoadedAllSales]);
+
   const customerMap = useMemo(() => {
     return new Map(customers.map((customer) => [customer.id, customer]));
   }, [customers]);
@@ -223,7 +293,7 @@ export default function CollectionStatement() {
             {
               id: `${sale.id}-single`,
               monthIndex: 1,
-              label: 'دفعة واحدة',
+              label: 'ط¯ظپط¹ط© ظˆط§ط­ط¯ط©',
               dueDate: toISODateOnly(sale.date),
               amount: sale.total,
               paidAmount: sale.paid,
@@ -273,7 +343,7 @@ export default function CollectionStatement() {
           {
             id: `${sale.id}-single`,
             monthIndex: 1,
-            label: 'دفعة واحدة',
+            label: 'ط¯ظپط¹ط© ظˆط§ط­ط¯ط©',
             dueDate: toISODateOnly(sale.date),
             amount: sale.total,
             paidAmount: sale.paid,
@@ -327,6 +397,7 @@ export default function CollectionStatement() {
   }, [invoiceRows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
 
   const dueRows = useMemo<DueCustomerRow[]>(() => {
+    if (isApiMode()) return serverDueRows;
     if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) return [];
 
     const result: DueCustomerRow[] = [];
@@ -377,7 +448,7 @@ export default function CollectionStatement() {
     }
 
     return finalResult;
-  }, [dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap, hideSuedCustomers]);
+  }, [dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap, hideSuedCustomers, serverDueRows]);
 
   const groupedDueRows = useMemo(() => {
     const groupsMap = new Map<string, DueCustomerRow[]>();
@@ -480,7 +551,7 @@ export default function CollectionStatement() {
               }`}
           >
             <LayoutList size={16} />
-            العملاء المستحقون (فترة)
+            ط§ظ„ط¹ظ…ظ„ط§ط، ط§ظ„ظ…ط³طھط­ظ‚ظˆظ† (ظپطھط±ط©)
           </button>
           <button
             onClick={() => setActiveTab('invoices')}
@@ -488,7 +559,7 @@ export default function CollectionStatement() {
               }`}
           >
             <FileText size={16} />
-            سجل فواتير العملاء
+            ط³ط¬ظ„ ظپظˆط§طھظٹط± ط§ظ„ط¹ظ…ظ„ط§ط،
           </button>
           <button
             onClick={() => setActiveTab('legal')}
@@ -496,13 +567,13 @@ export default function CollectionStatement() {
               }`}
           >
             <Gavel size={16} />
-            الشئون القانونية (النزاعات)
+            ط§ظ„ط´ط¦ظˆظ† ط§ظ„ظ‚ط§ظ†ظˆظ†ظٹط© (ط§ظ„ظ†ط²ط§ط¹ط§طھ)
           </button>
         </div>
 
         {/* TAB CONTENT: DUE */}
         {activeTab === 'due' && (
-          <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="space-y-3 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-300">
             {/* Compact Inline Filters */}
             <div className="flex flex-wrap items-center gap-2 print:hidden">
               <div className="relative flex-1 min-w-[180px]">
@@ -511,7 +582,7 @@ export default function CollectionStatement() {
                   value={dueSearchTerm}
                   onChange={(e) => setDueSearchTerm(e.target.value)}
                   className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400"
-                  placeholder="بحث بالاسم أو رقم الفاتورة..."
+                  placeholder="ط¨ط­ط« ط¨ط§ظ„ط§ط³ظ… ط£ظˆ ط±ظ‚ظ… ط§ظ„ظپط§طھظˆط±ط©..."
                 />
               </div>
               <DatePicker value={dueFromDate} onChange={setDueFromDate} className="h-9 w-[130px] rounded-xl border-slate-200 px-3 text-sm font-semibold" />
@@ -521,7 +592,7 @@ export default function CollectionStatement() {
                 onChange={(e) => setSelectedSalesRepId(e.target.value)}
                 className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 font-semibold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[120px]"
               >
-                <option value="all">كل المناديب</option>
+                <option value="all">ظƒظ„ ط§ظ„ظ…ظ†ط§ط¯ظٹط¨</option>
                 {salesReps.map((rep) => (
                   <option key={rep.id} value={rep.id}>
                     {rep.name}
@@ -535,27 +606,37 @@ export default function CollectionStatement() {
                   onChange={(e) => setHideSuedCustomers(e.target.checked)}
                   className="h-3.5 w-3.5 rounded text-red-600 accent-red-600"
                 />
-                إخفاء القضايا
+                ط¥ط®ظپط§ط، ط§ظ„ظ‚ط¶ط§ظٹط§
               </label>
               <button onClick={() => window.print()} className="h-9 px-4 bg-slate-800 text-white rounded-xl hover:bg-slate-900 flex items-center gap-1.5 font-bold text-xs shadow-sm transition-all whitespace-nowrap">
                 <Printer size={14} />
-                طباعة
+                ط·ط¨ط§ط¹ط©
               </button>
             </div>
 
             {dueFromDate > dueToDate && (
               <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                تاريخ البداية يجب أن يكون قبل تاريخ النهاية.
+                طھط§ط±ظٹط® ط§ظ„ط¨ط¯ط§ظٹط© ظٹط¬ط¨ ط£ظ† ظٹظƒظˆظ† ظ‚ط¨ظ„ طھط§ط±ظٹط® ط§ظ„ظ†ظ‡ط§ظٹط©.
               </div>
             )}
 
 {/* Accordion Cards Layout */}
+            {dueLoadError && (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 print:hidden">
+                {dueLoadError}
+              </div>
+            )}
             <div className="space-y-2 print:hidden">
-              {groupedDueRows.length === 0 ? (
+              {isDueLoading ? (
+                <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-500 shadow-sm">
+                  <Clock3 size={36} className="text-sky-400 mx-auto mb-3 animate-pulse" />
+                  <p className="font-bold">Loading due installments...</p>
+                </div>
+              ) : groupedDueRows.length === 0 ? (
                 <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-500 shadow-sm">
                   <div className="flex flex-col items-center justify-center">
                     <CheckCircle2 size={40} className="text-slate-300 mb-3" />
-                    <p className="font-bold">لا توجد أقساط مستحقة حالياً.</p>
+                    <p className="font-bold">Loading due installments...</p>
                   </div>
                 </div>
               ) : (
@@ -585,7 +666,7 @@ export default function CollectionStatement() {
                               </span>
                               {group[0].isSued && (
                                 <span className="text-[10px] text-red-500 font-bold flex items-center gap-0.5 print:text-[8px]">
-                                  <AlertTriangle size={10} /> محال للقضاء يمنع التعامل
+                                  <AlertTriangle size={10} /> ظ…ط­ط§ظ„ ظ„ظ„ظ‚ط¶ط§ط، ظٹظ…ظ†ط¹ ط§ظ„طھط¹ط§ظ…ظ„
                                 </span>
                               )}
                             </div>
@@ -610,11 +691,11 @@ export default function CollectionStatement() {
                         <div className="flex items-center gap-3 print:gap-1.5">
                           <div className="flex items-center gap-1.5 font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl text-xs print:px-1.5 print:text-[9px]">
                             <Clock3 size={14} />
-                            <span>أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
+                            <span>ط£ط®ط± ط³ط¯ط§ط¯: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
                           </div>
                           <div className="flex items-center gap-1.5 bg-red-50 px-3 py-1.5 rounded-xl border border-red-100 text-xs font-bold print:px-1.5 print:text-[9px]">
                             <Wallet size={14} className="text-red-500" />
-                            <span className="text-red-500">المستحق:</span>
+                            <span className="text-red-500">ط§ظ„ظ…ط³طھط­ظ‚:</span>
                             <span className="text-red-700 font-black">{formatCurrency(totalRemaining)}</span>
                           </div>
                           <div className="text-slate-400 hover:text-slate-700 w-8 h-8 rounded-full flex items-center justify-center hover:bg-slate-100 transition-colors print:hidden">
@@ -629,13 +710,13 @@ export default function CollectionStatement() {
                         {group[0].guarantors.some((g) => g && g.name) && (
                           <div className="flex items-center gap-2 text-sm text-slate-500 bg-white p-3.5 rounded-2xl border border-slate-100 shadow-2sm">
                             <Shield size={16} className="text-amber-500 shrink-0" />
-                            <span className="font-bold text-slate-500 print:text-[10px]">الضامنين:</span>
+                            <span className="font-bold text-slate-500 print:text-[10px]">ط§ظ„ط¶ط§ظ…ظ†ظٹظ†:</span>
                             <div className="flex items-center gap-3 flex-wrap">
                               {group[0].guarantors
                                 .filter((g) => g && g.name)
                                 .map((g, idx, arr) => (
                                   <span key={idx} className="text-slate-700 font-semibold print:text-[10px]">
-                                    {g!.name} ({g!.phone}){idx < arr.length - 1 ? '، ' : ''}
+                                    {g!.name} ({g!.phone}){idx < arr.length - 1 ? 'طŒ ' : ''}
                                   </span>
                                 ))}
                             </div>
@@ -647,11 +728,11 @@ export default function CollectionStatement() {
                           <table className="w-full text-right text-sm">
                             <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                               <tr>
-                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">القسط</th>
-                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">تاريخ الاستحقاق</th>
-                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">قيمة القسط</th>
-                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">المتبقي</th>
-                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">الحالة</th>
+                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">ط§ظ„ظ‚ط³ط·</th>
+                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">طھط§ط±ظٹط® ط§ظ„ط§ط³طھط­ظ‚ط§ظ‚</th>
+                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">ظ‚ظٹظ…ط© ط§ظ„ظ‚ط³ط·</th>
+                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">ط§ظ„ظ…طھط¨ظ‚ظٹ</th>
+                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">ط§ظ„ط­ط§ظ„ط©</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -681,11 +762,11 @@ export default function CollectionStatement() {
               <table className="w-full bg-white text-right text-sm">
                 <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                   <tr>
-                    <th className="px-4 py-2 text-right text-xs font-bold">القسط</th>
-                    <th className="px-4 py-2 text-right text-xs font-bold">تاريخ الاستحقاق</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold">قيمة القسط</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold">المتبقي</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold">الحالة</th>
+                    <th className="px-4 py-2 text-right text-xs font-bold">ط§ظ„ظ‚ط³ط·</th>
+                    <th className="px-4 py-2 text-right text-xs font-bold">طھط§ط±ظٹط® ط§ظ„ط§ط³طھط­ظ‚ط§ظ‚</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold">ظ‚ظٹظ…ط© ط§ظ„ظ‚ط³ط·</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold">ط§ظ„ظ…طھط¨ظ‚ظٹ</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold">ط§ظ„ط­ط§ظ„ط©</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -700,21 +781,21 @@ export default function CollectionStatement() {
                                 <span className={`font-black text-sm ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>
                                   {group[0].customerName}
                                 </span>
-                                <span className="text-xs text-slate-700 font-bold">هاتف: {group[0].customerPhone}</span>
-                                <span className="text-xs text-sky-700 font-bold">مندوب: {group[0].salesRepName || '---'}</span>
-                                <span className="text-xs text-slate-600 font-medium">عنوان: {group[0].customerAddress}</span>
+                                <span className="text-xs text-slate-700 font-bold">ظ‡ط§طھظپ: {group[0].customerPhone}</span>
+                                <span className="text-xs text-sky-700 font-bold">ظ…ظ†ط¯ظˆط¨: {group[0].salesRepName || '---'}</span>
+                                <span className="text-xs text-slate-600 font-medium">ط¹ظ†ظˆط§ظ†: {group[0].customerAddress}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className="text-xs text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded">أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
-                                <span className="text-xs text-red-700 font-bold bg-red-50 px-2 py-0.5 rounded">المستحق: {formatCurrency(group.reduce((sum, r) => sum + r.remainingAmount, 0))}</span>
+                                <span className="text-xs text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded">ط£ط®ط± ط³ط¯ط§ط¯: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
+                                <span className="text-xs text-red-700 font-bold bg-red-50 px-2 py-0.5 rounded">ط§ظ„ظ…ط³طھط­ظ‚: {formatCurrency(group.reduce((sum, r) => sum + r.remainingAmount, 0))}</span>
                               </div>
                             </div>
                             {group[0].guarantors.some((g) => g && g.name) && (
                               <div className="text-[11px] text-slate-500 border-t border-dashed border-slate-200 pt-1 mt-1">
-                                <span className="font-bold text-slate-600">الضامنين: </span>
+                                <span className="font-bold text-slate-600">ط§ظ„ط¶ط§ظ…ظ†ظٹظ†: </span>
                                 {group[0].guarantors
                                   .filter((g) => g && g.name)
-                                  .map((g, idx, arr) => `${g!.name} (${g!.phone})${idx < arr.length - 1 ? '، ' : ''}`)}
+                                  .map((g, idx, arr) => `${g!.name} (${g!.phone})${idx < arr.length - 1 ? 'طŒ ' : ''}`)}
                               </div>
                             )}
                           </div>
@@ -733,7 +814,7 @@ export default function CollectionStatement() {
                               row.status === 'partial' ? 'bg-amber-50 text-amber-700' :
                               'bg-red-50 text-red-700'
                             }`}>
-                              {row.status === 'paid' ? 'مدفوع' : row.status === 'partial' ? 'جزئي' : 'غير مدفوع'}
+                              {row.status === 'paid' ? 'ظ…ط¯ظپظˆط¹' : row.status === 'partial' ? 'ط¬ط²ط¦ظٹ' : 'ط؛ظٹط± ظ…ط¯ظپظˆط¹'}
                             </span>
                           </td>
                         </tr>
@@ -749,9 +830,9 @@ export default function CollectionStatement() {
               <div className="flex items-center justify-between border border-slate-200/60 bg-white px-4 py-2.5 rounded-2xl print:hidden">
                 <div>
                   <p className="text-xs text-slate-500 font-bold whitespace-nowrap">
-                    عرض <span className="text-slate-900">{(dueCurrentPage - 1) * ITEMS_PER_PAGE + 1}</span> -{' '}
-                    <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * ITEMS_PER_PAGE)}</span> من{' '}
-                    <span className="text-slate-900">{groupedDueRows.length}</span> عميل
+                    ط¹ط±ط¶ <span className="text-slate-900">{(dueCurrentPage - 1) * ITEMS_PER_PAGE + 1}</span> -{' '}
+                    <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * ITEMS_PER_PAGE)}</span> ظ…ظ†{' '}
+                    <span className="text-slate-900">{groupedDueRows.length}</span> ط¹ظ…ظٹظ„
                   </p>
                 </div>
                 <nav className="inline-flex rounded-xl gap-1" aria-label="Pagination">
@@ -763,7 +844,7 @@ export default function CollectionStatement() {
                     }}
                     className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
                   >
-                    السابق
+                    ط§ظ„ط³ط§ط¨ظ‚
                   </button>
                   {getPaginatedPages().map((page, idx) => {
                     if (page === '...') {
@@ -798,33 +879,33 @@ export default function CollectionStatement() {
                     }}
                     className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
                   >
-                    التالي
+                    ط§ظ„طھط§ظ„ظٹ
                   </button>
                 </nav>
               </div>
             )}
 
             {/* Quick Metrics Footer */}
-            <div className="bg-slate-50 border border-slate-200 px-6 py-5 rounded-2xl flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-6 flex-wrap">
+            <div className="fixed bottom-2 left-4 right-4 z-40 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/95 px-4 py-2.5 shadow-lg backdrop-blur lg:right-[17rem] print:hidden">
+              <div className="flex items-center gap-4 flex-wrap">
                 <div className="flex items-center gap-2">
-                  <span className="text-2xl font-black text-slate-900">{dueRows.length}</span>
-                  <span className="text-sm font-bold text-slate-500">أقساط مستحقة</span>
+                  <span className="text-xl font-black text-slate-900">{dueRows.length}</span>
+                  <span className="text-xs font-bold text-slate-500">ط£ظ‚ط³ط§ط· ظ…ط³طھط­ظ‚ط©</span>
                 </div>
-                <div className="w-px h-6 bg-slate-200 hidden sm:block"></div>
+                <div className="w-px h-5 bg-slate-200 hidden sm:block"></div>
                 <div className="flex items-center gap-2">
-                  <span className="text-2xl font-black text-slate-900">{groupedDueRows.length}</span>
-                  <span className="text-sm font-bold text-slate-500">عملاء مستحقين</span>
+                  <span className="text-xl font-black text-slate-900">{groupedDueRows.length}</span>
+                  <span className="text-xs font-bold text-slate-500">ط¹ظ…ظ„ط§ط، ظ…ط³طھط­ظ‚ظٹظ†</span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-4 bg-white px-5 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-1.5 shadow-sm">
                 <div className="text-left">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">إجمالي مبالغ الأقساط</div>
-                  <div className="text-xl font-black text-red-600">{formatCurrency(dueTotalInPeriod)}</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">ط¥ط¬ظ…ط§ظ„ظٹ ظ…ط¨ط§ظ„ط؛ ط§ظ„ط£ظ‚ط³ط§ط·</div>
+                  <div className="text-lg font-black text-red-600">{formatCurrency(dueTotalInPeriod)}</div>
                 </div>
-                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
-                  <Wallet size={20} />
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-50 text-red-500">
+                  <Wallet size={17} />
                 </div>
               </div>
             </div>
@@ -850,7 +931,7 @@ export default function CollectionStatement() {
                   onFocus={() => setShowSuggestions(true)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                   className="input-ui pr-10 h-10 text-sm w-full"
-                  placeholder="ابحث عن العميل بالاسم أو رقم الفاتورة..."
+                  placeholder="ط§ط¨ط­ط« ط¹ظ† ط§ظ„ط¹ظ…ظٹظ„ ط¨ط§ظ„ط§ط³ظ… ط£ظˆ ط±ظ‚ظ… ط§ظ„ظپط§طھظˆط±ط©..."
                 />
                 {showSuggestions && suggestions.length > 0 && (
                   <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
@@ -880,7 +961,7 @@ export default function CollectionStatement() {
                     onChange={(e) => setHideSuedCustomers(e.target.checked)}
                     className="h-4 w-4 rounded text-red-600 accent-red-600 cursor-pointer"
                   />
-                  <span className="text-sm font-bold whitespace-nowrap">إخفاء القضايا</span>
+                  <span className="text-sm font-bold whitespace-nowrap">ط¥ط®ظپط§ط، ط§ظ„ظ‚ط¶ط§ظٹط§</span>
                 </label>
 
                 <label className="flex items-center gap-2 cursor-pointer bg-sky-50/50 hover:bg-sky-50 text-sky-800 px-4 py-2 rounded-xl border border-sky-100/60 transition-all select-none shadow-sm">
@@ -890,7 +971,7 @@ export default function CollectionStatement() {
                     onChange={(e) => setShowOnlyDue(e.target.checked)}
                     className="h-4 w-4 rounded text-sky-600 accent-sky-600 cursor-pointer"
                   />
-                  <span className="text-sm font-bold whitespace-nowrap">إظهار المتبقي فقط</span>
+                  <span className="text-sm font-bold whitespace-nowrap">ط¥ط¸ظ‡ط§ط± ط§ظ„ظ…طھط¨ظ‚ظٹ ظپظ‚ط·</span>
                 </label>
               </div>
             </div>
@@ -902,18 +983,18 @@ export default function CollectionStatement() {
                   <div className="w-16 h-16 rounded-2xl bg-sky-50 flex items-center justify-center mx-auto mb-5">
                     <Search size={32} className="text-sky-400" />
                   </div>
-                  <h3 className="text-lg font-bold text-slate-800 mb-2">ابحث عن عميل لعرض فواتيره</h3>
-                  <p className="text-slate-500 text-sm max-w-md mx-auto">اكتب اسم العميل أو رقم الفاتورة في خانة البحث بالأعلى، أو اختر عميل من القائمة لعرض كشف حسابه وحالة أقساطه.</p>
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">ط§ط¨ط­ط« ط¹ظ† ط¹ظ…ظٹظ„ ظ„ط¹ط±ط¶ ظپظˆط§طھظٹط±ظ‡</h3>
+                  <p className="text-slate-500 text-sm max-w-md mx-auto">ط§ظƒطھط¨ ط§ط³ظ… ط§ظ„ط¹ظ…ظٹظ„ ط£ظˆ ط±ظ‚ظ… ط§ظ„ظپط§طھظˆط±ط© ظپظٹ ط®ط§ظ†ط© ط§ظ„ط¨ط­ط« ط¨ط§ظ„ط£ط¹ظ„ظ‰طŒ ط£ظˆ ط§ط®طھط± ط¹ظ…ظٹظ„ ظ…ظ† ط§ظ„ظ‚ط§ط¦ظ…ط© ظ„ط¹ط±ط¶ ظƒط´ظپ ط­ط³ط§ط¨ظ‡ ظˆط­ط§ظ„ط© ط£ظ‚ط³ط§ط·ظ‡.</p>
                 </div>
               ) : isInvoiceLoading ? (
                 <div className="rounded-2xl border border-slate-200 bg-white p-16 text-center shadow-sm">
                   <Clock3 size={40} className="text-sky-400 mx-auto mb-4 animate-pulse" />
-                  <p className="text-slate-500 font-medium">جاري تحميل فواتير العميل...</p>
+                  <p className="text-slate-500 font-medium">ط¬ط§ط±ظٹ طھط­ظ…ظٹظ„ ظپظˆط§طھظٹط± ط§ظ„ط¹ظ…ظٹظ„...</p>
                 </div>
               ) : filteredRows.length === 0 ? (
                 <div className="rounded-2xl border border-slate-200 bg-white p-16 text-center shadow-sm">
                   <Search size={40} className="text-slate-300 mx-auto mb-4" />
-                  <p className="text-slate-500 font-medium">لا توجد نتائج مطابقة للبحث الحالي.</p>
+                  <p className="text-slate-500 font-medium">ظ„ط§ طھظˆط¬ط¯ ظ†طھط§ط¦ط¬ ظ…ط·ط§ط¨ظ‚ط© ظ„ظ„ط¨ط­ط« ط§ظ„ط­ط§ظ„ظٹ.</p>
                 </div>
               ) : filteredRows.map((row) => {
                   // Calculate installment metrics
@@ -934,7 +1015,7 @@ export default function CollectionStatement() {
                           <div>
                             <div className="flex flex-col">
                               <h3 className={`font-bold text-2xl ${row.isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>{row.customerName}</h3>
-                              {row.isSued && <span className="text-xs text-red-500 font-bold flex items-center gap-1"><AlertTriangle size={12} /> محال للقضاء يمنع التعامل</span>}
+                              {row.isSued && <span className="text-xs text-red-500 font-bold flex items-center gap-1"><AlertTriangle size={12} /> ظ…ط­ط§ظ„ ظ„ظ„ظ‚ط¶ط§ط، ظٹظ…ظ†ط¹ ط§ظ„طھط¹ط§ظ…ظ„</span>}
                             </div>
                             <div className="flex items-center gap-2 text-sm text-slate-500 mt-0.5">
                               <span>{row.customerPhone}</span>
@@ -944,9 +1025,9 @@ export default function CollectionStatement() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2 text-xs pt-1">
-                          <Badge>فاتورة: {row.invoiceNumber}</Badge>
-                          <Badge>تاريخ: {formatDateDisplay(row.saleDate)}</Badge>
-                          <Badge>{row.paymentMethod === 'installment' ? 'دفع بالتقسيط' : 'غير مقسط'}</Badge>
+                          <Badge>ظپط§طھظˆط±ط©: {row.invoiceNumber}</Badge>
+                          <Badge>طھط§ط±ظٹط®: {formatDateDisplay(row.saleDate)}</Badge>
+                          <Badge>{row.paymentMethod === 'installment' ? 'ط¯ظپط¹ ط¨ط§ظ„طھظ‚ط³ظٹط·' : 'ط؛ظٹط± ظ…ظ‚ط³ط·'}</Badge>
                         </div>
                       </div>
 
@@ -955,13 +1036,13 @@ export default function CollectionStatement() {
                           onClick={() => handlePrint(row)}
                           className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-base font-bold text-slate-700 hover:bg-slate-200 transition-colors"
                         >
-                          <Printer size={16} /> طباعة الكشف
+                          <Printer size={16} /> ط·ط¨ط§ط¹ط© ط§ظ„ظƒط´ظپ
                         </button>
                         <div className="grid gap-2 sm:grid-cols-3 min-w-[320px]">
-                          <SmallStat label="الإجمالي" value={formatCurrency(row.total)} />
-                          <SmallStat label="المدفوع" value={formatCurrency(row.paid)} tone="green" />
+                          <SmallStat label="ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ" value={formatCurrency(row.total)} />
+                          <SmallStat label="ط§ظ„ظ…ط¯ظپظˆط¹" value={formatCurrency(row.paid)} tone="green" />
                           <SmallStat
-                            label="المتبقي"
+                            label="ط§ظ„ظ…طھط¨ظ‚ظٹ"
                             value={formatCurrency(row.remaining)}
                             tone={row.remaining > 0 ? 'red' : 'green'}
                           />
@@ -979,8 +1060,8 @@ export default function CollectionStatement() {
                                 {paidInstallments}
                               </div>
                               <div>
-                                <p className="text-[10px] text-slate-400 font-bold">الأقساط المدفوعة</p>
-                                <p className="text-xs font-semibold text-slate-700">{paidInstallments} من {totalInstallments}</p>
+                                <p className="text-[10px] text-slate-400 font-bold">ط§ظ„ط£ظ‚ط³ط§ط· ط§ظ„ظ…ط¯ظپظˆط¹ط©</p>
+                                <p className="text-xs font-semibold text-slate-700">{paidInstallments} ظ…ظ† {totalInstallments}</p>
                               </div>
                             </div>
 
@@ -990,8 +1071,8 @@ export default function CollectionStatement() {
                                   {partialInstallments}
                                 </div>
                                 <div>
-                                  <p className="text-[10px] text-slate-400 font-bold">أقساط مدفوعة جزئياً</p>
-                                  <p className="text-xs font-semibold text-slate-700">{partialInstallments} قسط</p>
+                                  <p className="text-[10px] text-slate-400 font-bold">ط£ظ‚ط³ط§ط· ظ…ط¯ظپظˆط¹ط© ط¬ط²ط¦ظٹط§ظ‹</p>
+                                  <p className="text-xs font-semibold text-slate-700">{partialInstallments} ظ‚ط³ط·</p>
                                 </div>
                               </div>
                             )}
@@ -1001,15 +1082,15 @@ export default function CollectionStatement() {
                                 {unpaidInstallments}
                               </div>
                               <div>
-                                <p className="text-[10px] text-slate-400 font-bold">الأقساط المتبقية</p>
-                                <p className="text-xs font-semibold text-slate-700">{unpaidInstallments} قسط غير مدفوع</p>
+                                <p className="text-[10px] text-slate-400 font-bold">ط§ظ„ط£ظ‚ط³ط§ط· ط§ظ„ظ…طھط¨ظ‚ظٹط©</p>
+                                <p className="text-xs font-semibold text-slate-700">{unpaidInstallments} ظ‚ط³ط· ط؛ظٹط± ظ…ط¯ظپظˆط¹</p>
                               </div>
                             </div>
                           </div>
 
                           <div className="flex-1 min-w-[200px] bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
                             <div className="flex justify-between items-center mb-1.5 text-xs">
-                              <span className="text-slate-500 font-bold">نسبة التحصيل من الأقساط</span>
+                              <span className="text-slate-500 font-bold">ظ†ط³ط¨ط© ط§ظ„طھط­طµظٹظ„ ظ…ظ† ط§ظ„ط£ظ‚ط³ط§ط·</span>
                               <span className="text-emerald-600 font-black">{paymentProgress.toFixed(1)}%</span>
                             </div>
                             <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
@@ -1029,21 +1110,21 @@ export default function CollectionStatement() {
                           <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-200/60 pb-3">
                             <div>
                               <p className="font-bold text-slate-800">{schedule.label}</p>
-                              <p className="text-xs text-slate-500 mt-1">استحقاق: <span className="font-medium text-slate-700">{formatDateDisplay(schedule.dueDate)}</span></p>
+                              <p className="text-xs text-slate-500 mt-1">ط§ط³طھط­ظ‚ط§ظ‚: <span className="font-medium text-slate-700">{formatDateDisplay(schedule.dueDate)}</span></p>
                             </div>
                             <MonthBadge status={schedule.status} />
                           </div>
 
                           <div className="grid gap-2.5 text-sm">
-                            <MonthRow icon={<Wallet size={15} />} label="قيمة الشهر" value={formatCurrency(schedule.amount)} />
-                            <MonthRow icon={<CheckCircle2 size={15} />} label="المدفوع" value={formatCurrency(schedule.paidAmount)} />
+                            <MonthRow icon={<Wallet size={15} />} label="ظ‚ظٹظ…ط© ط§ظ„ط´ظ‡ط±" value={formatCurrency(schedule.amount)} />
+                            <MonthRow icon={<CheckCircle2 size={15} />} label="ط§ظ„ظ…ط¯ظپظˆط¹" value={formatCurrency(schedule.paidAmount)} />
                             <MonthRow
                               icon={<Clock3 size={15} />}
-                              label="المتبقي"
+                              label="ط§ظ„ظ…طھط¨ظ‚ظٹ"
                               value={formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                               highlightValue={Math.max(schedule.amount - schedule.paidAmount, 0) > 0}
                             />
-                            <MonthRow icon={<CalendarRange size={15} />} label="تاريخ السداد" value={formatDateDisplay(schedule.paidAt)} />
+                            <MonthRow icon={<CalendarRange size={15} />} label="طھط§ط±ظٹط® ط§ظ„ط³ط¯ط§ط¯" value={formatDateDisplay(schedule.paidAt)} />
                           </div>
                         </div>
                       ))}
@@ -1060,12 +1141,12 @@ export default function CollectionStatement() {
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-center justify-between print:hidden">
               <div>
-                <h3 className="text-red-800 font-bold text-lg flex items-center gap-2"><Gavel size={20} /> سجل القضايا والنزاعات القانونية</h3>
-                <p className="text-red-600 text-sm mt-1">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
+                <h3 className="text-red-800 font-bold text-lg flex items-center gap-2"><Gavel size={20} /> ط³ط¬ظ„ ط§ظ„ظ‚ط¶ط§ظٹط§ ظˆط§ظ„ظ†ط²ط§ط¹ط§طھ ط§ظ„ظ‚ط§ظ†ظˆظ†ظٹط©</h3>
+                <p className="text-red-600 text-sm mt-1">ظ‡ط°ظ‡ ط§ظ„ظ‚ط§ط¦ظ…ط© ظ…ط®طµطµط© ظ„ظ„ظ…طھط§ط¨ط¹ط© ط§ظ„ظ‚ط§ظ†ظˆظ†ظٹط© ظˆظ„ظ„ظ…ط­ط§ظ…ظٹطŒ ظˆطھط¹ط±ط¶ ط¬ظ…ظٹط¹ ط§ظ„ط¹ظ…ظ„ط§ط، ط§ظ„ط°ظٹظ† طھظ… ط¥ط­ط§ظ„طھظ‡ظ… ظ„ظ„ظ‚ط¶ط§ط،.</p>
               </div>
               <button onClick={() => window.print()} className="h-10 px-6 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
                 <Printer size={16} />
-                طباعة كشف المحامي
+                ط·ط¨ط§ط¹ط© ظƒط´ظپ ط§ظ„ظ…ط­ط§ظ…ظٹ
               </button>
             </div>
 
@@ -1074,12 +1155,12 @@ export default function CollectionStatement() {
                 <table className="w-full bg-white">
                   <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                     <tr>
-                      <th className="px-4 py-4 text-right text-base font-bold">اسم العميل</th>
-                      <th className="px-4 py-4 text-right text-base font-bold">رقم الهاتف</th>
-                      <th className="px-4 py-4 text-right text-base font-bold">العنوان</th>
-                      <th className="px-4 py-4 text-right text-base font-bold text-center">الفواتير</th>
-                      <th className="px-4 py-4 text-right text-base font-bold text-center">تاريخ الإحالة</th>
-                      <th className="px-4 py-4 text-right text-base font-bold text-center">المديونية</th>
+                      <th className="px-4 py-4 text-right text-base font-bold">ط§ط³ظ… ط§ظ„ط¹ظ…ظٹظ„</th>
+                      <th className="px-4 py-4 text-right text-base font-bold">ط±ظ‚ظ… ط§ظ„ظ‡ط§طھظپ</th>
+                      <th className="px-4 py-4 text-right text-base font-bold">ط§ظ„ط¹ظ†ظˆط§ظ†</th>
+                      <th className="px-4 py-4 text-right text-base font-bold text-center">ط§ظ„ظپظˆط§طھظٹط±</th>
+                      <th className="px-4 py-4 text-right text-base font-bold text-center">طھط§ط±ظٹط® ط§ظ„ط¥ط­ط§ظ„ط©</th>
+                      <th className="px-4 py-4 text-right text-base font-bold text-center">ط§ظ„ظ…ط¯ظٹظˆظ†ظٹط©</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1088,7 +1169,7 @@ export default function CollectionStatement() {
                         <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
                           <div className="flex flex-col items-center justify-center">
                             <CheckCircle2 size={40} className="text-slate-300 mb-3" />
-                            <p>لا يوجد أي عملاء في الشئون القانونية حالياً.</p>
+                            <p>ظ„ط§ ظٹظˆط¬ط¯ ط£ظٹ ط¹ظ…ظ„ط§ط، ظپظٹ ط§ظ„ط´ط¦ظˆظ† ط§ظ„ظ‚ط§ظ†ظˆظ†ظٹط© ط­ط§ظ„ظٹط§ظ‹.</p>
                           </div>
                         </td>
                       </tr>
@@ -1127,10 +1208,10 @@ export default function CollectionStatement() {
               {suedCustomersList.length > 0 && (
                 <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">
                   <div className="font-bold text-slate-600">
-                    إجمالي عملاء الشئون القانونية: <span className="text-slate-900 mx-1">{suedCustomersList.length}</span>
+                    ط¥ط¬ظ…ط§ظ„ظٹ ط¹ظ…ظ„ط§ط، ط§ظ„ط´ط¦ظˆظ† ط§ظ„ظ‚ط§ظ†ظˆظ†ظٹط©: <span className="text-slate-900 mx-1">{suedCustomersList.length}</span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-slate-500">إجمالي الديون المعلقة بالنزاعات:</span>
+                    <span className="text-sm font-bold text-slate-500">ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ط¯ظٹظˆظ† ط§ظ„ظ…ط¹ظ„ظ‚ط© ط¨ط§ظ„ظ†ط²ط§ط¹ط§طھ:</span>
                     <span className="text-xl font-black text-red-700">{formatCurrency(suedCustomersList.reduce((s, c) => s + c.totalDebt, 0))}</span>
                   </div>
                 </div>
@@ -1192,9 +1273,9 @@ function Badge({ children }: { children: React.ReactNode }) {
 
 function MonthBadge({ status }: { status: InstallmentSchedule['status'] }) {
   const labels = {
-    paid: 'مدفوع',
-    partial: 'جزئي',
-    unpaid: 'غير مدفوع',
+    paid: 'ظ…ط¯ظپظˆط¹',
+    partial: 'ط¬ط²ط¦ظٹ',
+    unpaid: 'ط؛ظٹط± ظ…ط¯ظپظˆط¹',
   };
 
   const styles = {
@@ -1264,11 +1345,11 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
             <p className="text-slate-600 font-bold text-sm">{settings.companyPhone}</p>
           </div>
           <div className="text-left">
-            <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">كشف حساب عميل</h2>
-            <p className="text-slate-600 font-bold text-sm">تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
-            <p className="text-slate-600 font-bold text-sm">رقم الفاتورة: {invoice.invoiceNumber}</p>
+            <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">ظƒط´ظپ ط­ط³ط§ط¨ ط¹ظ…ظٹظ„</h2>
+            <p className="text-slate-600 font-bold text-sm">طھط§ط±ظٹط® ط§ظ„ط·ط¨ط§ط¹ط©: {formatDateDisplay(new Date())}</p>
+            <p className="text-slate-600 font-bold text-sm">ط±ظ‚ظ… ط§ظ„ظپط§طھظˆط±ط©: {invoice.invoiceNumber}</p>
             {invoice.salesRepName && (
-              <p className="text-sky-700 font-bold text-sm">المندوب: {invoice.salesRepName}</p>
+              <p className="text-sky-700 font-bold text-sm">ط§ظ„ظ…ظ†ط¯ظˆط¨: {invoice.salesRepName}</p>
             )}
           </div>
         </div>
@@ -1276,11 +1357,11 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
         {/* Customer Info */}
         <div className="flex flex-col gap-2 mb-4">
           <div className="border border-slate-300 p-3 rounded-lg bg-slate-50">
-            <h3 className="font-bold text-base mb-2 text-slate-800 border-b border-slate-200 pb-1">بيانات العميل</h3>
+            <h3 className="font-bold text-base mb-2 text-slate-800 border-b border-slate-200 pb-1">ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¹ظ…ظٹظ„</h3>
             <div className="grid grid-cols-2 gap-2 text-sm">
-              <p><span className="font-semibold text-slate-600 w-20 inline-block">اسم العميل:</span> {invoice.customerName}</p>
-              <p><span className="font-semibold text-slate-600 w-20 inline-block">رقم الموبايل:</span> {invoice.customerPhone}</p>
-              <p className="col-span-2"><span className="font-semibold text-slate-600 w-20 inline-block">العنوان:</span> {invoice.customerAddress}</p>
+              <p><span className="font-semibold text-slate-600 w-20 inline-block">ط§ط³ظ… ط§ظ„ط¹ظ…ظٹظ„:</span> {invoice.customerName}</p>
+              <p><span className="font-semibold text-slate-600 w-20 inline-block">ط±ظ‚ظ… ط§ظ„ظ…ظˆط¨ط§ظٹظ„:</span> {invoice.customerPhone}</p>
+              <p className="col-span-2"><span className="font-semibold text-slate-600 w-20 inline-block">ط§ظ„ط¹ظ†ظˆط§ظ†:</span> {invoice.customerAddress}</p>
             </div>
           </div>
         </div>
@@ -1288,38 +1369,38 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
         {/* Financial Summary */}
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div className="border-2 border-slate-800 p-2 text-center rounded-lg">
-            <p className="text-slate-600 font-bold mb-1 text-sm">إجمالي الفاتورة</p>
+            <p className="text-slate-600 font-bold mb-1 text-sm">ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ظپط§طھظˆط±ط©</p>
             <p className="text-xl font-black">{formatCurrency(invoice.total)}</p>
           </div>
           <div className="border-2 border-emerald-600 p-2 text-center rounded-lg bg-emerald-50">
-            <p className="text-emerald-700 font-bold mb-1 text-sm">إجمالي المدفوع</p>
+            <p className="text-emerald-700 font-bold mb-1 text-sm">ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ظ…ط¯ظپظˆط¹</p>
             <p className="text-xl font-black text-emerald-800">{formatCurrency(invoice.paid)}</p>
           </div>
           <div className="border-2 border-red-600 p-2 text-center rounded-lg bg-red-50">
-            <p className="text-red-700 font-bold mb-1 text-sm">إجمالي المتبقي</p>
+            <p className="text-red-700 font-bold mb-1 text-sm">ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ظ…طھط¨ظ‚ظٹ</p>
             <p className="text-xl font-black text-red-800">{formatCurrency(invoice.remaining)}</p>
           </div>
         </div>
 
         {/* Installments Table */}
         <div className="mb-4">
-          <h3 className="font-bold text-lg mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">سجل الأقساط والدفعات</h3>
+          <h3 className="font-bold text-lg mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">ط³ط¬ظ„ ط§ظ„ط£ظ‚ط³ط§ط· ظˆط§ظ„ط¯ظپط¹ط§طھ</h3>
           <table className="w-full text-right border-collapse border border-slate-300 text-sm">
             <thead>
               <tr className="bg-slate-200">
-                <th className="border border-slate-300 px-1 py-1 font-bold">البيان</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold">الاستحقاق</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold">تاريخ الدفع</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">المبلغ</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">المدفوع</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">المتبقي</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">الحالة</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold">ط§ظ„ط¨ظٹط§ظ†</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold">ط§ظ„ط§ط³طھط­ظ‚ط§ظ‚</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold">طھط§ط±ظٹط® ط§ظ„ط¯ظپط¹</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold text-center">ط§ظ„ظ…ط¨ظ„ط؛</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold text-center">ط§ظ„ظ…ط¯ظپظˆط¹</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold text-center">ط§ظ„ظ…طھط¨ظ‚ظٹ</th>
+                <th className="border border-slate-300 px-1 py-1 font-bold text-center">ط§ظ„ط­ط§ظ„ط©</th>
               </tr>
             </thead>
             <tbody>
               {invoice.schedules.map((schedule) => {
                 const remaining = Math.max(schedule.amount - schedule.paidAmount, 0);
-                const statusLabel = schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partial' ? 'جزئي' : 'غير مدفوع';
+                const statusLabel = schedule.status === 'paid' ? 'ظ…ط¯ظپظˆط¹' : schedule.status === 'partial' ? 'ط¬ط²ط¦ظٹ' : 'ط؛ظٹط± ظ…ط¯ظپظˆط¹';
                 return (
                   <tr key={schedule.id} className="even:bg-slate-50">
                     <td className="border border-slate-300 px-1 py-1 font-semibold text-xs">{schedule.label}</td>
@@ -1340,11 +1421,20 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
         {/* Footer */}
         <div className="mt-6 text-center text-xs text-slate-500 border-t border-slate-300 pt-2 pb-2">
           {settings.invoiceFooter && <p className="mb-1 font-bold">{settings.invoiceFooter}</p>}
-          <p>تم استخراج هذا الكشف من نظام {settings.companyName} للتقسيط</p>
+          <p>طھظ… ط§ط³طھط®ط±ط§ط¬ ظ‡ط°ط§ ط§ظ„ظƒط´ظپ ظ…ظ† ظ†ط¸ط§ظ… {settings.companyName} ظ„ظ„طھظ‚ط³ظٹط·</p>
         </div>
       </div>
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
 
 

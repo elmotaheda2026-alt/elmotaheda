@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
@@ -166,6 +166,26 @@ type ScheduleRow = {
   status: string;
   paid_at?: string | null;
 };
+type DueCollectionRow = {
+  sale_id: string;
+  invoice_number: string;
+  customer_id: string;
+  customer_name: string;
+  customer_phone?: string | null;
+  customer_address?: string | null;
+  sales_rep_id?: string | null;
+  sales_rep_name?: string | null;
+  is_sued?: number | boolean | null;
+  guarantors?: string | null;
+  installment_id: string;
+  month_index: number;
+  due_date: string;
+  amount: number;
+  paid_amount: number;
+  status: string;
+  paid_at?: string | null;
+  last_payment_date?: string | null;
+};
 
 function mapSaleItems(items: SaleItemRow[]) {
   return items.map((item) => ({
@@ -185,7 +205,7 @@ function mapSchedules(schedules: ScheduleRow[]) {
   return schedules.map((sch) => ({
     id: sch.id,
     monthIndex: Number(sch.month_index),
-    label: `القسط ${sch.month_index}`,
+    label: `ط§ظ„ظ‚ط³ط· ${sch.month_index}`,
     dueDate: formatDate(sch.due_date),
     amount: Number(sch.amount),
     paidAmount: Number(sch.paid_amount),
@@ -357,6 +377,101 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
   }
 });
 
+router.get('/collection-due', requirePermission('sales:read'), async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
+    const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const salesRepId = typeof req.query.salesRepId === 'string' ? req.query.salesRepId.trim() : '';
+    const hideSued = String(req.query.hideSued) === 'true';
+
+    if (!from || !to || from > to) {
+      return res.status(400).json({ message: 'Valid from/to date range is required' });
+    }
+
+    const whereParts = [
+      "s.status <> 'cancelled'",
+      "sch.status <> 'paid'",
+      'sch.due_date >= ?',
+      'sch.due_date <= ?',
+    ];
+    const args: any[] = [from, to];
+
+    if (search) {
+      whereParts.push('(s.customer_name LIKE ? OR s.invoice_number LIKE ? OR c.phone LIKE ? OR c.address LIKE ?)');
+      args.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    if (salesRepId && salesRepId !== 'all') {
+      whereParts.push('s.sales_rep_id = ?');
+      args.push(salesRepId);
+    }
+
+    if (hideSued) {
+      whereParts.push('ISNULL(c.is_sued, 0) = 0');
+    }
+
+    const rows = await db.all<DueCollectionRow>(
+      `
+      SELECT
+        s.id AS sale_id,
+        s.invoice_number,
+        s.customer_id,
+        s.customer_name,
+        c.phone AS customer_phone,
+        c.address AS customer_address,
+        s.sales_rep_id,
+        s.sales_rep_name,
+        c.is_sued,
+        c.guarantors,
+        sch.id AS installment_id,
+        sch.month_index,
+        sch.due_date,
+        sch.amount,
+        sch.paid_amount,
+        sch.status,
+        sch.paid_at,
+        last_payment.last_payment_date
+      FROM installment_schedules sch
+      INNER JOIN sales s ON s.id = sch.sale_id
+      LEFT JOIN customers c ON c.id = s.customer_id
+      LEFT JOIN (
+        SELECT sale_id, MAX(date) AS last_payment_date
+        FROM payments
+        WHERE status = 'posted'
+        GROUP BY sale_id
+      ) last_payment ON last_payment.sale_id = s.id
+      WHERE ${whereParts.join(' AND ')}
+      ORDER BY sch.due_date ASC, s.customer_name ASC, sch.month_index ASC
+      `,
+      ...args,
+    );
+
+    return res.json(rows.map((row) => ({
+      saleId: row.sale_id,
+      invoiceNumber: row.invoice_number,
+      customerId: row.customer_id,
+      customerName: row.customer_name,
+      customerPhone: row.customer_phone || '-',
+      customerAddress: row.customer_address || '-',
+      installmentId: row.installment_id,
+      installmentLabel: `#${row.month_index}`,
+      dueDate: formatDate(row.due_date),
+      installmentAmount: Number(row.amount),
+      remainingAmount: Math.max(Number(row.amount) - Number(row.paid_amount), 0),
+      status: row.status,
+      paidAt: row.paid_at || undefined,
+      guarantors: row.guarantors ? JSON.parse(row.guarantors) : [null, null, null],
+      salesRepId: row.sales_rep_id || undefined,
+      salesRepName: row.sales_rep_name || undefined,
+      isSued: row.is_sued === 1 || row.is_sued === true,
+      lastPaymentDate: row.last_payment_date || undefined,
+    })));
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
 router.get('/:id', requirePermission('sales:read'), async (req, res) => {
   try {
     const sale = await getMappedSale(req.params.id);
@@ -725,3 +840,7 @@ router.delete('/:id', requirePermission('sales:write'), async (req: AuthedReques
 });
 
 export default router;
+
+
+
+

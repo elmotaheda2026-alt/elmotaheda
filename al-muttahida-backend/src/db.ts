@@ -1,4 +1,4 @@
-import sql from 'mssql';
+ï»¿import sql from 'mssql';
 import { config } from './config.js';
 
 /**
@@ -40,7 +40,7 @@ export const dbPromise = (async () => {
       const result = await request.query(preparedQuery);
       return result.recordset[0] as T | undefined;
     },
-    /** Execute a nonâ€‘select statement (INSERT/UPDATE/DELETE). */
+    /** Execute a nonÃ¢â‚¬â€˜select statement (INSERT/UPDATE/DELETE). */
     async run(query: string, ...params: any[]) {
       const { request, preparedQuery } = prepareRequest(query, params);
       const result = await request.query(preparedQuery);
@@ -351,7 +351,7 @@ export async function initDb(): Promise<void> {
     company_phone NVARCHAR(50) NOT NULL,
     company_email NVARCHAR(255) NOT NULL,
     tax_rate DECIMAL(18,2) NOT NULL DEFAULT 0,
-    currency NVARCHAR(50) NOT NULL DEFAULT N'Ø¬Ù†ÙŠÙ‡',
+    currency NVARCHAR(50) NOT NULL DEFAULT N'Ø·Â¬Ø¸â€ Ø¸Ù¹Ø¸â€¡',
     invoice_prefix NVARCHAR(50) NOT NULL DEFAULT 'INV',
     invoice_footer NVARCHAR(1000)
   );
@@ -475,6 +475,39 @@ export async function initDb(): Promise<void> {
   );
   `);
 
+
+  // Performance indexes for collection statement and common lookups.
+  try {
+    await db.run(`
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_installment_schedules_due_status_sale' AND object_id = OBJECT_ID('installment_schedules'))
+        CREATE NONCLUSTERED INDEX IX_installment_schedules_due_status_sale
+        ON installment_schedules (due_date, status, sale_id)
+        INCLUDE (month_index, amount, paid_amount, paid_at);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sales_collection_filters' AND object_id = OBJECT_ID('sales'))
+        CREATE NONCLUSTERED INDEX IX_sales_collection_filters
+        ON sales (status, sales_rep_id, customer_id, created_at)
+        INCLUDE (invoice_number, customer_name, total, paid, remaining, date, payment_method, sales_rep_name);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sales_invoice_customer_name' AND object_id = OBJECT_ID('sales'))
+        CREATE NONCLUSTERED INDEX IX_sales_invoice_customer_name
+        ON sales (invoice_number, customer_id, sales_rep_id)
+        INCLUDE (customer_name, status, created_at);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_payments_sale_status_date' AND object_id = OBJECT_ID('payments'))
+        CREATE NONCLUSTERED INDEX IX_payments_sale_status_date
+        ON payments (sale_id, status, date DESC);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_customers_sued_id' AND object_id = OBJECT_ID('customers'))
+        CREATE NONCLUSTERED INDEX IX_customers_sued_id
+        ON customers (is_sued, id)
+        INCLUDE (phone, address);
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error creating performance indexes:', err);
+  }
+
   // Ensure the default admin account exists on every start.
   try {
     const admin = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
@@ -486,7 +519,7 @@ export async function initDb(): Promise<void> {
         `UPDATE users
          SET name = ?, password_hash = ?, role = ?, is_active = 1
          WHERE username = ?`,
-        'ãÏíÑ ÇáäÙÇã',
+        'Ù…Ø¯ÙŠØ± Ø§Ù„Ù†Ø¸Ø§Ù…',
         hashed,
         'admin',
         'admin',
@@ -499,7 +532,7 @@ export async function initDb(): Promise<void> {
         `INSERT INTO users (id, name, username, password_hash, role, is_active, created_at)
          VALUES (?, ?, ?, ?, ?, 1, ?)`,
         id,
-        'ãÏíÑ ÇáäÙÇã',
+        'Ù…Ø¯ÙŠØ± Ø§Ù„Ù†Ø¸Ø§Ù…',
         'admin',
         hashed,
         'admin',
@@ -513,6 +546,8 @@ export async function initDb(): Promise<void> {
     console.error('Error auto-seeding default admin:', err);
   }
 }
+
+
 
 
 

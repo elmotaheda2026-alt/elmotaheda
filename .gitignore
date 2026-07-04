@@ -414,3 +414,6 @@ vite.err
 
 # TypeScript cache
 *.tsbuildinfo
+al-muttahida-saas/release/
+al-muttahida-saas/release-nomenu/
+

@@ -1,4 +1,4 @@
-const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+﻿const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
 const API_USER_KEY = 'api_user';
 const FORCE_LOCAL_RESTORE_KEY = 'almuttahida_force_local_restore';
@@ -70,6 +70,13 @@ export const api = {
     if (filters.customerId) params.set('customerId', filters.customerId);
     if (filters.search) params.set('search', filters.search);
     return request<any[]>(`/sales?${params.toString()}`);
+  },
+  listCollectionDue: (filters: { from: string; to: string; search?: string; salesRepId?: string; hideSued?: boolean }, options: RequestInit = {}) => {
+    const params = new URLSearchParams({ from: filters.from, to: filters.to });
+    if (filters.search) params.set('search', filters.search);
+    if (filters.salesRepId && filters.salesRepId !== 'all') params.set('salesRepId', filters.salesRepId);
+    if (filters.hideSued) params.set('hideSued', 'true');
+    return request<any[]>(`/sales/collection-due?${params.toString()}`);
   },
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),
   updateSale: (id: string, payload: any) =>
@@ -150,4 +157,6 @@ export const api = {
   closePeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string; notes?: string }) =>
     request<{ message: string }>('/closing/close', { method: 'POST', body: JSON.stringify(payload) }),
 };
+
+
 
