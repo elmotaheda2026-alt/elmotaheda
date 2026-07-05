@@ -494,9 +494,35 @@ export async function initDb(): Promise<void> {
         ON sales (invoice_number, customer_id, sales_rep_id)
         INCLUDE (customer_name, status, created_at);
 
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sales_created_at_lookup' AND object_id = OBJECT_ID('sales'))
+        CREATE NONCLUSTERED INDEX IX_sales_created_at_lookup
+        ON sales (created_at DESC)
+        INCLUDE (invoice_number, customer_id, customer_name, total, paid, remaining, status, date, payment_method, sales_rep_id, sales_rep_name);
+
       IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_payments_sale_status_date' AND object_id = OBJECT_ID('payments'))
         CREATE NONCLUSTERED INDEX IX_payments_sale_status_date
         ON payments (sale_id, status, date DESC);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_payments_receipt_number' AND object_id = OBJECT_ID('payments'))
+        CREATE NONCLUSTERED INDEX IX_payments_receipt_number
+        ON payments (receipt_number);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sale_items_sale_id' AND object_id = OBJECT_ID('sale_items'))
+        CREATE NONCLUSTERED INDEX IX_sale_items_sale_id
+        ON sale_items (sale_id);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_installment_schedules_sale_month' AND object_id = OBJECT_ID('installment_schedules'))
+        CREATE NONCLUSTERED INDEX IX_installment_schedules_sale_month
+        ON installment_schedules (sale_id, month_index)
+        INCLUDE (due_date, amount, paid_amount, status, paid_at);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_purchase_items_purchase_id' AND object_id = OBJECT_ID('purchase_items'))
+        CREATE NONCLUSTERED INDEX IX_purchase_items_purchase_id
+        ON purchase_items (purchase_id);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_purchases_supplier_id' AND object_id = OBJECT_ID('purchases'))
+        CREATE NONCLUSTERED INDEX IX_purchases_supplier_id
+        ON purchases (supplier_id);
 
       IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_customers_sued_id' AND object_id = OBJECT_ID('customers'))
         CREATE NONCLUSTERED INDEX IX_customers_sued_id

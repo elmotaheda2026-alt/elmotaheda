@@ -38,6 +38,7 @@ import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
+import { api, isApiMode } from '../lib/apiClient';
 
 type PaymentMethod = 'cash' | 'card' | 'transfer' | 'installment';
 
@@ -223,6 +224,7 @@ export default function Invoices() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
+  const [modalSearchLoading, setModalSearchLoading] = useState(false);
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
 
   const refreshSalesList = async () => {
@@ -232,18 +234,53 @@ export default function Invoices() {
     return refreshedSales;
   };
 
-  const openContractsSearch = async () => {
-    setModalSearchQuery('');
-    try {
-      await refreshSalesList();
-    } catch (err: any) {
-      setMessage({
-        type: 'error',
-        text: err.message || '���� ����� ��� ���������. ���� �� ����� ������ �� ���� ��� ����.',
-      });
+  const searchContracts = async (query: string) => {
+    if (isApiMode()) {
+      const results = await api.searchSales({ search: query.trim() || undefined, limit: 10, includeItems: true });
+      setSales(sortSalesNewestFirst(results));
+      return;
     }
+
+    const normalizedQuery = query.trim().toLowerCase();
+    const localResults = sortSalesNewestFirst(getSales()).filter(
+      (sale) =>
+        !normalizedQuery ||
+        sale.invoiceNumber.toLowerCase().includes(normalizedQuery) ||
+        sale.customerName.toLowerCase().includes(normalizedQuery),
+    );
+    setSales(localResults.slice(0, 10));
+  };
+
+  const openContractsSearch = () => {
+    setModalSearchQuery('');
     setShowSearchModal(true);
   };
+
+  useEffect(() => {
+    if (!showSearchModal) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setModalSearchLoading(true);
+      try {
+        await searchContracts(modalSearchQuery);
+      } catch (err: any) {
+        if (!cancelled) {
+          setMessage({
+            type: 'error',
+            text: err.message || 'حدث خطأ أثناء تحميل سجل التعاقدات.',
+          });
+        }
+      } finally {
+        if (!cancelled) setModalSearchLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showSearchModal, modalSearchQuery]);
 
   const handleLoadForEdit = (sale: Sale) => {
     setEditingSaleId(sale.id);
@@ -413,15 +450,7 @@ export default function Invoices() {
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
-  const filteredModalContracts = useMemo(() => {
-    const query = modalSearchQuery.trim().toLowerCase();
-    if (!query) return sales.slice(0, 10);
-    return sales.filter(
-      (s) =>
-        s.invoiceNumber.toLowerCase().includes(query) ||
-        s.customerName.toLowerCase().includes(query)
-    );
-  }, [sales, modalSearchQuery]);
+  const filteredModalContracts = useMemo(() => sales.slice(0, 10), [sales]);
 
   const resetForm = () => {
     setEditingSaleId(null);
@@ -1363,7 +1392,11 @@ export default function Invoices() {
 
               {/* List of Results */}
               <div className="space-y-3">
-                {filteredModalContracts.length === 0 ? (
+                {modalSearchLoading ? (
+                  <div className="py-12 text-center text-slate-400 font-bold">
+                    جاري تحميل سجل التعاقدات...
+                  </div>
+                ) : filteredModalContracts.length === 0 ? (
                   <div className="py-12 text-center text-slate-400 font-bold">
                     لا توجد تعاقدات سابقة مسجلة أو مطابقة لبحثك الحالي.
                   </div>

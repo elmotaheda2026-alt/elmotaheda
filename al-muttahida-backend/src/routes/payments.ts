@@ -11,16 +11,14 @@ router.use(requireAuth);
 
 async function nextReceiptNumber() {
   const db = await dbPromise;
-  const rows = await db.all<{ receipt_number: string }>(
-    "SELECT receipt_number FROM payments WHERE receipt_number LIKE 'RCPT-%'"
+  const row = await db.get<{ receipt_number: string }>(
+    `SELECT TOP 1 receipt_number
+     FROM payments
+     WHERE receipt_number LIKE 'RCPT-%'
+       AND TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) IS NOT NULL
+     ORDER BY TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) DESC`
   );
-  let maxNum = 5000;
-  for (const r of rows) {
-    const num = parseInt(r.receipt_number.replace('RCPT-', ''), 10);
-    if (!isNaN(num) && num > maxNum) {
-      maxNum = num;
-    }
-  }
+  const maxNum = row ? parseInt(row.receipt_number.replace('RCPT-', ''), 10) : 5000;
   return `RCPT-${maxNum + 1}`;
 }
 

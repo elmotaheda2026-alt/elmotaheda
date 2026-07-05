@@ -65,6 +65,12 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   listSales: () => request<any[]>('/sales?includeItems=true'),
+  searchSales: (filters: { search?: string; limit?: number; includeItems?: boolean } = {}) => {
+    const params = new URLSearchParams({ includeItems: filters.includeItems === false ? 'false' : 'true' });
+    if (filters.search) params.set('search', filters.search);
+    if (filters.limit) params.set('limit', String(filters.limit));
+    return request<any[]>(`/sales?${params.toString()}`);
+  },
   listSalesForCollection: (filters: { customerId?: string; search?: string } = {}) => {
     const params = new URLSearchParams({ includeItems: 'false' });
     if (filters.customerId) params.set('customerId', filters.customerId);

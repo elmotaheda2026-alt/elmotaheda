@@ -253,6 +253,18 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
 }
 
 async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, saleId: string, items: SaleInput['items'], now: string) {
+  const itemsMissingUnitCost = items.filter((item) => !item.unitCost);
+  const productIds = Array.from(new Set(itemsMissingUnitCost.map((item) => item.productId)));
+  const purchasePriceByProduct = new Map<string, number>();
+
+  if (productIds.length) {
+    const rows = await db.all<{ id: string; purchase_price: number }>(
+      `SELECT id, purchase_price FROM products WHERE id IN (${productIds.map(() => '?').join(',')})`,
+      ...productIds,
+    );
+    rows.forEach((row) => purchasePriceByProduct.set(row.id, Number(row.purchase_price || 0)));
+  }
+
   for (const item of items) {
     await db.run(
       `INSERT INTO sale_items (
@@ -265,7 +277,7 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
       item.barcode || null,
       item.quantity,
       item.unitPrice,
-      item.unitCost || (await db.get<{ purchase_price: number }>('SELECT purchase_price FROM products WHERE id = ?', item.productId))?.purchase_price || 0,
+      item.unitCost || purchasePriceByProduct.get(item.productId) || 0,
       item.discount,
       item.tax,
       item.total,
@@ -325,6 +337,8 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     const includeItems = String(req.query.includeItems) === 'true';
     const customerId = typeof req.query.customerId === 'string' ? req.query.customerId.trim() : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const requestedLimit = Number(req.query.limit || 0);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(Math.floor(requestedLimit), 100) : 0;
     const whereParts: string[] = [];
     const args: any[] = [];
 
@@ -339,15 +353,14 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     }
 
     const where = whereParts.length ? ` WHERE ${whereParts.join(' AND ')}` : '';
-    const rows = await db.all<SaleRow>(`SELECT * FROM sales${where} ORDER BY created_at DESC`, ...args);
+    const topClause = limit ? `TOP (${limit}) ` : '';
+    const rows = await db.all<SaleRow>(`SELECT ${topClause}* FROM sales${where} ORDER BY created_at DESC`, ...args);
     const saleIds = rows.map((row) => row.id);
     const allSchedules = saleIds.length
-      ? whereParts.length
-        ? await db.all<(ScheduleRow & { sale_id: string })>(
-          `SELECT * FROM installment_schedules WHERE sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY month_index ASC`,
+      ? await db.all<(ScheduleRow & { sale_id: string })>(
+          `SELECT * FROM installment_schedules WHERE sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY sale_id, month_index ASC`,
           ...saleIds,
         )
-        : await db.all<(ScheduleRow & { sale_id: string })>('SELECT * FROM installment_schedules ORDER BY month_index ASC')
       : [];
     const schedulesBySale = new Map<string, ScheduleRow[]>();
     allSchedules.forEach((schedule) => {
@@ -357,7 +370,12 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     });
 
     if (includeItems) {
-      const allItems = await db.all<(SaleItemRow & { sale_id: string })>('SELECT * FROM sale_items');
+      const allItems = saleIds.length
+        ? await db.all<(SaleItemRow & { sale_id: string })>(
+            `SELECT * FROM sale_items WHERE sale_id IN (${saleIds.map(() => '?').join(',')})`,
+            ...saleIds,
+          )
+        : [];
       const itemsBySale = new Map<string, SaleItemRow[]>();
       allItems.forEach((item) => {
         const current = itemsBySale.get(item.sale_id) || [];
