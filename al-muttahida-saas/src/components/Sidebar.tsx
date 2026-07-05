@@ -116,7 +116,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       {isOpen && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} />}
 
       <aside
-        className={`fixed right-0 top-0 z-50 flex h-full w-72 transform flex-col border-l border-white/20 bg-white/70 backdrop-blur-xl text-slate-800 shadow-[0_0_40px_rgba(0,0,0,0.05)] transition-transform duration-300 lg:translate-x-0 ${
+        className={`fixed right-0 top-0 z-50 flex h-full w-72 transform flex-col border-l border-slate-200/80 bg-white/95 backdrop-blur-md text-slate-800 shadow-[0_0_40px_rgba(0,0,0,0.05)] transition-transform duration-300 ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >

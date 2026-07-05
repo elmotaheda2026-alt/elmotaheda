@@ -744,88 +744,85 @@ export default function CollectionStatement() {
               </table>
             </div>
 
-            {/* Pagination Controls */}
-            {totalDuePages > 1 && (
-              <div className="flex items-center justify-between border border-slate-200/60 bg-white px-4 py-2.5 rounded-2xl print:hidden">
+            {/* Unified Compact Footer for Pagination and Quick Metrics */}
+            <div className="bg-white border border-slate-200 p-3.5 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm print:hidden">
+              {/* Right: Quick Metrics (Total counts) */}
+              <div className="flex items-center gap-4 text-xs font-bold text-slate-600 flex-wrap">
                 <div>
-                  <p className="text-xs text-slate-500 font-bold whitespace-nowrap">
-                    عرض <span className="text-slate-900">{(dueCurrentPage - 1) * ITEMS_PER_PAGE + 1}</span> -{' '}
-                    <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * ITEMS_PER_PAGE)}</span> من{' '}
-                    <span className="text-slate-900">{groupedDueRows.length}</span> عميل
-                  </p>
+                  أقساط مستحقة: <span className="text-slate-900 text-sm font-black mx-1">{dueRows.length}</span>
                 </div>
-                <nav className="inline-flex rounded-xl gap-1" aria-label="Pagination">
-                  <button
-                    disabled={dueCurrentPage === 1}
-                    onClick={() => {
-                      setDueCurrentPage(prev => Math.max(prev - 1, 1));
-                      setExpandedCustomerSaleId(null);
-                    }}
-                    className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
-                  >
-                    السابق
-                  </button>
-                  {getPaginatedPages().map((page, idx) => {
-                    if (page === '...') {
+                <div className="w-px h-4 bg-slate-200"></div>
+                <div>
+                  عملاء مستحقين: <span className="text-slate-900 text-sm font-black mx-1">{groupedDueRows.length}</span>
+                </div>
+                <div className="w-px h-4 bg-slate-200"></div>
+                <div>
+                  إجمالي مبالغ الأقساط: <span className="text-red-600 text-sm font-black mx-1">{formatCurrency(dueTotalInPeriod)}</span>
+                </div>
+              </div>
+
+              {/* Middle: Pagination Controls */}
+              {totalDuePages > 1 ? (
+                <div className="flex items-center gap-2">
+                  <nav className="inline-flex rounded-xl gap-1" aria-label="Pagination">
+                    <button
+                      disabled={dueCurrentPage === 1}
+                      onClick={() => {
+                        setDueCurrentPage((prev) => Math.max(prev - 1, 1));
+                        setExpandedCustomerSaleId(null);
+                      }}
+                      className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
+                    >
+                      السابق
+                    </button>
+                    {getPaginatedPages().map((page, idx) => {
+                      if (page === '...') {
+                        return (
+                          <span key={`dots-${idx}`} className="h-8 w-6 flex items-center justify-center text-slate-400 text-xs font-bold">
+                            ...
+                          </span>
+                        );
+                      }
                       return (
-                        <span key={`dots-${idx}`} className="h-8 w-6 flex items-center justify-center text-slate-400 text-xs font-bold">
-                          ...
-                        </span>
+                        <button
+                          key={`page-${page}`}
+                          onClick={() => {
+                            setDueCurrentPage(page as number);
+                            setExpandedCustomerSaleId(null);
+                          }}
+                          className={`h-8 w-8 rounded-lg text-xs font-bold transition-all ${
+                            dueCurrentPage === page
+                              ? 'bg-sky-600 text-white shadow-sm'
+                              : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-3sm'
+                          }`}
+                        >
+                          {page}
+                        </button>
                       );
-                    }
-                    return (
-                      <button
-                        key={`page-${page}`}
-                        onClick={() => {
-                          setDueCurrentPage(page as number);
-                          setExpandedCustomerSaleId(null);
-                        }}
-                        className={`h-8 w-8 rounded-lg text-xs font-bold transition-all ${
-                          dueCurrentPage === page
-                            ? 'bg-sky-600 text-white shadow-sm'
-                            : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-3sm'
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    );
-                  })}
-                  <button
-                    disabled={dueCurrentPage === totalDuePages}
-                    onClick={() => {
-                      setDueCurrentPage(prev => Math.min(prev + 1, totalDuePages));
-                      setExpandedCustomerSaleId(null);
-                    }}
-                    className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
-                  >
-                    التالي
-                  </button>
-                </nav>
-              </div>
-            )}
+                    })}
+                    <button
+                      disabled={dueCurrentPage === totalDuePages}
+                      onClick={() => {
+                        setDueCurrentPage((prev) => Math.min(prev + 1, totalDuePages));
+                        setExpandedCustomerSaleId(null);
+                      }}
+                      className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
+                    >
+                      التالي
+                    </button>
+                  </nav>
+                </div>
+              ) : (
+                <div className="w-10"></div>
+              )}
 
-            {/* Quick Metrics Footer */}
-            <div className="bg-slate-50 border border-slate-200 px-6 py-5 rounded-2xl flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-6 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl font-black text-slate-900">{dueRows.length}</span>
-                  <span className="text-sm font-bold text-slate-500">أقساط مستحقة</span>
-                </div>
-                <div className="w-px h-6 bg-slate-200 hidden sm:block"></div>
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl font-black text-slate-900">{groupedDueRows.length}</span>
-                  <span className="text-sm font-bold text-slate-500">عملاء مستحقين</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4 bg-white px-5 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
-                <div className="text-left">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">إجمالي مبالغ الأقساط</div>
-                  <div className="text-xl font-black text-red-600">{formatCurrency(dueTotalInPeriod)}</div>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
-                  <Wallet size={20} />
-                </div>
+              {/* Left: Current range view text */}
+              <div>
+                <p className="text-[11px] text-slate-500 font-bold whitespace-nowrap">
+                  عرض <span className="text-slate-900">{(dueCurrentPage - 1) * ITEMS_PER_PAGE + 1}</span> -{' '}
+                  <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * ITEMS_PER_PAGE)}</span> من{' '}
+                  <span className="text-slate-900">{groupedDueRows.length}</span> عميل
+                </p>
               </div>
             </div>
           </div>
