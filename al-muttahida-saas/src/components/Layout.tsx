@@ -24,11 +24,11 @@ export default function Layout() {
       </div>
 
       <div className={`transition-all duration-300 ${sidebarOpen ? 'lg:mr-72' : 'lg:mr-0'} print:m-0`}>
-        <div className="print:hidden">
+        <div className={`print:hidden fixed top-0 left-0 right-0 z-30 transition-all duration-300 ${sidebarOpen ? 'lg:right-72' : 'lg:right-0'}`}>
           <Header onMenuClick={toggleSidebar} />
         </div>
 
-        <main className="px-4 pt-3 pb-6 md:px-8 md:pt-4 md:pb-8 print:p-0">
+        <main className="px-4 pt-[68px] pb-6 md:px-8 md:pt-[76px] md:pb-8 print:p-0">
           <div className="mx-auto w-full max-w-[1720px]">
             <Outlet />
           </div>
