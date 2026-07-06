@@ -7,8 +7,15 @@ router.use(requireAuth, requirePermission('reports:read'));
 
 const dayMs = 86400000;
 
+const cairoToday = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Africa/Cairo',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date());
+
 router.get('/aging', async (req, res) => {
-  const referenceDate = String(req.query.date || new Date().toISOString().slice(0, 10));
+  const referenceDate = String(req.query.date || cairoToday());
   const referenceTime = new Date(referenceDate).getTime();
   const db = await dbPromise;
   const schedules = await db.all<{
@@ -113,7 +120,7 @@ router.get('/collection-rate', async (req, res) => {
 });
 
 router.get('/daily-cash', async (req, res) => {
-  const date = String(req.query.date || new Date().toISOString().slice(0, 10));
+  const date = String(req.query.date || cairoToday());
   const db = await dbPromise;
   const incoming = await db.get<{ total: number }>("SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='in' AND status='posted' AND date = ?", date);
   const outgoing = await db.get<{ total: number }>("SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='out' AND status='posted' AND date = ?", date);

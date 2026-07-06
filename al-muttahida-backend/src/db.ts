@@ -1,4 +1,4 @@
-﻿import sql from 'mssql';
+import sql from 'mssql';
 import { config } from './config.js';
 
 /**
@@ -11,13 +11,13 @@ export const poolPromise = sql.connect(config.sql);
 export const dbPromise = (async () => {
   const pool = await poolPromise;
 
-  function prepareRequest(query: string, params: any[]) {
-    const request = pool.request();
+  function prepareRequest(query: string, params: any[], request?: any) {
+    const req = request || pool.request();
     let index = 0;
     const preparedQuery = query.replace(/\?/g, () => {
       index += 1;
       const paramName = `p${index}`;
-      request.input(paramName, params[index - 1]);
+      req.input(paramName, params[index - 1]);
       return `@${paramName}`;
     });
 
@@ -25,8 +25,9 @@ export const dbPromise = (async () => {
       throw new Error(`SQL parameter mismatch: query has ${index} placeholders but received ${params.length} values`);
     }
 
-    return { request, preparedQuery };
+    return { request: req, preparedQuery };
   }
+
   return {
     /** Execute a query that returns multiple rows. */
     async all<T = any>(query: string, ...params: any[]): Promise<T[]> {
@@ -40,12 +41,41 @@ export const dbPromise = (async () => {
       const result = await request.query(preparedQuery);
       return result.recordset[0] as T | undefined;
     },
-    /** Execute a nonâ€‘select statement (INSERT/UPDATE/DELETE). */
+    /** Execute a non‐select statement (INSERT/UPDATE/DELETE). */
     async run(query: string, ...params: any[]) {
       const { request, preparedQuery } = prepareRequest(query, params);
       const result = await request.query(preparedQuery);
       return result;
     },
+    /** Execute operations within a transaction. */
+    async withTransaction<T>(work: (db: any) => Promise<T>): Promise<T> {
+      const transaction = new sql.Transaction(pool);
+      await transaction.begin();
+      try {
+        const txDb = {
+          all: async (q: string, ...p: any[]) => {
+            const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+            const result = await request.query(preparedQuery);
+            return result.recordset;
+          },
+          get: async (q: string, ...p: any[]) => {
+            const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+            const result = await request.query(preparedQuery);
+            return result.recordset[0];
+          },
+          run: async (q: string, ...p: any[]) => {
+            const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+            return await request.query(preparedQuery);
+          }
+        };
+        const result = await work(txDb);
+        await transaction.commit();
+        return result;
+      } catch (err) {
+        await transaction.rollback();
+        throw err;
+      }
+    }
   };
 })();
 
@@ -572,6 +602,7 @@ export async function initDb(): Promise<void> {
     console.error('Error auto-seeding default admin:', err);
   }
 }
+
 
 
 

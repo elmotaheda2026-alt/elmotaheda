@@ -1,4 +1,4 @@
-﻿const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
 const API_USER_KEY = 'api_user';
 const FORCE_LOCAL_RESTORE_KEY = 'almuttahida_force_local_restore';
@@ -88,7 +88,14 @@ export const api = {
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSale: (id: string) => request<{ message: string }>(`/sales/${id}`, { method: 'DELETE' }),
-  listPayments: () => request<any[]>('/payments'),
+  listPayments: (filters: { date?: string; search?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.date) params.set('date', filters.date);
+    if (filters.search) params.set('search', filters.search);
+    if (filters.limit) params.set('limit', String(filters.limit));
+    const query = params.toString();
+    return request<any[]>(`/payments${query ? `?${query}` : ''}`);
+  },
   createPayment: (payload: any) => request<{ id: string; receiptNumber: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
   reversePayment: (id: string) => request<{ message: string }>(`/payments/${id}/reverse`, { method: 'POST' }),
   getAging: () => request<any[]>('/reports/aging'),
@@ -163,6 +170,7 @@ export const api = {
   closePeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string; notes?: string }) =>
     request<{ message: string }>('/closing/close', { method: 'POST', body: JSON.stringify(payload) }),
 };
+
 
 
 

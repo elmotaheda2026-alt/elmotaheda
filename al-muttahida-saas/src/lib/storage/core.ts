@@ -51,6 +51,14 @@ export function getStorage<T>(key: string): T[] {
 }
 
 export function setStorage<T>(key: string, data: T[]): void {
+  if (isApiMode() && key === DB_KEYS.PAYMENTS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore cleanup failures; payment data is loaded from the API in API mode.
+    }
+    return;
+  }
   localStorage.setItem(key, JSON.stringify(data));
 }
 
@@ -311,3 +319,4 @@ export async function clearAllData(): Promise<void> {
   localStorage.setItem(DB_KEYS.INVOICE_COUNTER, '1000');
   console.log('تم حذف جميع البيانات الافتراضية بنجاح');
 }
+

@@ -7,10 +7,15 @@ export function getPayments(): Payment[] {
   return getStorage<Payment>(DB_KEYS.PAYMENTS);
 }
 
-export async function syncPayments(): Promise<void> {
-  if (!isApiMode()) return;
+export async function syncPayments(): Promise<Payment[]> {
+  if (!isApiMode()) return getPayments();
   const data = await api.listPayments();
-  setStorage(DB_KEYS.PAYMENTS, data);
+  try {
+    localStorage.removeItem(DB_KEYS.PAYMENTS);
+  } catch {
+    // Ignore storage cleanup failures; API data is still the source of truth.
+  }
+  return data;
 }
 
 export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payment {
@@ -134,5 +139,6 @@ export function reversePayment(paymentId: string, reversedBy: string, reason = '
 
   return reversed;
 }
+
 
 

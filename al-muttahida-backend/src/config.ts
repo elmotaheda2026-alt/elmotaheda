@@ -22,5 +22,14 @@ export const config = {
       encrypt: (process.env.DB_ENCRYPT || 'false').toLowerCase() === 'true',
       trustServerCertificate: (process.env.DB_TRUST_CERT || 'true').toLowerCase() === 'true',
     },
+    // Connection pool settings to prevent deadlocks and pool exhaustion
+    pool: {
+      max: 10,
+      min: 1,
+      idleTimeoutMillis: 30000,
+      acquireTimeoutMillis: 30000,
+    },
+    connectionTimeout: 30000,
+    requestTimeout: 30000,
   },
 };

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -12,7 +12,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { ClosingPeriod, Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, getCustomers, getPayments, getSales, getSuppliers, syncCustomers, syncPayments, syncSales, syncSuppliers, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi } from '../lib/storage';
+import { createPayment, getPayments, getCustomers, getSales, getSuppliers, syncCustomers, syncPayments, syncSales, syncSuppliers, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
@@ -39,7 +39,12 @@ interface OutgoingPaymentForm {
   description: string;
 }
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Africa/Cairo',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date());
 
 const normalizeArabic = (str: string): string => {
   if (!str) return '';
@@ -51,15 +56,46 @@ const normalizeArabic = (str: string): string => {
     .toLowerCase();
 };
 
+const displayArabic = (value?: string | null): string => {
+  if (!value) return '';
+  if (!/[طظ][\u0600-\u06FF\u00A0-\u00FF]/.test(value)) return value;
+
+  try {
+    const cp1256Decoder = new TextDecoder('windows-1256');
+    const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+    const cp1256Chars = cp1256Decoder.decode(Uint8Array.from({ length: 128 }, (_, index) => index + 128));
+    const reverseMap = new Map<string, number>();
+
+    Array.from(cp1256Chars).forEach((char, index) => {
+      if (char !== '�') reverseMap.set(char, index + 128);
+    });
+
+    const bytes = Array.from(value, (char) => {
+      const code = char.charCodeAt(0);
+      if (code < 128) return code;
+      const mapped = reverseMap.get(char);
+      if (mapped === undefined) throw new Error('Unsupported character');
+      return mapped;
+    });
+
+    const repaired = utf8Decoder.decode(Uint8Array.from(bytes));
+    return /[\u0600-\u06FF]/.test(repaired) ? repaired : value;
+  } catch {
+    return value;
+  }
+};
+
 export default function Payments() {
   const { settings, user } = useAuth();
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [dailyPayments, setDailyPayments] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(true);
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [paymentType, setPaymentType] = useState<PaymentType>('in');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [closedPeriodSearch, setClosedPeriodSearch] = useState('');
   const [incomingSubmitMode, setIncomingSubmitMode] = useState<IncomingSubmitMode>('save');
 
   // Daily Closing states
@@ -110,38 +146,51 @@ export default function Payments() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const loadData = async () => {
-    // 1. Load cached data immediately
-    const nextPayments = getPayments().slice().reverse();
+    setLoading(true);
+    // 1. Load cached data for non-payment data immediately (payments skip localStorage due to size)
     const nextSales = getSales().slice().reverse();
     const nextCustomers = getCustomers();
     const nextSuppliers = getSuppliers();
 
-    setPayments(nextPayments);
     setSales(nextSales);
     setCustomers(nextCustomers);
     setSuppliers(nextSuppliers);
     setClosedPeriods(getClosingPeriods());
 
-    // 2. Perform background sync if in API mode
     if (isApiMode()) {
       try {
-        await Promise.all([syncCustomers(), syncSuppliers(), syncPayments(), syncSales(), syncClosingPeriods()]);
-        
-        // 3. Update state with fresh synced data
-        const freshPayments = getPayments().slice().reverse();
-        const freshSales = getSales().slice().reverse();
-        const freshCustomers = getCustomers();
-        const freshSuppliers = getSuppliers();
+        // Fetch payments directly from API to avoid localStorage quota issues
+        // (payments list can be very large - 1.7MB+)
+        const [freshPaymentsRaw] = await Promise.all([
+          api.listPayments({ date: today(), limit: 500 }),
+          syncCustomers(),
+          syncSuppliers(),
+          syncSales(),
+          syncClosingPeriods(),
+        ]);
 
-        setPayments(freshPayments);
-        setSales(freshSales);
-        setCustomers(freshCustomers);
-        setSuppliers(freshSuppliers);
+        // Clear old stale payments cache if it exists
+        try { localStorage.removeItem('almuttahida_payments'); } catch { /* ignore */ }
+
+        setPayments(freshPaymentsRaw);
+        setDailyPayments(freshPaymentsRaw);
+        setSales(getSales().slice().reverse());
+        setCustomers(getCustomers());
+        setSuppliers(getSuppliers());
         setClosedPeriods(getClosingPeriods());
-      } catch (err) {
-        console.error('[Payments DEBUG] Sync FAILED:', err);
+      } catch (err: any) {
+        console.error('[Payments] Sync FAILED:', err);
+        setMessage({ type: 'error', text: `فشل تحميل البيانات: ${err?.message || 'خطأ في الاتصال بالخادم'}` });
       }
+    } else {
+      // Local mode: load from localStorage
+      const localPayments = getPayments().slice().reverse();
+      const todayYYYYMMDD = today();
+      const localDailyPayments = localPayments.filter((payment) => toYYYYMMDD(payment.date) === todayYYYYMMDD);
+      setPayments(localDailyPayments);
+      setDailyPayments(localDailyPayments);
     }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -214,25 +263,19 @@ export default function Payments() {
     const day = String(d.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   };
-
-  const filteredPayments = payments.filter((payment) => {
-    const customerName =
-      customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '';
-    const supplierName =
-      suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '';
-    const invoiceNumber = payment.invoiceNumber || '';
-    const search = searchTerm.toLowerCase();
-
+  const closedPeriodSearchTerm = closedPeriodSearch.trim().toLowerCase();
+  const filteredClosedPeriods = closedPeriods.filter((period) => {
+    if (!closedPeriodSearchTerm) return true;
     return (
-      payment.description.toLowerCase().includes(search) ||
-      customerName.toLowerCase().includes(search) ||
-      supplierName.toLowerCase().includes(search) ||
-      invoiceNumber.toLowerCase().includes(search)
+      formatDateDisplay(period.periodDate).toLowerCase().includes(closedPeriodSearchTerm) ||
+      period.periodDate.toLowerCase().includes(closedPeriodSearchTerm) ||
+      period.closedBy.toLowerCase().includes(closedPeriodSearchTerm) ||
+      (period.notes || '').toLowerCase().includes(closedPeriodSearchTerm)
     );
   });
 
   const todayYYYYMMDD = today();
-  const todayPayments = payments.filter((payment) => toYYYYMMDD(payment.date) === todayYYYYMMDD);
+  const todayPayments = dailyPayments.filter((payment) => toYYYYMMDD(payment.date) === todayYYYYMMDD);
   const totalIn = todayPayments.filter((payment) => payment.type === 'in').reduce((sum, payment) => sum + payment.amount, 0);
   const totalOut = todayPayments.filter((payment) => payment.type === 'out').reduce((sum, payment) => sum + payment.amount, 0);
 
@@ -643,17 +686,8 @@ export default function Payments() {
         />
       </div>
 
-      <div className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="relative">
-          <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="بحث بالعميل أو الفاتورة أو الوصف"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className="input-ui pr-10"
-          />
-        </div>
+      <div className="rounded-[26px] border border-slate-200 bg-white p-5 text-sm font-semibold text-slate-600 shadow-sm">
+        المعروض الآن معاملات اليوم فقط. السجلات السابقة يمكن مراجعتها من نافذة إغلاق اليومية.
       </div>
 
       <div className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-sm">
@@ -669,7 +703,25 @@ export default function Payments() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredPayments.map((payment) => {
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-12 text-center text-slate-400 text-sm">
+                    <div className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-5 w-5 text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                      </svg>
+                      <span>جاري تحميل الحركات المالية...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : payments.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-12 text-center text-slate-400 text-sm">
+                    لا توجد معاملات بتاريخ اليوم
+                  </td>
+                </tr>
+              ) : payments.map((payment) => {
                 const customerName =
                   customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
                 const supplierName =
@@ -684,16 +736,16 @@ export default function Payments() {
                 return (
                   <tr key={payment.id} className="hover:bg-slate-50">
                     <td className="px-4 py-4">
-                      <p className="font-medium text-slate-800">{payment.description}</p>
+                      <p className="font-medium text-slate-800">{displayArabic(payment.description)}</p>
                       <p className="mt-1 text-xs text-slate-500">{payment.type === 'in' ? 'وارد' : 'صادر'}</p>
                     </td>
                     <td className="px-4 py-4 text-sm text-slate-700">
-                      {payment.type === 'in' ? customerName : supplierName}
+                      {displayArabic(payment.type === 'in' ? customerName : supplierName)}
                     </td>
                     <td className="px-4 py-4">
                       <div className="space-y-1 text-sm">
                         <p className="font-semibold text-slate-700">{payment.invoiceNumber || '-'}</p>
-                        <p className="text-xs text-slate-500">{linkedSchedule?.label || '-'}</p>
+                        <p className="text-xs text-slate-500">{displayArabic(linkedSchedule?.label) || '-'}</p>
                       </div>
                     </td>
                     <td className="px-4 py-4 text-sm text-slate-600">{formatDateDisplay(payment.date)}</td>
@@ -1118,12 +1170,26 @@ export default function Payments() {
                 </form>
 
                 <div className="border-t border-slate-100 pt-6">
-                  <h4 className="font-bold text-slate-800 mb-3 flex items-center gap-1.5">
-                    <CheckCircle2 size={16} className="text-slate-600" />
-                    السجلات المغلقة مؤخرًا
-                  </h4>
+                  <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h4 className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <CheckCircle2 size={16} className="text-slate-600" />
+                      السجلات المغلقة مؤخرًا
+                    </h4>
+                    <div className="relative sm:w-72">
+                      <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={closedPeriodSearch}
+                        onChange={(event) => setClosedPeriodSearch(event.target.value)}
+                        className="input-ui h-10 pr-9 text-sm"
+                        placeholder="بحث في السجلات المغلقة"
+                      />
+                    </div>
+                  </div>
                   {closedPeriods.length === 0 ? (
                     <p className="text-sm text-slate-500">لا توجد فترات مغلقة مسبقًا.</p>
+                  ) : filteredClosedPeriods.length === 0 ? (
+                    <p className="text-sm text-slate-500">لا توجد سجلات مغلقة مطابقة للبحث.</p>
                   ) : (
                     <div className="max-h-[200px] overflow-y-auto rounded-2xl border border-slate-100">
                       <table className="w-full text-sm">
@@ -1136,7 +1202,7 @@ export default function Payments() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {closedPeriods.slice(0, 10).map((period) => (
+                          {filteredClosedPeriods.slice(0, 20).map((period) => (
                             <tr key={period.id} className="hover:bg-slate-50/50">
                               <td className="px-4 py-3 font-semibold text-slate-800">{formatDateDisplay(period.periodDate)}</td>
                               <td className="px-4 py-3">{period.closedBy}</td>
@@ -1221,3 +1287,13 @@ function StatusBadge({ status }: { status: InstallmentSchedule['status'] }) {
 
   return <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${toneClass}`}>{label}</span>;
 }
+
+
+
+
+
+
+
+
+
+

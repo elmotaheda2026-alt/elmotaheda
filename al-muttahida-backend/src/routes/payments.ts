@@ -54,10 +54,43 @@ const paymentSchema = z.object({
 });
 
 // GET /payments
-router.get('/', requirePermission('payments:read'), async (_req, res) => {
+router.get('/', requirePermission('payments:read'), async (req, res) => {
   try {
     const db = await dbPromise;
-    const rows = await db.all('SELECT * FROM payments ORDER BY created_at DESC');
+    const date = typeof req.query.date === 'string' ? req.query.date.slice(0, 10) : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 200;
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 500) : 200;
+
+    const where: string[] = [];
+    const params: any[] = [];
+
+    if (date) {
+      where.push('CONVERT(date, p.date) = CONVERT(date, ?)');
+      params.push(date);
+    }
+
+    if (search) {
+      where.push(`(
+        p.description LIKE ? OR
+        p.receipt_number LIKE ? OR
+        p.invoice_number LIKE ? OR
+        c.name LIKE ? OR
+        s.name LIKE ?
+      )`);
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
+    const rows = await db.all(
+      `SELECT TOP (?) p.*
+       FROM payments p
+       LEFT JOIN customers c ON c.id = p.customer_id OR (p.reference_type = 'customer' AND c.id = p.reference_id)
+       LEFT JOIN suppliers s ON s.id = p.supplier_id OR (p.reference_type = 'supplier' AND s.id = p.reference_id)
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY p.created_at DESC`,
+      limit,
+      ...params
+    );
     const mapped = rows.map((row: any) => ({
       id: row.id,
       type: row.type,
@@ -109,10 +142,11 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     if (req.user?.role !== 'admin' && await isPeriodClosed(db, data.date)) {
       return res.status(400).json({ message: 'لا يمكن تسجيل عملية دفع في تاريخ مغلق مالياً' });
     }
+
+    // Validate sale exists and amount before transaction
     let finalCustomerId = data.customerId || null;
     let finalSupplierId = data.supplierId || null;
 
-    // 1. If paying for a sale
     if (data.type === 'in' && data.saleId) {
       const sale = await db.get<{ id: string; customer_id: string; paid: number; remaining: number; total: number }>(
         'SELECT id, customer_id, paid, remaining, total FROM sales WHERE id = ?',
@@ -122,128 +156,108 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       if (roundMoney(data.amount) > roundMoney(sale.remaining)) {
         return res.status(400).json({ message: 'Payment amount cannot exceed the remaining sale balance' });
       }
-      
       finalCustomerId = sale.customer_id;
+    }
 
-      // Update sales table (increase paid amount, update status and remaining)
-      await db.run(
-        `UPDATE sales
-         SET paid = paid + ?,
-             remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
-             locked = 1,
-             status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
-         WHERE id = ?`,
-        data.amount,
-        data.amount,
-        data.amount,
-        data.amount,
-        data.saleId,
-      );
-
-      // Update installment schedules
-      if (data.installmentId) {
-        // Update the specific installment
-        const schedule = await db.get<{ id: string; amount: number; paid_amount: number }>(
-          'SELECT id, amount, paid_amount FROM installment_schedules WHERE id = ?',
-          data.installmentId,
+    // Run all DB mutations inside a single transaction to avoid deadlocks
+    await db.withTransaction(async (tx) => {
+      // 1. If paying for a sale, update sales + installments
+      if (data.type === 'in' && data.saleId) {
+        await tx.run(
+          `UPDATE sales
+           SET paid = paid + ?,
+               remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
+               locked = 1,
+               status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
+           WHERE id = ?`,
+          data.amount, data.amount, data.amount, data.amount, data.saleId,
         );
-        if (schedule) {
-          const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
-          const scheduleStatus = nextPaid >= schedule.amount ? 'paid' : 'partial';
-          await db.run(
-            `UPDATE installment_schedules
-             SET paid_amount = ?,
-                 status = ?,
-                 paid_at = ?
-             WHERE id = ?`,
-            nextPaid,
-            scheduleStatus,
-            data.date,
+
+        if (data.installmentId) {
+          const schedule = await tx.get(
+            'SELECT id, amount, paid_amount FROM installment_schedules WHERE id = ?',
             data.installmentId,
           );
-        }
-      } else {
-        // Auto-allocate payment to unpaid schedules in order
-        const schedules = await db.all<{ id: string; amount: number; paid_amount: number }>(
-          'SELECT id, amount, paid_amount FROM installment_schedules WHERE sale_id = ? AND status <> \'paid\' ORDER BY month_index ASC',
-          data.saleId,
-        );
-        let remainingPayment = data.amount;
-        for (const sch of schedules) {
-          if (remainingPayment <= 0) break;
-          const schRemaining = Number((sch.amount - sch.paid_amount).toFixed(2));
-          const applied = Math.min(schRemaining, remainingPayment);
-          const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
-          remainingPayment = Number((remainingPayment - applied).toFixed(2));
-
-          await db.run(
-            `UPDATE installment_schedules
-             SET paid_amount = ?,
-                 status = ?,
-                 paid_at = ?
-             WHERE id = ?`,
-            nextPaidAmount,
-            nextPaidAmount >= sch.amount ? 'paid' : 'partial',
-            data.date,
-            sch.id,
+          if (schedule) {
+            const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
+            await tx.run(
+              `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+              nextPaid,
+              nextPaid >= schedule.amount ? 'paid' : 'partial',
+              data.date,
+              data.installmentId,
+            );
+          }
+        } else {
+          const schedules = await tx.all(
+            `SELECT id, amount, paid_amount FROM installment_schedules
+             WHERE sale_id = ? AND status <> 'paid' ORDER BY month_index ASC`,
+            data.saleId,
           );
+          let remainingPayment = data.amount;
+          for (const sch of schedules) {
+            if (remainingPayment <= 0) break;
+            const schRemaining = Number((sch.amount - sch.paid_amount).toFixed(2));
+            const applied = Math.min(schRemaining, remainingPayment);
+            const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
+            remainingPayment = Number((remainingPayment - applied).toFixed(2));
+            await tx.run(
+              `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+              nextPaidAmount,
+              nextPaidAmount >= sch.amount ? 'paid' : 'partial',
+              data.date,
+              sch.id,
+            );
+          }
         }
       }
-    }
 
-    // 2. Update Customer Balance (incoming payment decreases debtor balance)
-    if (data.type === 'in' && finalCustomerId && data.affectsCustomerBalance) {
-      await db.run(
-        `UPDATE customers
-         SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
-             updated_at = ?
-         WHERE id = ?`,
+      // 2. Update Customer Balance
+      if (data.type === 'in' && finalCustomerId && data.affectsCustomerBalance) {
+        await tx.run(
+          `UPDATE customers
+           SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ?
+           WHERE id = ?`,
+          data.amount, data.amount, now, finalCustomerId,
+        );
+      }
+
+      // 3. Update Supplier Balance
+      if (data.type === 'out' && finalSupplierId) {
+        await tx.run(
+          `UPDATE suppliers
+           SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ?
+           WHERE id = ?`,
+          data.amount, data.amount, now, finalSupplierId,
+        );
+      }
+
+      // 4. Insert payment record
+      await tx.run(
+        `INSERT INTO payments (
+          id, type, amount, sale_id, installment_id, description, date, receipt_number, status, channel,
+          reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+          created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        data.type,
         data.amount,
-        data.amount,
-        now,
+        data.saleId || null,
+        data.installmentId || null,
+        data.description,
+        data.date,
+        receiptNumber,
+        data.channel,
+        data.referenceId || null,
+        data.referenceType,
         finalCustomerId,
-      );
-    }
-
-    // 3. Update Supplier Balance (outgoing payment decreases creditor balance we owe them)
-    if (data.type === 'out' && finalSupplierId) {
-      await db.run(
-        `UPDATE suppliers
-         SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
-             updated_at = ?
-         WHERE id = ?`,
-        data.amount,
-        data.amount,
-        now,
         finalSupplierId,
+        data.invoiceNumber || null,
+        data.affectsCustomerBalance ? 1 : 0,
+        req.user?.name || 'system',
+        now,
       );
-    }
-
-    // 4. Insert payment
-    await db.run(
-      `INSERT INTO payments (
-        id, type, amount, sale_id, installment_id, description, date, receipt_number, status, channel,
-        reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
-        created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      data.type,
-      data.amount,
-      data.saleId || null,
-      data.installmentId || null,
-      data.description,
-      data.date,
-      receiptNumber,
-      data.channel,
-      data.referenceId || null,
-      data.referenceType,
-      finalCustomerId,
-      finalSupplierId,
-      data.invoiceNumber || null,
-      data.affectsCustomerBalance ? 1 : 0,
-      req.user?.name || 'system',
-      now,
-    );
+    });
 
     await audit('payment.create', 'payment', id, req.user?.name || 'system', {
       id,
@@ -434,5 +448,9 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
 });
 
 export default router;
+
+
+
+
 
 
