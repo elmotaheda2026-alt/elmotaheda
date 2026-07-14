@@ -35,21 +35,16 @@ export default function ProductsInventory() {
     void loadData();
   }, []);
 
-  const onDemandProducts = useMemo(
-    () => products.filter((product) => product.fulfillmentType === 'on_demand'),
-    [products],
-  );
-
   const filteredProducts = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return onDemandProducts;
+    if (!term) return products;
 
-    return onDemandProducts.filter((product) =>
+    return products.filter((product) =>
       product.name.toLowerCase().includes(term) ||
       (product.barcode || '').toLowerCase().includes(term) ||
       (product.category || '').toLowerCase().includes(term),
     );
-  }, [onDemandProducts, searchTerm]);
+  }, [products, searchTerm]);
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -130,7 +125,7 @@ export default function ProductsInventory() {
       <section className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div className="flex items-center gap-3">
-            <h2 className="text-xl font-black text-slate-900 font-sans">كتالوج الأصناف (حسب الطلب)</h2>
+            <h2 className="text-xl font-black text-slate-900 font-sans">كتالوج الأصناف</h2>
             <button
               onClick={() => {
                 resetForm();
@@ -168,14 +163,13 @@ export default function ProductsInventory() {
                 <th className="px-5 py-3.5 text-right text-sm font-black text-slate-700">الوحدة</th>
                 <th className="px-5 py-3.5 text-right text-sm font-black text-slate-700">تكلفة الشراء</th>
                 <th className="px-5 py-3.5 text-right text-sm font-black text-slate-700">سعر البيع</th>
-                <th className="px-5 py-3.5 text-right text-sm font-black text-slate-700">طريقة التوفير</th>
                 <th className="px-5 py-3.5 text-center text-sm font-black text-slate-700">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-16 text-center">
+                  <td colSpan={6} className="px-5 py-16 text-center">
                     <div className="mx-auto flex max-w-md flex-col items-center">
                       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
                         <Package size={24} />
@@ -202,11 +196,6 @@ export default function ProductsInventory() {
                     <td className="px-5 py-3 text-sm font-bold text-slate-700">{product.unit || '-'}</td>
                     <td className="px-5 py-3 text-sm font-black text-slate-900">{formatCurrency(product.purchasePrice)}</td>
                     <td className="px-5 py-3 text-sm font-black text-slate-900">{formatCurrency(product.salePrice)}</td>
-                    <td className="px-5 py-3">
-                      <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-black text-amber-700">
-                        حسب الطلب
-                      </span>
-                    </td>
                     <td className="px-5 py-3 text-center">
                       <div className="flex items-center justify-center gap-1">
                         <button
@@ -239,7 +228,7 @@ export default function ProductsInventory() {
           <div className="bg-white rounded-xl w-full max-w-md shadow-2xl overflow-hidden">
             <div className="p-5 border-b border-gray-100 bg-slate-50">
               <h3 className="text-base font-black text-slate-800">
-                {editingProduct ? 'تعديل الصنف' : 'إضافة صنف جديد (حسب الطلب)'}
+                {editingProduct ? 'تعديل الصنف' : 'إضافة صنف جديد'}
               </h3>
             </div>
             <form onSubmit={handleSubmit} className="p-5 space-y-4">
@@ -311,7 +300,7 @@ export default function ProductsInventory() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">طريقة التوفير / الوصف (اختياري)</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">الوصف (اختياري)</label>
                 <textarea
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}

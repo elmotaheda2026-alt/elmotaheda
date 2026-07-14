@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -210,6 +210,29 @@ export default function Payments() {
       setMessage({ type: 'error', text: err.message || 'حدث خطأ أثناء إغلاق اليومية.' });
     }
   };
+
+    // Automatic daily closing at midnight
+  useEffect(() => {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+
+    const timerId = setTimeout(async () => {
+      try {
+        const todayDate = today();
+        await closePeriodApi('daily', todayDate, user?.name || 'مدير النظام', 'إغلاق تلقائي');
+        await loadData();
+        setMessage({ type: 'success', text: 'تم إغلاق اليومية تلقائيًا عند انتهاء اليوم.' });
+      } catch (err: any) {
+        console.error('Auto close failed:', err);
+        setMessage({ type: 'error', text: err.message || 'خطأ في إغلاق اليومية تلقائيًا.' });
+      }
+    }, msUntilMidnight);
+
+    return () => clearTimeout(timerId);
+  }, [user]);
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 

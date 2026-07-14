@@ -161,7 +161,7 @@ export async function initDb(): Promise<void> {
       name NVARCHAR(200) NOT NULL,
       barcode NVARCHAR(100) NULL,
       category NVARCHAR(100) NULL,
-      fulfillment_type NVARCHAR(20) NOT NULL DEFAULT 'stocked',
+      fulfillment_type NVARCHAR(20) NOT NULL DEFAULT 'on_demand',
       unit NVARCHAR(50) NULL,
       purchase_price DECIMAL(18,2) NOT NULL DEFAULT 0,
       sale_price DECIMAL(18,2) NOT NULL DEFAULT 0,
@@ -382,6 +382,7 @@ export async function initDb(): Promise<void> {
     company_email NVARCHAR(255) NOT NULL,
     tax_rate DECIMAL(18,2) NOT NULL DEFAULT 0,
     currency NVARCHAR(50) NOT NULL DEFAULT N'ط¬ظ†ظٹظ‡',
+    baseline_capital DECIMAL(18,2) NOT NULL DEFAULT 8500000,
     invoice_prefix NVARCHAR(50) NOT NULL DEFAULT 'INV',
     invoice_footer NVARCHAR(1000)
   );
@@ -601,7 +602,19 @@ export async function initDb(): Promise<void> {
     // eslint-disable-next-line no-console
     console.error('Error auto-seeding default admin:', err);
   }
+
+  // Migrate existing products to on_demand and zero quantity (as warehouse concept is removed)
+  try {
+    await db.run("UPDATE products SET fulfillment_type = 'on_demand', quantity = 0");
+    // eslint-disable-next-line no-console
+    console.log('Successfully updated all products to on_demand/zero quantity.');
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error migrating products to on_demand:', err);
+  }
 }
+
+
 
 
 

@@ -129,4 +129,110 @@ router.get('/daily-cash', async (req, res) => {
   return res.json({ date, cashIn, cashOut, net: cashIn - cashOut });
 });
 
+
+type MetricRow = { total: number };
+
+const money = (value: unknown) => Number(Number(value || 0).toFixed(2));
+
+function buildDateFilter(column: string, startDate: string | null, endDate: string | null) {
+  const filters: string[] = [];
+  const args: string[] = [];
+  if (startDate) {
+    filters.push(`${column} >= ?`);
+    args.push(startDate);
+  }
+  if (endDate) {
+    filters.push(`${column} <= ?`);
+    args.push(endDate);
+  }
+  return { clause: filters.length ? ` AND ${filters.join(' AND ')}` : '', args };
+}
+
+function calculateMonthSpan(startDate: string | null, endDate: string | null) {
+  if (!startDate || !endDate) return 12;
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 1;
+  const inclusiveDays = Math.floor((end.getTime() - start.getTime()) / dayMs) + 1;
+  return Math.max(1, inclusiveDays / 30.44);
+}
+
+router.get('/dashboard/metrics', async (req, res) => {
+  const startDate = req.query.startDate ? String(req.query.startDate) : null;
+  const endDate = req.query.endDate ? String(req.query.endDate) : null;
+  const salesPeriod = buildDateFilter('date', startDate, endDate);
+  const joinedSalesPeriod = buildDateFilter('s.date', startDate, endDate);
+  const paymentPeriod = buildDateFilter('p.date', startDate, endDate);
+  const db = await dbPromise;
+
+  const [settings, cashIn, cashOut, inventory, customers, suppliers, subscribedCapital, capitalDeposits, capitalWithdrawals, periodSales, periodCogs, periodExpenses, allTimeSales, allTimeCogs, allTimeExpenses, realizedCash] = await Promise.all([
+    db.get<{ baseline_capital: number }>('SELECT TOP 1 baseline_capital FROM settings'),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted'"),
+    db.get<MetricRow>('SELECT COALESCE(SUM(quantity * purchase_price),0) AS total FROM products'),
+    db.get<MetricRow>("SELECT COALESCE(SUM(remaining),0) AS total FROM sales WHERE status <> 'cancelled' AND remaining > 0"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(remaining),0) AS total FROM purchases WHERE status <> 'cancelled' AND remaining > 0"),
+    db.get<MetricRow>('SELECT COALESCE(SUM(capital),0) AS total FROM shareholders'),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'capital_deposit'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'capital_withdrawal'"),
+    db.get<MetricRow>(`SELECT COALESCE(SUM(total),0) AS total FROM sales WHERE status <> 'cancelled'${salesPeriod.clause}`, ...salesPeriod.args),
+    db.get<MetricRow>(`SELECT COALESCE(SUM(si.quantity * si.unit_cost),0) AS total FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id WHERE s.status <> 'cancelled'${joinedSalesPeriod.clause}`, ...joinedSalesPeriod.args),
+    db.get<MetricRow>(`SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE 1 = 1${salesPeriod.clause}`, ...salesPeriod.args),
+    db.get<MetricRow>("SELECT COALESCE(SUM(total),0) AS total FROM sales WHERE status <> 'cancelled'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(si.quantity * si.unit_cost),0) AS total FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id WHERE s.status <> 'cancelled'"),
+    db.get<MetricRow>('SELECT COALESCE(SUM(amount),0) AS total FROM expenses'),
+    db.get<MetricRow>(`SELECT COALESCE(SUM(p.amount),0) AS total FROM payments p WHERE p.type = 'in' AND p.status = 'posted' AND (p.sale_id IS NOT NULL OR p.reference_type = 'sale' OR p.invoice_number IS NOT NULL)${paymentPeriod.clause}`, ...paymentPeriod.args),
+  ]);
+
+  const subscribedCapitalValue = money(subscribedCapital?.total);
+  const postedCapitalValue = money((capitalDeposits?.total || 0) - (capitalWithdrawals?.total || 0));
+  const baselineCapital = money(settings?.baseline_capital || 8500000);
+  const paidInCapital = subscribedCapitalValue > 0 ? subscribedCapitalValue : postedCapitalValue > 0 ? postedCapitalValue : baselineCapital;
+  const capitalSource = subscribedCapitalValue > 0 ? 'shareholders' : postedCapitalValue > 0 ? 'posted_capital_transactions' : 'system_baseline';
+  const allTimeNetProfit = money((allTimeSales?.total || 0) - (allTimeCogs?.total || 0) - (allTimeExpenses?.total || 0));
+  const retainedEarnings = allTimeNetProfit;
+  const shareholdersEquity = money(paidInCapital + retainedEarnings);
+  const cashInSafe = money((cashIn?.total || 0) - (cashOut?.total || 0));
+  const totalAssets = money(cashInSafe + (inventory?.total || 0) + (customers?.total || 0));
+  const totalLiabilities = money(suppliers?.total);
+  const totalEquity = shareholdersEquity;
+  const accountingVariance = money(totalAssets - (totalLiabilities + totalEquity));
+  const monthSpan = calculateMonthSpan(startDate, endDate);
+
+  return res.json({
+    capital: paidInCapital,
+    capitalSource,
+    baselineCapital,
+    cashInSafe,
+    inventoryValue: money(inventory?.total),
+    totalCustomersBalance: money(customers?.total),
+    totalSuppliersBalance: money(suppliers?.total),
+    retainedEarnings,
+    allTimeNetProfit,
+    shareholdersEquity,
+    totalAssets,
+    totalLiabilities,
+    totalEquity,
+    accountingVariance,
+    isBalanced: Math.abs(accountingVariance) <= 0.01,
+    trace: Math.abs(accountingVariance) <= 0.01 ? [] : [
+      { account: 'cash_in_safe', expectedDriver: 'posted payments plus shareholder cash movements', amount: cashInSafe },
+      { account: 'inventory_at_cost', expectedDriver: 'products.quantity * products.purchase_price', amount: money(inventory?.total) },
+      { account: 'receivables', expectedDriver: 'open non-cancelled sales.remaining', amount: money(customers?.total) },
+      { account: 'payables', expectedDriver: 'open non-cancelled purchases.remaining', amount: money(suppliers?.total) },
+      { account: 'paid_in_capital', expectedDriver: capitalSource, amount: paidInCapital },
+      { account: 'retained_earnings', expectedDriver: 'all-time sales - COGS - expenses', amount: retainedEarnings },
+    ],
+    periodSales: money(periodSales?.total),
+    periodCostOfGoodsSold: money(periodCogs?.total),
+    periodExpenses: money(periodExpenses?.total),
+    monthlyAverageExpenses: money((periodExpenses?.total || 0) / monthSpan),
+    expenseMonthSpan: Number(monthSpan.toFixed(4)),
+    realizedProfits: money((realizedCash?.total || 0) - (periodCogs?.total || 0) - (periodExpenses?.total || 0)),
+    deferredProfits: money((customers?.total || 0) - (periodCogs?.total || 0)),
+  });
+});
 export default router;
+
+
+

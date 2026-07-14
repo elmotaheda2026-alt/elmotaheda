@@ -25,7 +25,7 @@ const productSchema = z.object({
   name: z.string().min(1),
   barcode: z.string().optional().nullable(),
   category: z.string().default(''),
-  fulfillmentType: z.enum(['stocked', 'on_demand']).default('stocked'),
+  fulfillmentType: z.enum(['stocked', 'on_demand']).default('on_demand'),
   unit: z.string().default(''),
   purchasePrice: z.number().nonnegative(),
   salePrice: z.number().nonnegative(),

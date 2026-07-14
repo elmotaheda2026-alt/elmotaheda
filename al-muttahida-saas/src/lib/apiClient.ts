@@ -169,7 +169,17 @@ export const api = {
   listClosingPeriods: () => request<any[]>('/closing'),
   closePeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string; notes?: string }) =>
     request<{ message: string }>('/closing/close', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Dashboard Metrics
+  getDashboardMetrics: (filters: { startDate?: string; endDate?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.startDate) params.set('startDate', filters.startDate);
+    if (filters.endDate) params.set('endDate', filters.endDate);
+    const query = params.toString();
+    return request<any>(`/reports/dashboard/metrics${query ? `?${query}` : ''}`);
+  },
 };
+
 
 
 

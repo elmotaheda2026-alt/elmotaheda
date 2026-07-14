@@ -103,17 +103,27 @@ export default function CollectionStatement() {
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('all');
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
-  
   // Collapsible cards & pagination states for "due" tab
   const [expandedCustomerSaleId, setExpandedCustomerSaleId] = useState<string | null>(null);
   const [dueCurrentPage, setDueCurrentPage] = useState(1);
-  const ITEMS_PER_PAGE = 5;
+  const [pageSize, setPageSize] = useState(6);
+
+  useEffect(() => {
+    const calculatePageSize = () => {
+      const calculatedRows = Math.max(3, Math.floor((window.innerHeight - 280) / 60));
+      setPageSize(calculatedRows);
+    };
+
+    calculatePageSize();
+    window.addEventListener('resize', calculatePageSize);
+    return () => window.removeEventListener('resize', calculatePageSize);
+  }, []);
 
   // Reset pagination and expand states when filters change
   useEffect(() => {
     setDueCurrentPage(1);
     setExpandedCustomerSaleId(null);
-  }, [dueSearchTerm, dueFromDate, dueToDate, selectedSalesRepId, hideSuedCustomers]);
+  }, [dueSearchTerm, dueFromDate, dueToDate, selectedSalesRepId, hideSuedCustomers, pageSize]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const suggestions = useMemo(() => {
@@ -389,12 +399,12 @@ export default function CollectionStatement() {
     return Array.from(groupsMap.values());
   }, [dueRows]);
 
-  const totalDuePages = Math.ceil(groupedDueRows.length / ITEMS_PER_PAGE);
+  const totalDuePages = Math.ceil(groupedDueRows.length / pageSize);
 
   const paginatedGroupedDueRows = useMemo(() => {
-    const startIndex = (dueCurrentPage - 1) * ITEMS_PER_PAGE;
-    return groupedDueRows.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [groupedDueRows, dueCurrentPage]);
+    const startIndex = (dueCurrentPage - 1) * pageSize;
+    return groupedDueRows.slice(startIndex, startIndex + pageSize);
+  }, [groupedDueRows, dueCurrentPage, pageSize]);
 
   // Generate pagination list with ellipses (...)
   const getPaginatedPages = () => {
@@ -449,11 +459,18 @@ export default function CollectionStatement() {
       @media print {
         @page {
           size: A4 portrait;
-          margin: 0;
+          margin: 10mm;
+        }
+        html, body, #root, main, div, section {
+          height: auto !important;
+          min-height: 0 !important;
+          max-height: none !important;
+          overflow: visible !important;
+          position: static !important;
         }
         body {
           background: white !important;
-          padding: 10mm !important;
+          padding: 0 !important;
           margin: 0 !important;
         }
         table {
@@ -461,8 +478,12 @@ export default function CollectionStatement() {
           width: 100% !important;
           table-layout: fixed !important;
         }
+        tr {
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
         th, td {
-          padding: 4px 2px !important;
+          padding: 6px 4px !important;
           font-size: 10px !important;
           word-break: break-all !important;
         }
@@ -471,358 +492,403 @@ export default function CollectionStatement() {
         }
       }
     `}</style>
-      <div className={`space-y-3 ${printingInvoice ? 'print:hidden' : ''}`}>
-        {/* TABS SECTION - Flush to top */}
-        <div className="flex gap-1 border-b border-slate-200 pb-[1px] print:hidden">
-          <button
-            onClick={() => setActiveTab('due')}
-            className={`flex items-center gap-1.5 px-4 py-2 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'due' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
-              }`}
-          >
-            <LayoutList size={16} />
-            العملاء المستحقون (فترة)
-          </button>
-          <button
-            onClick={() => setActiveTab('invoices')}
-            className={`flex items-center gap-1.5 px-4 py-2 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'invoices' ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
-              }`}
-          >
-            <FileText size={16} />
-            سجل فواتير العملاء
-          </button>
-          <button
-            onClick={() => setActiveTab('legal')}
-            className={`flex items-center gap-1.5 px-4 py-2 font-semibold text-sm rounded-t-xl transition-colors ${activeTab === 'legal' ? 'bg-red-50 text-red-700 border-b-2 border-red-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border-b-2 border-transparent'
-              }`}
-          >
-            <Gavel size={16} />
-            الشئون القانونية (النزاعات)
-          </button>
-        </div>
+      <div className={`flex flex-col h-[calc(100vh-110px)] overflow-hidden print:h-auto print:overflow-visible ${printingInvoice ? 'print:hidden' : ''}`}>
+        {/* Header/Tabs & Filters Bar */}
+        <div className="bg-white border-b border-slate-200 px-5 py-3 space-y-3 shrink-0 print:hidden">
+          {/* Segmented Control Tabs */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
+            <div className="flex bg-slate-100 p-1 rounded-xl w-fit">
+              <button
+                type="button"
+                onClick={() => setActiveTab('due')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === 'due'
+                    ? 'bg-white text-sky-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <LayoutList size={14} />
+                العملاء المستحقون (فترة)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('invoices')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === 'invoices'
+                    ? 'bg-white text-sky-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <FileText size={14} />
+                سجل فواتير العملاء
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('legal')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === 'legal'
+                    ? 'bg-white text-red-700 shadow-sm'
+                    : 'text-slate-500 hover:text-red-600'
+                }`}
+              >
+                <Gavel size={14} />
+                الشئون القانونية (النزاعات)
+              </button>
+            </div>
+            {/* Context/Page Title in Arabic */}
+            <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
+              <span>مديرية تحصيل الحسابات</span>
+              <span className="h-4 w-px bg-slate-200"></span>
+              <span className="text-xs text-slate-500 font-medium">إدارة الفواتير والتحصيل</span>
+            </div>
+          </div>
 
-        {/* TAB CONTENT: DUE */}
-        {activeTab === 'due' && (
-          <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {/* Compact Inline Filters */}
-            <div className="flex flex-wrap items-center gap-2 print:hidden">
-              <div className="relative flex-1 min-w-[180px]">
+          {/* Render filters inside this card based on activeTab */}
+          {activeTab === 'due' && (
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              {/* Centered/Prominent Search Bar */}
+              <div className="relative flex-1 max-w-md min-w-[240px]">
                 <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   value={dueSearchTerm}
                   onChange={(e) => setDueSearchTerm(e.target.value)}
-                  className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400"
-                  placeholder="بحث بالاسم أو رقم الفاتورة..."
+                  className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400 shadow-sm"
+                  placeholder="بحث باسم العميل أو رقم الفاتورة..."
                 />
               </div>
-              <DatePicker value={dueFromDate} onChange={setDueFromDate} className="h-9 w-[130px] rounded-xl border-slate-200 px-3 text-sm font-semibold" />
-              <DatePicker value={dueToDate} onChange={setDueToDate} className="h-9 w-[130px] rounded-xl border-slate-200 px-3 text-sm font-semibold" />
-              <select
-                value={selectedSalesRepId}
-                onChange={(e) => setSelectedSalesRepId(e.target.value)}
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 font-semibold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[120px]"
-              >
-                <option value="all">كل المناديب</option>
-                {salesReps.map((rep) => (
-                  <option key={rep.id} value={rep.id}>
-                    {rep.name}
-                  </option>
-                ))}
-              </select>
-              <label className="flex items-center gap-1.5 cursor-pointer text-red-600 bg-red-50 px-3 h-9 rounded-xl border border-red-100 hover:bg-red-100 transition-colors text-xs font-bold whitespace-nowrap">
-                <input
-                  type="checkbox"
-                  checked={hideSuedCustomers}
-                  onChange={(e) => setHideSuedCustomers(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded text-red-600 accent-red-600"
-                />
-                إخفاء القضايا
-              </label>
-              <button onClick={() => window.print()} className="h-9 px-4 bg-slate-800 text-white rounded-xl hover:bg-slate-900 flex items-center gap-1.5 font-bold text-xs shadow-sm transition-all whitespace-nowrap">
-                <Printer size={14} />
-                طباعة
-              </button>
-            </div>
 
+              {/* Filters group */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-slate-400 font-bold ml-1">الفترة من:</span>
+                  <DatePicker value={dueFromDate} onChange={setDueFromDate} className="h-9 w-[125px] rounded-xl border-slate-200 text-xs font-bold" />
+                  <span className="text-[11px] text-slate-400 font-bold mx-1">إلى:</span>
+                  <DatePicker value={dueToDate} onChange={setDueToDate} className="h-9 w-[125px] rounded-xl border-slate-200 text-xs font-bold" />
+                </div>
+                <select
+                  value={selectedSalesRepId}
+                  onChange={(e) => setSelectedSalesRepId(e.target.value)}
+                  className="h-9 rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-700 font-bold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[110px] shadow-sm"
+                >
+                  <option value="all">كل المناديب</option>
+                  {salesReps.map((rep) => (
+                    <option key={rep.id} value={rep.id}>
+                      {rep.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setHideSuedCustomers(!hideSuedCustomers)}
+                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
+                    hideSuedCustomers
+                      ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100/70'
+                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                  }`}
+                >
+                  <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
+                  إخفاء القضايا
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="h-9 px-4 bg-sky-600 text-white rounded-xl hover:bg-sky-700 flex items-center gap-1.5 font-bold text-xs shadow-sm transition-all whitespace-nowrap"
+                >
+                  <Printer size={13} />
+                  طباعة
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'invoices' && (
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <div className="relative flex-1 max-w-md min-w-[240px]">
+                <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={invoiceSearchTerm}
+                  onChange={(e) => {
+                    setInvoiceSearchTerm(e.target.value);
+                    setShowSuggestions(true);
+                    if (e.target.value.trim() === '') {
+                      setSelectedCustomerId('all');
+                    }
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                  className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400 shadow-sm"
+                  placeholder="ابحث عن العميل بالاسم أو رقم الفاتورة..."
+                />
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100 text-right">
+                    {suggestions.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCustomerId(c.id);
+                          setInvoiceSearchTerm(c.name);
+                          setShowSuggestions(false);
+                        }}
+                        className="w-full text-right px-4 py-2 text-xs text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-bold transition-colors"
+                      >
+                        <span>{c.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2 mr-auto">
+                <button
+                  type="button"
+                  onClick={() => setHideSuedCustomers(!hideSuedCustomers)}
+                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
+                    hideSuedCustomers
+                      ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100/70'
+                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                  }`}
+                >
+                  <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
+                  إخفاء القضايا
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowOnlyDue(!showOnlyDue)}
+                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
+                    showOnlyDue
+                      ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100/70'
+                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                  }`}
+                >
+                  <FileText size={13} className={showOnlyDue ? 'text-sky-500' : 'text-slate-400'} />
+                  إظهار المتبقي فقط
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* TAB CONTENT: DUE */}
+        {activeTab === 'due' && (
+          <div className="flex-1 min-h-0 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300">
             {dueFromDate > dueToDate && (
-              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <div className="border-b border-red-200 bg-red-50 px-5 py-2.5 text-sm text-red-700 shrink-0">
                 تاريخ البداية يجب أن يكون قبل تاريخ النهاية.
               </div>
             )}
 
-{/* Accordion Cards Layout */}
-            <div className="space-y-2 print:hidden">
-              {groupedDueRows.length === 0 ? (
-                <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-500 shadow-sm">
-                  <div className="flex flex-col items-center justify-center">
-                    <CheckCircle2 size={40} className="text-slate-300 mb-3" />
-                    <p className="font-bold">لا توجد أقساط مستحقة حالياً.</p>
-                  </div>
-                </div>
-              ) : (
-                // Use paginatedGroupedDueRows on screen, but print all rows for full reports
-                paginatedGroupedDueRows.map((group, gIdx) => {
-                  const isExpanded = expandedCustomerSaleId === group[0].saleId;
-                  const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
-
-                  return (
-                    <div
-                      key={group[0].saleId}
-                      className="bg-white rounded-[24px] border border-slate-200/80 shadow-sm hover:shadow-md hover:border-sky-100 transition-all duration-300 overflow-hidden"
-                    >
-                      {/* CARD HEADER (Clickable to Expand) */}
-                      <div
-                        onClick={() => setExpandedCustomerSaleId(isExpanded ? null : group[0].saleId)}
-                        className="p-3 px-4 flex items-center justify-between gap-4 flex-wrap cursor-pointer hover:bg-slate-50/50 transition-colors select-none print:bg-slate-50/30"
-                      >
-                        <div className="flex items-center gap-4 flex-wrap print:gap-2">
-                          <div className="flex items-center gap-2">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${group[0].isSued ? 'bg-red-50 text-red-600' : 'bg-sky-50 text-sky-600'}`}>
-                              {group[0].isSued ? <Gavel size={20} /> : <User size={20} />}
-                            </div>
-                            <div className="flex flex-col">
-                              <span className={`text-lg font-black print:text-sm ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>
-                                {group[0].customerName}
-                              </span>
-                              {group[0].isSued && (
-                                <span className="text-[10px] text-red-500 font-bold flex items-center gap-0.5 print:text-[8px]">
-                                  <AlertTriangle size={10} /> محال للقضاء يمنع التعامل
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1.5 text-slate-600 border-r border-slate-100 pr-4 print:pr-2">
-                            <Phone size={14} className="text-slate-400" />
-                            <span className="text-sm font-bold text-slate-700 print:text-[10px]">{group[0].customerPhone}</span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5 text-sky-600 border-r border-slate-100 pr-4 print:pr-2">
-                            <Briefcase size={14} className="text-sky-400" />
-                            <span className="text-sm font-bold text-sky-700 print:text-[10px]">{group[0].salesRepName || '---'}</span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5 text-slate-500 border-r border-slate-100 pr-4 print:pr-2">
-                            <MapPin size={14} className="text-slate-400" />
-                            <span className="text-sm font-medium text-slate-600">{group[0].customerAddress}</span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 print:gap-1.5">
-                          <div className="flex items-center gap-1.5 font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl text-xs print:px-1.5 print:text-[9px]">
-                            <Clock3 size={14} />
-                            <span>أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 bg-red-50 px-3 py-1.5 rounded-xl border border-red-100 text-xs font-bold print:px-1.5 print:text-[9px]">
-                            <Wallet size={14} className="text-red-500" />
-                            <span className="text-red-500">المستحق:</span>
-                            <span className="text-red-700 font-black">{formatCurrency(totalRemaining)}</span>
-                          </div>
-                          <div className="text-slate-400 hover:text-slate-700 w-8 h-8 rounded-full flex items-center justify-center hover:bg-slate-100 transition-colors print:hidden">
-                            {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* COLLAPSIBLE BODY */}
-                      <div className={`${isExpanded ? 'block' : 'hidden print:block'} border-t border-slate-100 bg-slate-50/30 p-4 space-y-3`}>
-                        {/* Guarantors Section */}
-                        {group[0].guarantors.some((g) => g && g.name) && (
-                          <div className="flex items-center gap-2 text-sm text-slate-500 bg-white p-3.5 rounded-2xl border border-slate-100 shadow-2sm">
-                            <Shield size={16} className="text-amber-500 shrink-0" />
-                            <span className="font-bold text-slate-500 print:text-[10px]">الضامنين:</span>
-                            <div className="flex items-center gap-3 flex-wrap">
-                              {group[0].guarantors
-                                .filter((g) => g && g.name)
-                                .map((g, idx, arr) => (
-                                  <span key={idx} className="text-slate-700 font-semibold print:text-[10px]">
-                                    {g!.name} ({g!.phone}){idx < arr.length - 1 ? '، ' : ''}
-                                  </span>
-                                ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Installments Table */}
-                        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-                          <table className="w-full text-right text-sm">
-                            <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
-                              <tr>
-                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">القسط</th>
-                                <th className="px-4 py-3 text-right font-bold text-xs uppercase tracking-wider">تاريخ الاستحقاق</th>
-                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">قيمة القسط</th>
-                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">المتبقي</th>
-                                <th className="px-4 py-3 text-center font-bold text-xs uppercase tracking-wider">الحالة</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {group.map((row) => (
-                                <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-slate-50/50 transition-colors">
-                                  <td className="px-4 py-3 font-semibold text-slate-800">{row.installmentLabel}</td>
-                                  <td className="px-4 py-3 text-slate-600">{formatDateDisplay(row.dueDate)}</td>
-                                  <td className="px-4 py-3 text-slate-600 text-center">{formatCurrency(row.installmentAmount)}</td>
-                                  <td className="px-4 py-3 font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
-                                  <td className="px-4 py-3 text-center">
-                                    <MonthBadge status={row.status} />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Print-Only Classic Table Layout (Exactly matches the old format) */}
-            <div className="hidden print:block bg-white rounded-2xl border border-slate-200 overflow-hidden w-full">
-              <table className="w-full bg-white text-right text-sm">
-                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+            {/* Scrollable Table Body */}
+            <div className="flex-1 min-h-0 overflow-y-auto bg-white">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50/80 text-slate-600 border-b border-slate-200 font-bold sticky top-0 z-[5]">
                   <tr>
-                    <th className="px-4 py-2 text-right text-xs font-bold">القسط</th>
-                    <th className="px-4 py-2 text-right text-xs font-bold">تاريخ الاستحقاق</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold">قيمة القسط</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold">المتبقي</th>
-                    <th className="px-4 py-2 text-center text-xs font-bold">الحالة</th>
+                    <th className="px-5 py-2.5 text-right">العميل</th>
+                    <th className="px-4 py-2.5 text-right">الهاتف</th>
+                    <th className="px-4 py-2.5 text-right">المندوب</th>
+                    <th className="px-4 py-2.5 text-right">العنوان</th>
+                    <th className="px-4 py-2.5 text-center">آخر سداد</th>
+                    <th className="px-4 py-2.5 text-center">المبلغ المستحق</th>
+                    <th className="px-4 py-2.5 text-center w-[80px] print:hidden">التفاصيل</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {groupedDueRows.map((group, gIdx) => (
-                    <React.Fragment key={group[0].saleId}>
-                      {/* Group Header for Customer Info */}
-                      <tr className="bg-slate-50/80 border-t-2 border-slate-200">
-                        <td colSpan={5} className="px-4 py-2">
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center justify-between gap-4 flex-wrap">
-                              <div className="flex items-center gap-3 flex-wrap">
-                                <span className={`font-black text-sm ${group[0].isSued ? 'text-red-600 line-through' : 'text-slate-900'}`}>
-                                  {group[0].customerName}
-                                </span>
-                                <span className="text-xs text-slate-700 font-bold">هاتف: {group[0].customerPhone}</span>
-                                <span className="text-xs text-sky-700 font-bold">مندوب: {group[0].salesRepName || '---'}</span>
-                                <span className="text-xs text-slate-600 font-medium">عنوان: {group[0].customerAddress}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded">أخر سداد: {group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---'}</span>
-                                <span className="text-xs text-red-700 font-bold bg-red-50 px-2 py-0.5 rounded">المستحق: {formatCurrency(group.reduce((sum, r) => sum + r.remainingAmount, 0))}</span>
-                              </div>
-                            </div>
-                            {group[0].guarantors.some((g) => g && g.name) && (
-                              <div className="text-[11px] text-slate-500 border-t border-dashed border-slate-200 pt-1 mt-1">
-                                <span className="font-bold text-slate-600">الضامنين: </span>
-                                {group[0].guarantors
-                                  .filter((g) => g && g.name)
-                                  .map((g, idx, arr) => `${g!.name} (${g!.phone})${idx < arr.length - 1 ? '، ' : ''}`)}
-                              </div>
-                            )}
+                  <tbody className="divide-y divide-slate-100">
+                    {groupedDueRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-12 text-center text-slate-400 font-bold">
+                          <div className="flex flex-col items-center justify-center">
+                            <CheckCircle2 size={36} className="text-slate-300 mb-2" />
+                            <p>لا توجد أقساط مستحقة حالياً.</p>
                           </div>
                         </td>
                       </tr>
-                      {/* Installment Rows */}
-                      {group.map((row) => (
-                        <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="border-b border-slate-100 last:border-b-0">
-                          <td className="px-4 py-2 text-xs font-semibold text-slate-800">{row.installmentLabel}</td>
-                          <td className="px-4 py-2 text-xs text-slate-600">{formatDateDisplay(row.dueDate)}</td>
-                          <td className="px-4 py-2 text-xs text-slate-600 text-center">{formatCurrency(row.installmentAmount)}</td>
-                          <td className="px-4 py-2 text-xs font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
-                          <td className="px-4 py-2 text-center text-xs">
-                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              row.status === 'paid' ? 'bg-emerald-50 text-emerald-700' :
-                              row.status === 'partial' ? 'bg-amber-50 text-amber-700' :
-                              'bg-red-50 text-red-700'
-                            }`}>
-                              {row.status === 'paid' ? 'مدفوع' : row.status === 'partial' ? 'جزئي' : 'غير مدفوع'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </React.Fragment>
-                  ))}
+                    ) : (
+                      paginatedGroupedDueRows.map((group) => {
+                        const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+                        const isExpanded = expandedCustomerSaleId === group[0].saleId;
+                        const lastPayment = group[0].lastPaymentDate ? toISODateOnly(group[0].lastPaymentDate) : '---';
+
+                        return (
+                          <React.Fragment key={group[0].saleId}>
+                            <tr
+                              onClick={() => setExpandedCustomerSaleId(isExpanded ? null : group[0].saleId)}
+                              className="hover:bg-slate-50/75 transition-colors cursor-pointer select-none"
+                            >
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2.5">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${group[0].isSued ? 'bg-red-50 text-red-500' : 'bg-sky-50 text-sky-500'}`}>
+                                    {group[0].isSued ? <Gavel size={14} /> : <User size={14} />}
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className={`font-bold text-slate-800 text-sm ${group[0].isSued ? 'text-red-500 line-through' : ''}`}>
+                                      {group[0].customerName}
+                                    </span>
+                                    {group[0].isSued && (
+                                      <span className="text-[9px] text-red-500 font-bold flex items-center gap-0.5 mt-0.5">
+                                        <AlertTriangle size={9} /> محال للقضاء
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-slate-600 font-semibold">{group[0].customerPhone}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-1.5 text-slate-700">
+                                  <Briefcase size={13} className="text-slate-400 shrink-0" />
+                                  <span className="font-semibold">{group[0].salesRepName || '---'}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-slate-500 max-w-[220px] truncate" title={group[0].customerAddress}>
+                                <div className="flex items-center gap-1">
+                                  <MapPin size={13} className="text-slate-400 shrink-0" />
+                                  <span className="truncate">{group[0].customerAddress}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className="font-semibold text-slate-600">{lastPayment}</span>
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <span className="text-red-600 text-sm font-black">{formatCurrency(totalRemaining)}</span>
+                              </td>
+                              <td className="px-4 py-3 text-center print:hidden">
+                                <button className="text-slate-400 hover:text-slate-700 w-7 h-7 rounded-full flex items-center justify-center hover:bg-slate-100 transition-colors mx-auto">
+                                  {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                </button>
+                              </td>
+                            </tr>
+
+                            {/* Dropdown details row */}
+                            {isExpanded && (
+                              <tr className="bg-slate-50/50">
+                                <td colSpan={7} className="p-4 border-t border-slate-100">
+                                  <div className="space-y-3">
+                                    {group[0].guarantors.some((g) => g && g.name) && (
+                                      <div className="flex items-center gap-2 text-xs text-slate-500 bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                                        <Shield size={14} className="text-amber-500 shrink-0" />
+                                        <span className="font-bold text-slate-600">الضامنين:</span>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          {group[0].guarantors
+                                            .filter((g) => g && g.name)
+                                            .map((g, idx, arr) => (
+                                              <span key={idx} className="text-slate-700 font-semibold">
+                                                {g!.name} ({g!.phone}){idx < arr.length - 1 ? '، ' : ''}
+                                              </span>
+                                            ))}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm overflow-hidden">
+                                      <table className="w-full text-right text-xs">
+                                        <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                                          <tr>
+                                            <th className="px-3 py-2 text-right">القسط</th>
+                                            <th className="px-3 py-2 text-right">تاريخ الاستحقاق</th>
+                                            <th className="px-3 py-2 text-center">قيمة القسط</th>
+                                            <th className="px-3 py-2 text-center">المتبقي</th>
+                                            <th className="px-3 py-2 text-center">الحالة</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-50">
+                                          {group.map((row) => (
+                                            <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-slate-50/30 transition-colors">
+                                              <td className="px-3 py-2 font-semibold text-slate-800">{row.installmentLabel}</td>
+                                              <td className="px-3 py-2 text-slate-500">{toISODateOnly(row.dueDate)}</td>
+                                              <td className="px-3 py-2 text-slate-600 text-center">{formatCurrency(row.installmentAmount)}</td>
+                                              <td className="px-3 py-2 font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount)}</td>
+                                              <td className="px-3 py-2 text-center">
+                                                <MonthBadge status={row.status} />
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
+                    )}
                 </tbody>
               </table>
             </div>
 
-            {/* Unified Compact Footer for Pagination and Quick Metrics */}
-            <div className="bg-white border border-slate-200 p-3.5 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm print:hidden">
-              {/* Right: Quick Metrics (Total counts) */}
-              <div className="flex items-center gap-4 text-xs font-bold text-slate-600 flex-wrap">
-                <div>
-                  أقساط مستحقة: <span className="text-slate-900 text-sm font-black mx-1">{dueRows.length}</span>
+            {/* Locked Bottom Footer — rigid 3-column grid */}
+            <div className="bg-white border-t border-slate-200 px-5 py-3 shrink-0 z-10 relative select-none print:hidden">
+              <div className="grid grid-cols-3 items-center gap-4">
+                {/* Right: Statistics */}
+                <div className="flex items-center gap-3 text-xs font-bold text-slate-600">
+                  <span>أقساط مستحقة: <span className="text-slate-900 font-black">{dueRows.length}</span></span>
+                  <span className="w-px h-4 bg-slate-200"></span>
+                  <span>عملاء: <span className="text-slate-900 font-black">{groupedDueRows.length}</span></span>
+                  <span className="w-px h-4 bg-slate-200"></span>
+                  <span>الإجمالي: <span className="text-red-600 font-black">{formatCurrency(dueTotalInPeriod)}</span></span>
                 </div>
-                <div className="w-px h-4 bg-slate-200"></div>
-                <div>
-                  عملاء مستحقين: <span className="text-slate-900 text-sm font-black mx-1">{groupedDueRows.length}</span>
-                </div>
-                <div className="w-px h-4 bg-slate-200"></div>
-                <div>
-                  إجمالي مبالغ الأقساط: <span className="text-red-600 text-sm font-black mx-1">{formatCurrency(dueTotalInPeriod)}</span>
-                </div>
-              </div>
 
-              {/* Middle: Pagination Controls */}
-              {totalDuePages > 1 ? (
-                <div className="flex items-center gap-2">
-                  <nav className="inline-flex rounded-xl gap-1" aria-label="Pagination">
-                    <button
-                      disabled={dueCurrentPage === 1}
-                      onClick={() => {
-                        setDueCurrentPage((prev) => Math.max(prev - 1, 1));
-                        setExpandedCustomerSaleId(null);
-                      }}
-                      className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
-                    >
-                      السابق
-                    </button>
-                    {getPaginatedPages().map((page, idx) => {
-                      if (page === '...') {
+                {/* Center: Pagination — always centered */}
+                <div className="flex items-center justify-center">
+                  {totalDuePages > 1 ? (
+                    <nav className="inline-flex items-center gap-1" aria-label="Pagination">
+                      <button
+                        disabled={dueCurrentPage === 1}
+                        onClick={() => {
+                          setDueCurrentPage((prev) => Math.max(prev - 1, 1));
+                          setExpandedCustomerSaleId(null);
+                        }}
+                        className="h-7 px-2 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                      >
+                        السابق
+                      </button>
+                      {getPaginatedPages().map((page, idx) => {
+                        if (page === '...') {
+                          return (
+                            <span key={`dots-${idx}`} className="h-7 w-5 flex items-center justify-center text-slate-400 text-[11px] font-bold">
+                              ...
+                            </span>
+                          );
+                        }
                         return (
-                          <span key={`dots-${idx}`} className="h-8 w-6 flex items-center justify-center text-slate-400 text-xs font-bold">
-                            ...
-                          </span>
+                          <button
+                            key={`page-${page}`}
+                            onClick={() => {
+                              setDueCurrentPage(page as number);
+                              setExpandedCustomerSaleId(null);
+                            }}
+                            className={`h-7 w-7 rounded-md text-[11px] font-bold transition-all ${
+                              dueCurrentPage === page
+                                ? 'bg-sky-600 text-white'
+                                : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            {page}
+                          </button>
                         );
-                      }
-                      return (
-                        <button
-                          key={`page-${page}`}
-                          onClick={() => {
-                            setDueCurrentPage(page as number);
-                            setExpandedCustomerSaleId(null);
-                          }}
-                          className={`h-8 w-8 rounded-lg text-xs font-bold transition-all ${
-                            dueCurrentPage === page
-                              ? 'bg-sky-600 text-white shadow-sm'
-                              : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-3sm'
-                          }`}
-                        >
-                          {page}
-                        </button>
-                      );
-                    })}
-                    <button
-                      disabled={dueCurrentPage === totalDuePages}
-                      onClick={() => {
-                        setDueCurrentPage((prev) => Math.min(prev + 1, totalDuePages));
-                        setExpandedCustomerSaleId(null);
-                      }}
-                      className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all shadow-3sm"
-                    >
-                      التالي
-                    </button>
-                  </nav>
+                      })}
+                      <button
+                        disabled={dueCurrentPage === totalDuePages}
+                        onClick={() => {
+                          setDueCurrentPage((prev) => Math.min(prev + 1, totalDuePages));
+                          setExpandedCustomerSaleId(null);
+                        }}
+                        className="h-7 px-2 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                      >
+                        التالي
+                      </button>
+                    </nav>
+                  ) : (
+                    <span></span>
+                  )}
                 </div>
-              ) : (
-                <div className="w-10"></div>
-              )}
 
-              {/* Left: Current range view text */}
-              <div>
-                <p className="text-[11px] text-slate-500 font-bold whitespace-nowrap">
-                  عرض <span className="text-slate-900">{(dueCurrentPage - 1) * ITEMS_PER_PAGE + 1}</span> -{' '}
-                  <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * ITEMS_PER_PAGE)}</span> من{' '}
-                  <span className="text-slate-900">{groupedDueRows.length}</span> عميل
-                </p>
+                {/* Left: Range indicator */}
+                <div className="flex justify-end">
+                  <p className="text-[11px] text-slate-500 font-bold whitespace-nowrap">
+                    عرض <span className="text-slate-900">{(dueCurrentPage - 1) * pageSize + 1}</span> - <span className="text-slate-900">{Math.min(groupedDueRows.length, dueCurrentPage * pageSize)}</span> من <span className="text-slate-900">{groupedDueRows.length}</span> عميل
+                  </p>
+                </div>
               </div>
             </div>
           </div>

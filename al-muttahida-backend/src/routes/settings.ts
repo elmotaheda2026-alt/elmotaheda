@@ -51,6 +51,7 @@ router.get('/', async (_req, res) => {
       taxRate: Number(settings.tax_rate),
       currency: settings.currency,
       invoicePrefix: settings.invoice_prefix,
+      baselineCapital: Number(settings.baseline_capital || 8500000),
       invoiceFooter: settings.invoice_footer,
     });
   } catch (error: any) {
@@ -140,3 +141,4 @@ router.post('/clear-data', requirePermission('settings:manage'), async (req: Aut
 });
 
 export default router;
+

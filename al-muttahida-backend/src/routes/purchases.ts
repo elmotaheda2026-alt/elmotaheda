@@ -199,16 +199,7 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
         item.total,
       );
 
-      // Increase product quantity in stock
-      await db.run(
-        `UPDATE products
-         SET quantity = quantity + ?,
-             updated_at = ?
-         WHERE id = ?`,
-        item.quantity,
-        now,
-        item.productId,
-      );
+      // No warehouse/inventory quantity increase
     }
 
     // Update supplier balance (add the remaining unpaid amount to their creditor balance)
