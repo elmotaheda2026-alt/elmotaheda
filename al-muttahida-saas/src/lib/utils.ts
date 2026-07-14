@@ -6,8 +6,11 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatWholeCurrency(amount: number, currency: string): string {
+  // Ensure -0 is displayed as 0 for a cleaner UI
+  const rounded = Math.round(Number(amount || 0));
+  const normalized = Object.is(rounded, -0) ? 0 : rounded;
   return `${new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
     minimumFractionDigits: 0,
-  }).format(Math.round(Number(amount || 0)))} ${currency}`;
+  }).format(normalized)} ${currency}`;
 }

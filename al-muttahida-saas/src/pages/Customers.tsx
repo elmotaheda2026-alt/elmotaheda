@@ -255,7 +255,9 @@ export default function Customers() {
       
     if (!matchesSearch) return false;
     
-    if (filterTab === 'debtor') return c.balance > 0;
+    if (filterTab === 'debtor') {
+      return Math.round(Number(c.balance)) > 0;
+    }
     if (filterTab === 'sued') return !!c.isSued;
     
     return true;
@@ -268,7 +270,7 @@ export default function Customers() {
   // Statistics calculations
   const totalCustomersCount = customers.length;
   const suedCustomersCount = customers.filter(c => c.isSued).length;
-  const activeCustomersCount = customers.filter(c => c.balance > 0 && !c.isSued).length;
+  const activeCustomersCount = customers.filter(c => Math.round(Number(c.balance)) > 0 && !c.isSued).length;
   const totalDebtsAmount = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
 
   return (
@@ -427,8 +429,8 @@ export default function Customers() {
                       <td className="px-6 py-4 text-sm text-slate-600 font-mono">{customer.phone}</td>
                       <td className="px-6 py-4 text-sm text-slate-500 truncate max-w-[200px]">{customer.address || '—'}</td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black shadow-sm/5 border ${customer.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/50' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
-                          {formatCurrency(customer.balance)} {customer.balance > 0 ? 'مدين' : ''}
+                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black shadow-sm/5 border ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/5' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                          {formatCurrency(customer.balance)} {Math.round(Number(customer.balance)) > 0 ? 'مدين' : ''}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -522,8 +524,8 @@ export default function Customers() {
                 {/* Card Balance Badge */}
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-[10px] font-bold text-slate-400">الرصيد المالي:</span>
-                  <span className={`px-3 py-1 rounded-full text-xs font-black border ${customer.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/50' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
-                    {formatCurrency(customer.balance)} {customer.balance > 0 ? 'مدين' : ''}
+                  <span className={`px-3 py-1 rounded-full text-xs font-black border ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/5' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                    {formatCurrency(customer.balance)} {Math.round(Number(customer.balance)) > 0 ? 'مدين' : ''}
                   </span>
                 </div>
               </div>
@@ -1000,7 +1002,7 @@ export default function Customers() {
                       </div>
                       <div className="text-left">
                         <div className="text-sm font-semibold text-indigo-600">{customer.customerNumber}</div>
-                        <div className={`text-sm ${customer.balance > 0 ? 'text-red-600' : 'text-slate-500'}`}>
+                        <div className={`text-sm ${Math.round(Number(customer.balance)) > 0 ? 'text-red-600' : 'text-slate-500'}`}>
                           {formatCurrency(customer.balance)}
                         </div>
                       </div>
