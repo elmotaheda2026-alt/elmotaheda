@@ -13,7 +13,7 @@ import Invoices from './pages/Invoices';
 import Payments from './pages/Payments';
 import Expenses from './pages/Expenses';
 import Accounts from './pages/Accounts';
-import Reports from './pages/Reports';
+
 import Settings from './pages/Settings';
 import Notifications from './pages/Notifications';
 import SalesReps from './pages/SalesReps';
@@ -44,7 +44,7 @@ function AppRoutes() {
         <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
         <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
         <Route path="accounts" element={<ProtectedRoute permission="payments:read"><Accounts /></ProtectedRoute>} />
-        <Route path="reports" element={<ProtectedRoute permission="reports:read"><Reports /></ProtectedRoute>} />
+
         <Route path="settings" element={<ProtectedRoute permission="settings:manage"><Settings /></ProtectedRoute>} />
         <Route path="notifications" element={<ProtectedRoute permission="notifications:read"><Notifications /></ProtectedRoute>} />
         <Route path="sales-reps" element={<ProtectedRoute permission="sales:read"><SalesReps /></ProtectedRoute>} />

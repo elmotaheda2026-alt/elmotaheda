@@ -309,16 +309,7 @@ export default function Customers() {
           </div>
         </div>
 
-        {/* Total Debts */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-bold text-slate-500 block">إجمالي المديونيات</span>
-            <span className="text-xl font-black text-slate-900">{formatCurrency(totalDebtsAmount)}</span>
-          </div>
-          <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-600">
-            <Coins size={22} />
-          </div>
-        </div>
+
 
         {/* Sued Customers */}
         <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between">

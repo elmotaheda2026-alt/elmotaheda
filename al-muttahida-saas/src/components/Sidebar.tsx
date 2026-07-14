@@ -63,7 +63,7 @@ const menuGroups: {
     defaultOpen: false,
     items: [
       
-      { icon: BarChart3, label: 'لوحة التقارير', path: '/reports', permission: 'reports:read' },
+
       { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
       { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
       { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
