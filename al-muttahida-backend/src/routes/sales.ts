@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
@@ -205,7 +205,7 @@ function mapSchedules(schedules: ScheduleRow[]) {
   return schedules.map((sch) => ({
     id: sch.id,
     monthIndex: Number(sch.month_index),
-    label: `ط§ظ„ظ‚ط³ط· ${sch.month_index}`,
+    label: `القسط ${sch.month_index}`,
     dueDate: formatDate(sch.due_date),
     amount: Number(sch.amount),
     paidAmount: Number(sch.paid_amount),
@@ -474,7 +474,7 @@ router.get('/collection-due', requirePermission('sales:read'), async (req, res) 
       customerPhone: row.customer_phone || '-',
       customerAddress: row.customer_address || '-',
       installmentId: row.installment_id,
-      installmentLabel: `#${row.month_index}`,
+      installmentLabel: `القسط ${row.month_index}`,
       dueDate: formatDate(row.due_date),
       installmentAmount: Number(row.amount),
       remainingAmount: Math.max(Number(row.amount) - Number(row.paid_amount), 0),

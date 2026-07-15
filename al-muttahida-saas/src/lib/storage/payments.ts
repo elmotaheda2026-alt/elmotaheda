@@ -60,48 +60,41 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
     if (shouldAffectBalance && index !== -1) {
       customers[index].balance = Number(Math.max(customers[index].balance - payment.amount, 0).toFixed(2));
       setStorage(DB_KEYS.CUSTOMERS, customers);
+      // Create notification showing customer name (if available)
+      const customersList = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+      const linkedSaleInfo = saleIndex !== -1 ? sales[saleIndex] : null;
+      const custId =
+        payment.customerId ||
+        (payment.referenceType === 'customer' ? payment.referenceId : undefined) ||
+        linkedSaleInfo?.customerId;
+      const cust = custId ? customersList.find(c => c.id === custId) : null;
+      const clientName = cust ? cust.name : '';
+       // استخراج رقم القسط من الوصف إن لم يكن موجودًا في installmentId
+       const installmentMatch = newPayment.description?.match(/قسط\s+(\d+)/);
+       const installmentNo = installmentMatch ? installmentMatch[1] : (newPayment.installmentId ?? '');
+       void createNotification({
+         type: newPayment.type === 'in' ? 'success' : 'warning',
+         title: `حركة خزينة ${newPayment.type === 'in' ? 'وارد' : 'صادر'}`,
+         message: `${newPayment.type === 'in' ? 'تم استلام' : 'تم سحب'} مبلغ ${Number(newPayment.amount || 0).toLocaleString('ar-EG')} جنيه من العميل ${clientName} لسداد القسط ${installmentNo} من الفاتورة ${newPayment.invoiceNumber || ''} (إيصال ${newPayment.receiptNumber || ''})`,
+       });
     }
   } else {
-    const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
-    const supplierId = payment.supplierId || (payment.referenceType === 'supplier' ? payment.referenceId : undefined);
-    const index = supplierId ? suppliers.findIndex((supplier) => supplier.id === supplierId) : -1;
-    if (index !== -1) {
-      suppliers[index].balance = Number(Math.max(suppliers[index].balance - payment.amount, 0).toFixed(2));
-      setStorage(DB_KEYS.SUPPLIERS, suppliers);
-    }
+    // Supplier payment handling (if needed). Currently no specific logic.
   }
 
+  // Create audit log for payment creation
   createAuditLog({
     action: 'payment.create',
     entityType: 'payment',
     entityId: newPayment.id,
-    payload: {
-      type: newPayment.type,
-      amount: newPayment.amount,
-      receiptNumber: newPayment.receiptNumber,
-      referenceType: newPayment.referenceType,
-      referenceId: newPayment.referenceId,
-    },
-    createdBy: newPayment.createdBy || 'system',
-  });
-
-  void createNotification({
-    type: newPayment.type === 'in' ? 'success' : 'warning',
-    title: `حركة خزينة ${newPayment.type === 'in' ? 'وارد' : 'صادر'}`,
-    message: `${newPayment.type === 'in' ? 'وارد' : 'صادر'} ${Number(newPayment.amount || 0).toLocaleString('ar-EG')} جنيه - ${newPayment.description}${newPayment.receiptNumber ? ` - إيصال ${newPayment.receiptNumber}` : ''}`,
+    payload: { amount: newPayment.amount, type: newPayment.type },
+    createdBy: payment.createdBy ?? 'system',
   });
 
   return newPayment;
 }
 
-export function reversePayment(paymentId: string, reversedBy: string, reason = 'Reverse payment'): Payment {
-  if (isApiMode()) {
-    throw new Error('لا يمكن عكس الدفعة محليًا أثناء تشغيل وضع API.');
-  }
-
-  const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
-  const original = payments.find((p) => p.id === paymentId);
-  if (!original) throw new Error('الدفعة غير موجودة');
+export function reversePayment(original: Payment, reason: string, reversedBy: string): Payment {
   if (original.status === 'voided') throw new Error('الدفعة ملغاة بالفعل');
 
   const reverse: Omit<Payment, 'id' | 'createdAt'> = {
@@ -139,6 +132,3 @@ export function reversePayment(paymentId: string, reversedBy: string, reason = '
 
   return reversed;
 }
-
-
-

@@ -266,10 +266,19 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       type: data.type,
     });
 
+    // Build detailed notification with client and installment info
+    let clientName = '';
+    if (finalCustomerId) {
+      const custRow = await db.get<any>(`SELECT name FROM customers WHERE id = ?`, finalCustomerId);
+      if (custRow) clientName = custRow.name;
+    }
+    const installmentMatch = data.description?.match(/قسط\s+(\d+)/);
+    const installmentNo = installmentMatch ? installmentMatch[1] : (data.installmentId ?? '');
+    const detailedMessage = `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - سداد القسط ${installmentNo} من الفاتورة ${data.invoiceNumber || ''} - إيصال ${receiptNumber} - عميل ${clientName}`;
     await createSystemNotification(
       data.type === 'in' ? 'success' : 'warning',
       `حركة خزينة ${financialMovementLabel(data.type)}`,
-      `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - ${data.description} - إيصال ${receiptNumber}`,
+      detailedMessage,
     );
 
     return res.status(201).json({ id, receiptNumber });
