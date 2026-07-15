@@ -3,7 +3,8 @@ import { DB_KEYS, getStorage, setStorage, generateId } from './core';
 import { api, isApiMode } from '../apiClient';
 
 export function getNotifications(): Notification[] {
-  return getStorage<Notification>(DB_KEYS.NOTIFICATIONS);
+  const notifications = getStorage<Notification>(DB_KEYS.NOTIFICATIONS);
+  return [...notifications].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 export async function syncNotifications(): Promise<void> {

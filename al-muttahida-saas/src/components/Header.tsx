@@ -15,6 +15,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
   const [notifications, setNotifications] = useState(() => getNotifications().slice(0, 5));
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
   const roleLabel =
@@ -40,7 +41,9 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
       } catch (error) {
         console.error('Failed to sync notifications:', error);
       }
-      if (active) setNotifications(getNotifications().slice(0, 5));
+      if (active && !showNotifications) {
+        setNotifications(getNotifications().slice(0, 5));
+      }
     };
 
     loadNotifications();
@@ -49,12 +52,15 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [showNotifications]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setShowUserMenu(false);
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
       }
     };
 
@@ -94,7 +100,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
             </button>
 
             {showNotifications && (
-              <div className="absolute left-0 top-full z-50 mt-2 w-80 rounded-2xl border border-slate-200 bg-white shadow-xl">
+               <div ref={notificationsRef} className="absolute left-0 top-full z-50 mt-2 w-80 rounded-2xl border border-slate-200 bg-white shadow-xl">
                 <div className="border-b border-slate-100 p-4">
                   <h3 className="font-bold text-slate-800">الإشعارات</h3>
                 </div>
