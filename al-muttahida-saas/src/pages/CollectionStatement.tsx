@@ -450,7 +450,7 @@ export default function CollectionStatement() {
 
   const handlePrint = (invoice: CollectionInvoiceView) => {
     setPrintingInvoice(invoice);
-    setTimeout(() => window.print(), 100);
+    setTimeout(() => window.print(), 150);
   };
 
   return (
@@ -487,12 +487,16 @@ export default function CollectionStatement() {
           font-size: 10px !important;
           word-break: break-all !important;
         }
-        .print\\:hidden {
+        .print\:hidden {
           display: none !important;
+        }
+        .invoice-page {
+          break-after: page !important;
+          page-break-after: always !important;
         }
       }
     `}</style>
-      <div className={`flex flex-col h-[calc(100vh-110px)] overflow-hidden print:h-auto print:overflow-visible ${printingInvoice ? 'print:hidden' : ''}`}>
+      <div className="flex flex-col h-[calc(100vh-110px)] overflow-hidden print:h-auto print:overflow-visible">
         {/* Header/Tabs & Filters Bar */}
         <div className="bg-white border-b border-slate-200 px-5 py-3 space-y-3 shrink-0 print:hidden">
           {/* Segmented Control Tabs */}
@@ -1204,8 +1208,116 @@ export default function CollectionStatement() {
       </div>
 
       {/* PRINTABLE INVOICE STATEMENT */}
-      {printingInvoice && (
-        <PrintableView invoice={printingInvoice} settings={settings} />
+      {printingInvoice ? (
+        <div className="invoice-page">
+          <PrintableView invoice={printingInvoice} settings={settings} />
+        </div>
+      ) : (
+        /* PRINTABLE ALL DUE CUSTOMERS (MULTIPLE PAGES) */
+        <div className="hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
+          <style>{`
+            @page {
+              size: auto;
+              margin: 10mm;
+            }
+            @media print {
+              body {
+                margin: 0;
+                padding: 0;
+                background: #fff;
+              }
+              .due-print-page {
+                break-inside: avoid !important;
+                page-break-inside: avoid !important;
+                width: 100% !important;
+                margin: 0 0 25px 0 !important;
+                padding: 0 0 15px 0 !important;
+                border-b: 1px dashed #cbd5e1;
+              }
+              .due-print-page:last-child {
+                border-b: none !important;
+                margin-bottom: 0 !important;
+              }
+            }
+          `}</style>
+          
+          {/* Header of the full report */}
+          <div className="flex justify-between items-start border-b-2 border-slate-800 pb-4 mb-6">
+            <div>
+              <h1 className="text-4xl font-black text-slate-900 mb-1">{settings.companyName}</h1>
+              <p className="text-slate-600 text-sm">{settings.companyAddress}</p>
+              <p className="text-slate-600 font-bold text-sm">{settings.companyPhone}</p>
+            </div>
+            <div className="text-left">
+              <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">كشف التحصيل الإجمالي</h2>
+              <p className="text-slate-600 font-bold text-sm">تاريخ التقرير: {formatDateDisplay(new Date())}</p>
+              <p className="text-slate-600 font-bold text-sm">الفترة: من {formatDateDisplay(dueFromDate)} إلى {formatDateDisplay(dueToDate)}</p>
+            </div>
+          </div>
+
+          {groupedDueRows.length === 0 ? (
+            <div className="p-12 text-center text-slate-500">لا توجد أقساط مستحقة حالياً.</div>
+          ) : (
+            groupedDueRows.map((group, idx) => {
+              const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+              return (
+                <div key={idx} className="due-print-page">
+                  {/* Customer Header */}
+                  <div className="flex justify-between items-center bg-slate-100 p-3 rounded-lg mb-3">
+                    <div>
+                      <h3 className="font-bold text-base text-slate-800">اسم العميل: {group[0].customerName}</h3>
+                      <p className="text-xs text-slate-600 mt-1">الهاتف: {group[0].customerPhone} | العنوان: {group[0].customerAddress}</p>
+                    </div>
+                    <div className="text-left">
+                      <span className="text-xs font-bold text-slate-500">المندوب: {group[0].salesRepName || '---'}</span>
+                      <p className="text-sm font-black text-red-700 mt-0.5">المستحق الحالي: {formatCurrency(totalRemaining)}</p>
+                    </div>
+                  </div>
+
+                  {/* Installments Table */}
+                  <table className="w-full text-right border-collapse border border-slate-300 text-xs mb-4">
+                    <thead>
+                      <tr className="bg-slate-200">
+                        <th className="border border-slate-300 px-2 py-1.5 font-bold">القسط</th>
+                        <th className="border border-slate-300 px-2 py-1.5 font-bold">تاريخ الاستحقاق</th>
+                        <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المبلغ المستحق</th>
+                        <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المتبقي</th>
+                        <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الحالة</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.map((row, rIdx) => (
+                        <tr key={rIdx} className="even:bg-slate-50">
+                          <td className="border border-slate-300 px-2 py-1.5 font-semibold">{row.installmentLabel}</td>
+                          <td className="border border-slate-300 px-2 py-1.5">{formatDateDisplay(row.dueDate)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center">{formatCurrency(row.installmentAmount)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center text-red-700 font-bold">{formatCurrency(row.remainingAmount)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center font-bold">
+                            {row.status === 'paid' ? 'مدفوع' : row.status === 'partial' ? 'جزئي' : 'غير مدفوع'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })
+          )}
+
+          {/* Overall Report Footer */}
+          <div className="mt-8 pt-4 border-t-2 border-slate-800 flex justify-between items-center text-sm font-bold">
+            <div>
+              <p>عدد العملاء المستحقين: <span className="text-slate-900">{groupedDueRows.length}</span></p>
+              <p className="mt-1">إجمالي المبالغ المستحقة بالخارج: <span className="text-red-700">{formatCurrency(dueTotalInPeriod)}</span></p>
+            </div>
+            {settings.invoiceFooter && (
+              <div className="text-left text-xs text-slate-500">
+                <p>{settings.invoiceFooter}</p>
+                <p className="mt-1">تم الاستخراج من نظام {settings.companyName}</p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </>
   );
