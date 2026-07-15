@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-react';
 import { User, UserPermissions } from '../types';
-import { getUsers, createUser, updateUser, deleteUser } from '../lib/storage';
+import { getUsers, createUser, updateUser, deleteUser, syncUsers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
 
@@ -11,6 +11,7 @@ export default function Users() {
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
   const defaultPermissions: UserPermissions = {
     'dashboard:view': true,
     'sales:read': false,
@@ -44,21 +45,32 @@ export default function Users() {
   }, []);
 
   const loadUsers = async () => {
+    try {
+      await syncUsers();
+    } catch (err) {
+      console.error('Failed to sync users:', err);
+    }
     const data = await getUsers();
     setUsers(data);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingUser) {
-      await updateUser(editingUser.id, formData);
-    } else {
-      await createUser({ ...formData });
+    setErrorMsg('');
+    try {
+      if (editingUser) {
+        await updateUser(editingUser.id, formData);
+      } else {
+        await createUser({ ...formData });
+      }
+      await loadUsers();
+      setShowModal(false);
+      setEditingUser(null);
+      resetForm();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'حدث خطأ أثناء حفظ المستخدم. تأكد من إدخال البيانات بشكل صحيح.');
     }
-    await loadUsers();
-    setShowModal(false);
-    setEditingUser(null);
-    resetForm();
   };
 
   const handleEdit = (user: User) => {
@@ -88,6 +100,7 @@ export default function Users() {
   };
 
   const resetForm = () => {
+    setErrorMsg('');
     setFormData({
       name: '',
       username: '',
@@ -221,6 +234,11 @@ export default function Users() {
             </div>
             <form onSubmit={handleSubmit} className="flex flex-col overflow-hidden">
               <div className="p-6 space-y-4 overflow-y-auto">
+                {errorMsg && (
+                  <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm text-center">
+                    {errorMsg}
+                  </div>
+                )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">الاسم</label>
                 <input

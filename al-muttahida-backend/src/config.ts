@@ -24,12 +24,17 @@ export const config = {
     },
     // Connection pool settings to prevent deadlocks and pool exhaustion
     pool: {
-      max: 10,
-      min: 1,
-      idleTimeoutMillis: 30000,
-      acquireTimeoutMillis: 30000,
+      max: 15,
+      min: 4, // Keep 4 connections alive at all times to prevent cold start latency
+      idleTimeoutMillis: 60000, // Increase idle timeout to 60 seconds
+      acquireTimeoutMillis: 15000,
     },
-    connectionTimeout: 30000,
+    connectionTimeout: 15000,
     requestTimeout: 30000,
+    // Add extra options for connection reliability
+    connectionOptions: {
+      keepAlive: true,
+      keepAliveInitialDelay: 10000
+    }
   },
 };

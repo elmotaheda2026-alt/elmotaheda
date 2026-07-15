@@ -34,6 +34,7 @@ interface DueCustomerRow {
   customerName: string;
   customerPhone: string;
   customerAddress: string;
+  customerNumber: string;
   installmentLabel: string;
   dueDate: string;
   installmentAmount: number;
@@ -355,6 +356,7 @@ export default function CollectionStatement() {
           customerName: row.customerName,
           customerPhone: row.customerPhone,
           customerAddress: row.customerAddress,
+          customerNumber: customerMap.get(row.customerId)?.customerNumber || '',
           installmentLabel: schedule.label,
           dueDate: toISODateOnly(schedule.dueDate),
           installmentAmount: schedule.amount,
@@ -675,7 +677,7 @@ export default function CollectionStatement() {
 
         {/* TAB CONTENT: DUE */}
         {activeTab === 'due' && (
-          <div className="flex-1 min-h-0 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex-1 min-h-0 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
             {dueFromDate > dueToDate && (
               <div className="border-b border-red-200 bg-red-50 px-5 py-2.5 text-sm text-red-700 shrink-0">
                 تاريخ البداية يجب أن يكون قبل تاريخ النهاية.
@@ -900,7 +902,7 @@ export default function CollectionStatement() {
 
         {/* TAB CONTENT: INVOICES */}
         {activeTab === 'invoices' && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
             {/* Toolbar for Invoices */}
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
               <div className="relative w-full md:w-80">
@@ -1124,7 +1126,7 @@ export default function CollectionStatement() {
 
         {/* TAB CONTENT: LEGAL */}
         {activeTab === 'legal' && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
             <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-center justify-between print:hidden">
               <div>
                 <h3 className="text-red-800 font-bold text-lg flex items-center gap-2"><Gavel size={20} /> سجل القضايا والنزاعات القانونية</h3>
@@ -1217,8 +1219,8 @@ export default function CollectionStatement() {
         <div className="hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
           <style>{`
             @page {
-              size: auto;
-              margin: 10mm;
+              size: A4 portrait;
+              margin: 8mm;
             }
             @media print {
               body {
@@ -1226,94 +1228,194 @@ export default function CollectionStatement() {
                 padding: 0;
                 background: #fff;
               }
-              .due-print-page {
-                break-inside: avoid !important;
-                page-break-inside: avoid !important;
+              .due-print-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 5px;
                 width: 100% !important;
-                margin: 0 0 25px 0 !important;
-                padding: 0 0 15px 0 !important;
-                border-b: 1px dashed #cbd5e1;
               }
-              .due-print-page:last-child {
-                border-b: none !important;
-                margin-bottom: 0 !important;
+              .due-card {
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 9px;
+                line-height: 1.35;
+                page-break-inside: avoid;
+                break-inside: avoid;
+                background: #fff;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                gap: 2px;
+              }
+              .due-card-header {
+                border-bottom: 1.5px solid #1e293b;
+                padding-bottom: 2px;
+                margin-bottom: 2px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+              }
+              .due-card-title {
+                font-weight: 900;
+                font-size: 11px;
+                color: #000;
+              }
+              .due-card-phone {
+                font-weight: 900;
+                font-size: 9.5px;
+                color: #0f172a;
+              }
+              .due-card-highlights {
+                text-align: center;
+                background-color: #fef2f2;
+                border: 1px solid #fee2e2;
+                padding: 2.5px 4px;
+                border-radius: 3px;
+                margin-bottom: 1px;
+              }
+              .due-total-badge {
+                font-weight: 900;
+                color: #b91c1c;
+                font-size: 11px;
+              }
+              .due-card-label {
+                font-weight: bold;
+                color: #334155;
+                display: inline-block;
+                width: 45px;
+              }
+              .due-card-guarantors {
+                border-bottom: 1px dashed #cbd5e1;
+                padding-bottom: 2px;
+                margin-bottom: 1px;
+              }
+              .due-guarantor-value {
+                font-weight: 900;
+                color: #000;
+                font-size: 9.5px;
+              }
+              .due-card-text {
+                color: #475569;
+                font-size: 8.5px;
+              }
+              .due-installments-box {
+                border: 1px solid #e2e8f0;
+                background-color: #f8fafc;
+                border-radius: 3px;
+                padding: 2px 4px;
+                font-size: 8px;
+              }
+              .due-installment-item {
+                display: flex;
+                justify-content: space-between;
+                border-bottom: 1px dashed #e2e8f0;
+                padding: 1px 0;
+              }
+              .due-installment-item:last-child {
+                border-bottom: none;
+              }
+              .due-card-footer {
+                border-top: 1px solid #94a3b8;
+                padding-top: 2px;
+                margin-top: 3px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                font-size: 8px;
+                color: #475569;
               }
             }
           `}</style>
           
           {/* Header of the full report */}
-          <div className="flex justify-between items-start border-b-2 border-slate-800 pb-4 mb-6">
+          <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3 mb-4">
             <div>
-              <h1 className="text-4xl font-black text-slate-900 mb-1">{settings.companyName}</h1>
-              <p className="text-slate-600 text-sm">{settings.companyAddress}</p>
-              <p className="text-slate-600 font-bold text-sm">{settings.companyPhone}</p>
+              <h1 className="text-3xl font-black text-slate-900 mb-0.5">{settings.companyName}</h1>
+              <p className="text-slate-600 text-xs">{settings.companyAddress} | {settings.companyPhone}</p>
             </div>
             <div className="text-left">
-              <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">كشف التحصيل الإجمالي</h2>
-              <p className="text-slate-600 font-bold text-sm">تاريخ التقرير: {formatDateDisplay(new Date())}</p>
-              <p className="text-slate-600 font-bold text-sm">الفترة: من {formatDateDisplay(dueFromDate)} إلى {formatDateDisplay(dueToDate)}</p>
+              <h2 className="text-2xl font-bold text-slate-800 border-b border-slate-300 pb-0.5 mb-0.5 inline-block">كشف التحصيل والمتابعة</h2>
+              <p className="text-slate-500 font-semibold text-[10px]">من {formatDateDisplay(dueFromDate)} إلى {formatDateDisplay(dueToDate)} | تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
             </div>
           </div>
 
           {groupedDueRows.length === 0 ? (
             <div className="p-12 text-center text-slate-500">لا توجد أقساط مستحقة حالياً.</div>
           ) : (
-            groupedDueRows.map((group, idx) => {
-              const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
-              return (
-                <div key={idx} className="due-print-page">
-                  {/* Customer Header */}
-                  <div className="flex justify-between items-center bg-slate-100 p-3 rounded-lg mb-3">
-                    <div>
-                      <h3 className="font-bold text-base text-slate-800">اسم العميل: {group[0].customerName}</h3>
-                      <p className="text-xs text-slate-600 mt-1">الهاتف: {group[0].customerPhone} | العنوان: {group[0].customerAddress}</p>
+            <div className="due-print-grid">
+              {groupedDueRows.map((group, idx) => {
+                const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+                const firstRow = group[0];
+                const activeGuarantors = firstRow.guarantors.filter(g => g && g.name);
+                const lastPayment = firstRow.lastPaymentDate ? formatDateDisplay(firstRow.lastPaymentDate) : 'لا يوجد سداد سابق';
+
+                return (
+                  <div key={idx} className="due-card">
+                    {/* Header: Customer Name and Phone */}
+                    <div className="due-card-header">
+                      <span className="due-card-title">{firstRow.customerName}</span>
+                      <span className="due-card-phone">{firstRow.customerPhone}</span>
                     </div>
-                    <div className="text-left">
-                      <span className="text-xs font-bold text-slate-500">المندوب: {group[0].salesRepName || '---'}</span>
-                      <p className="text-sm font-black text-red-700 mt-0.5">المستحق الحالي: {formatCurrency(totalRemaining)}</p>
+
+                    <div className="due-card-body">
+                      {/* Highlighted Box: Amount */}
+                      <div className="due-card-highlights">
+                        <span className="due-total-badge">المبلغ المستحق: {formatCurrency(totalRemaining)}</span>
+                      </div>
+                      
+                      {/* Prominent Guarantors */}
+                      {activeGuarantors.length > 0 && (
+                        <div className="due-card-guarantors">
+                          <span className="due-card-label">الضامن:</span>
+                          <span className="due-guarantor-value">
+                            {activeGuarantors.map((g, gIdx) => (
+                              <span key={gIdx} className="block">
+                                {g!.name} ({g!.phone})
+                              </span>
+                            ))}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Smaller Secondary Info: Address */}
+                      <div className="due-card-text">
+                        <span className="due-card-label">العنوان:</span>
+                        <span>{firstRow.customerAddress}</span>
+                      </div>
+
+                      {/* Small Compact Installments box */}
+                      <div className="due-installments-box">
+                        {group.map((row, rIdx) => (
+                          <div key={rIdx} className="due-installment-item">
+                            <span>{row.installmentLabel} ({formatDateDisplay(row.dueDate)})</span>
+                            <span className="font-bold">{formatCurrency(row.remainingAmount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Footer: Last Payment and Sales Rep */}
+                    <div className="due-card-footer">
+                      <span>آخر سداد: {lastPayment}</span>
+                      <span>المندوب: {firstRow.salesRepName || '---'}</span>
                     </div>
                   </div>
-
-                  {/* Installments Table */}
-                  <table className="w-full text-right border-collapse border border-slate-300 text-xs mb-4">
-                    <thead>
-                      <tr className="bg-slate-200">
-                        <th className="border border-slate-300 px-2 py-1.5 font-bold">القسط</th>
-                        <th className="border border-slate-300 px-2 py-1.5 font-bold">تاريخ الاستحقاق</th>
-                        <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المبلغ المستحق</th>
-                        <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المتبقي</th>
-                        <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الحالة</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.map((row, rIdx) => (
-                        <tr key={rIdx} className="even:bg-slate-50">
-                          <td className="border border-slate-300 px-2 py-1.5 font-semibold">{row.installmentLabel}</td>
-                          <td className="border border-slate-300 px-2 py-1.5">{formatDateDisplay(row.dueDate)}</td>
-                          <td className="border border-slate-300 px-2 py-1.5 text-center">{formatCurrency(row.installmentAmount)}</td>
-                          <td className="border border-slate-300 px-2 py-1.5 text-center text-red-700 font-bold">{formatCurrency(row.remainingAmount)}</td>
-                          <td className="border border-slate-300 px-2 py-1.5 text-center font-bold">
-                            {row.status === 'paid' ? 'مدفوع' : row.status === 'partial' ? 'جزئي' : 'غير مدفوع'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
 
           {/* Overall Report Footer */}
-          <div className="mt-8 pt-4 border-t-2 border-slate-800 flex justify-between items-center text-sm font-bold">
+          <div className="mt-6 pt-3 border-t border-slate-400 flex justify-between items-center text-xs font-bold">
             <div>
-              <p>عدد العملاء المستحقين: <span className="text-slate-900">{groupedDueRows.length}</span></p>
-              <p className="mt-1">إجمالي المبالغ المستحقة بالخارج: <span className="text-red-700">{formatCurrency(dueTotalInPeriod)}</span></p>
+              <p>عدد العملاء المستحقين: <span className="text-slate-900 font-black">{groupedDueRows.length} عميل</span></p>
+              <p className="mt-0.5">إجمالي المبالغ المطلوبة: <span className="text-red-700 font-black text-sm">{formatCurrency(dueTotalInPeriod)}</span></p>
             </div>
             {settings.invoiceFooter && (
-              <div className="text-left text-xs text-slate-500">
+              <div className="text-left text-[10px] text-slate-500 font-normal">
                 <p>{settings.invoiceFooter}</p>
-                <p className="mt-1">تم الاستخراج من نظام {settings.companyName}</p>
+                <p className="mt-0.5">تم الاستخراج من نظام {settings.companyName}</p>
               </div>
             )}
           </div>

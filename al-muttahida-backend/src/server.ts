@@ -72,9 +72,10 @@ async function bootstrap() {
   // Central error handling
   app.use(errorHandler);
 
-  app.listen(config.port, () => {
+  app.listen(config.port, '0.0.0.0', () => {
     // eslint-disable-next-line no-console
-    console.log(`Backend listening on http://localhost:${config.port}`);
+    console.log(`Backend listening on http://0.0.0.0:${config.port}`);
+    console.log(`Network access: http://192.168.1.6:${config.port}`);
   });
 }
 
