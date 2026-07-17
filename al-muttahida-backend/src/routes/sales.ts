@@ -345,11 +345,13 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     const customerId = typeof req.query.customerId === 'string' ? req.query.customerId.trim() : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
 
-    // Pagination parameters
-    const page = Math.max(1, Number(req.query.page || 1));
-    const requestedLimit = Number(req.query.limit || 20);
-    const limit = Math.min(Math.max(1, requestedLimit), 50); // Hard maximum ceiling of 50 rows
-    const offset = (page - 1) * limit;
+    // Pagination parameters - explicitly active only if page/limit exists in query
+    const pagination = (req.query.page || req.query.limit)
+      ? {
+          page: Math.max(1, Number(req.query.page || 1)),
+          limit: Math.min(Math.max(1, Number(req.query.limit || 20)), 50)
+        }
+      : undefined;
 
     const whereParts: string[] = [];
     const args: any[] = [];
@@ -366,9 +368,6 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
 
     const where = whereParts.length ? ` WHERE ${whereParts.join(' AND ')}` : '';
 
-    // Offset parameters appended to the query args list
-    args.push(offset, limit);
-
     const query = `
       SELECT s.*,
              COUNT(*) OVER() AS total_count_metadata,
@@ -377,10 +376,13 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
       FROM sales s
       ${where}
       ORDER BY s.created_at DESC
-      OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
     `;
 
-    const rows = await db.all<SaleRow & { schedules_json?: string; items_json?: string; total_count_metadata?: number }>(query, ...args);
+    const rows = await db.all<SaleRow & { schedules_json?: string; items_json?: string; total_count_metadata?: number }>(
+      query,
+      args,
+      pagination
+    );
 
     const total = rows.length > 0 ? (rows[0].total_count_metadata || 0) : 0;
 
@@ -392,8 +394,8 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
 
     return res.json({
       total,
-      page,
-      limit,
+      page: pagination?.page || 1,
+      limit: pagination?.limit || total || 50,
       sales
     });
   } catch (error: any) {

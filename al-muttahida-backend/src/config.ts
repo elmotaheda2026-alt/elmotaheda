@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export const config = {
-  port: Number(process.env.PORT || 4000),
+  port: Number(process.env.PORT || 4001),
   // Ensure a strong JWT secret is provided via env var
   jwtSecret: (() => {
     const secret = process.env.JWT_SECRET;
@@ -30,7 +30,7 @@ export const config = {
       acquireTimeoutMillis: 15000,
     },
     connectionTimeout: 15000,
-    requestTimeout: 5000, // Query timeout cap at 5 seconds
+    requestTimeout: 15000, // Query timeout cap at 15 seconds
     // Add extra options for connection reliability
     connectionOptions: {
       keepAlive: true,

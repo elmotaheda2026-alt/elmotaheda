@@ -33,10 +33,10 @@ export const dbPromise = (async () => {
       return await queryFn();
     } catch (error: any) {
       const elapsed = Date.now() - startTime;
-      const isTimeout = error.message?.toLowerCase().includes('timeout') || elapsed >= 5000;
+      const isTimeout = error.message?.toLowerCase().includes('timeout') || elapsed >= config.sql.requestTimeout;
       if (isTimeout) {
         await triggerCriticalAlert(
-          `Database query timed out after ${elapsed}ms (Limit: 5000ms)`,
+          `Database query timed out after ${elapsed}ms (Limit: ${config.sql.requestTimeout}ms)`,
           sqlText,
           params
         );
@@ -44,6 +44,8 @@ export const dbPromise = (async () => {
       throw error;
     }
   }
+
+
 
   function prepareRequest(query: string, params: any[], request?: any) {
     const req = request || pool.request();
@@ -62,22 +64,68 @@ export const dbPromise = (async () => {
     return { request: req, preparedQuery };
   }
 
+  function extractPaginationAndPrepare(query: string, params: any[], pagination?: { page?: number; limit?: number }, request?: any) {
+    let finalPagination = pagination;
+    const cleanParams = [...params];
+
+    // Detect pagination passed as the last param object (legacy pattern)
+    if (!finalPagination && cleanParams.length) {
+      const lastParam = cleanParams[cleanParams.length - 1];
+      if (lastParam && typeof lastParam === 'object' && ('page' in lastParam || 'limit' in lastParam)) {
+        finalPagination = cleanParams.pop();
+      }
+    }
+
+    let finalQuery = query.trim();
+
+    // Ensure we have a pagination object to avoid reading properties of undefined
+    finalPagination = finalPagination || { page: 1, limit: 20 };
+
+      const limit = Math.min(Number(finalPagination.limit) || 20, 50); // Hard ceiling guardrail of 50
+      const offset = ((Number(finalPagination.page) || 1) - 1) * limit;
+
+      // Ensure an ORDER BY clause exists for deterministic pagination
+      let orderByStr = '';
+      if (!finalQuery.toUpperCase().includes('ORDER BY')) {
+        if (finalQuery.toUpperCase().includes('FROM SALES')) {
+          orderByStr = ' ORDER BY created_at DESC';
+        } else {
+          orderByStr = ' ORDER BY (SELECT NULL)';
+        }
+      }
+
+      const paginationTokens = `${orderByStr} OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
+
+      // Insert pagination before FOR JSON PATH if present, handling trailing whitespace/content
+      const forJsonRegex = /FOR\s+JSON\s+PATH\s*$/i;
+      if (forJsonRegex.test(finalQuery)) {
+        finalQuery = finalQuery.replace(forJsonRegex, `${paginationTokens} FOR JSON PATH`);
+      } else {
+        finalQuery = `${finalQuery} ${paginationTokens}`;
+      }
+    
+
+    const { request: req, preparedQuery } = prepareRequest(finalQuery, cleanParams, request);
+    return { request: req, preparedQuery, cleanParams, finalQuery };
+  }
   return {
     /** Execute a query that returns multiple rows. */
-    async all<T = any>(query: string, ...params: any[]): Promise<T[]> {
-      const { request, preparedQuery } = prepareRequest(query, params);
+    async all<T = any>(query: string, params: any[] = [], pagination?: { page?: number; limit?: number }): Promise<T[]> {
+      const actualParams = Array.isArray(params) ? params : [params];
+      const { request, preparedQuery, cleanParams, finalQuery } = extractPaginationAndPrepare(query, actualParams, pagination);
       return await executeQueryWithMonitoring(async () => {
         const result = await request.query(preparedQuery);
         return result.recordset as T[];
-      }, query, params);
+      }, finalQuery, cleanParams);
     },
     /** Execute a query that returns a single row. */
-    async get<T = any>(query: string, ...params: any[]): Promise<T | undefined> {
-      const { request, preparedQuery } = prepareRequest(query, params);
+    async get<T = any>(query: string, params: any[] = [], pagination?: { page?: number; limit?: number }): Promise<T | undefined> {
+      const actualParams = Array.isArray(params) ? params : [params];
+      const { request, preparedQuery, cleanParams, finalQuery } = extractPaginationAndPrepare(query, actualParams, pagination);
       return await executeQueryWithMonitoring(async () => {
         const result = await request.query(preparedQuery);
         return result.recordset[0] as T | undefined;
-      }, query, params);
+      }, finalQuery, cleanParams);
     },
     /** Execute a non‐select statement (INSERT/UPDATE/DELETE). */
     async run(query: string, ...params: any[]) {
@@ -94,13 +142,15 @@ export const dbPromise = (async () => {
         try {
           await transaction.begin();
           const txDb = {
-            all: async (q: string, ...p: any[]) => {
-              const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+            all: async (q: string, p: any[] = [], pag?: { page?: number; limit?: number }) => {
+              const actualParams = Array.isArray(p) ? p : [p];
+              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pag, new sql.Request(transaction));
               const result = await request.query(preparedQuery);
               return result.recordset;
             },
-            get: async (q: string, ...p: any[]) => {
-              const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+            get: async (q: string, p: any[] = [], pag?: { page?: number; limit?: number }) => {
+              const actualParams = Array.isArray(p) ? p : [p];
+              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pag, new sql.Request(transaction));
               const result = await request.query(preparedQuery);
               return result.recordset[0];
             },

@@ -57,10 +57,18 @@ const paymentSchema = z.object({
 router.get('/', requirePermission('payments:read'), async (req, res) => {
   try {
     const db = await dbPromise;
+
+    // Extract query parameters
     const date = typeof req.query.date === 'string' ? req.query.date.slice(0, 10) : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
-    const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 200;
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 500) : 200;
+    const rawPage = typeof req.query.page === 'string' ? Number(req.query.page) : undefined;
+    const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+
+    // Build pagination object only when both page and limit are supplied
+    const pagination =
+      rawPage && rawLimit
+        ? { page: Math.max(1, Math.trunc(rawPage)), limit: Math.max(1, Math.trunc(rawLimit)) }
+        : undefined;
 
     const where: string[] = [];
     const params: any[] = [];
@@ -81,15 +89,16 @@ router.get('/', requirePermission('payments:read'), async (req, res) => {
       const like = `%${search}%`;
       params.push(like, like, like, like, like);
     }
-    const rows = await db.all(
-      `SELECT TOP (?) p.*
-       FROM payments p
-       LEFT JOIN customers c ON c.id = p.customer_id OR (p.reference_type = 'customer' AND c.id = p.reference_id)
-       LEFT JOIN suppliers s ON s.id = p.supplier_id OR (p.reference_type = 'supplier' AND s.id = p.reference_id)
-       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY p.created_at DESC`,
-      limit,
-      ...params
+
+    const rows = await db.all<any>(
+      `SELECT p.*
+         FROM payments p
+         LEFT JOIN customers c ON c.id = p.customer_id OR (p.reference_type = 'customer' AND c.id = p.reference_id)
+         LEFT JOIN suppliers s ON s.id = p.supplier_id OR (p.reference_type = 'supplier' AND s.id = p.reference_id)
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ORDER BY p.created_at DESC`,
+      params,
+      pagination,
     );
     const mapped = rows.map((row: any) => ({
       id: row.id,
