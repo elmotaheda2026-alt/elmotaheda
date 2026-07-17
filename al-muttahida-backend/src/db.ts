@@ -519,6 +519,49 @@ export async function initDb(): Promise<void> {
     reviewed_by NVARCHAR(200) NULL,
     reviewed_at NVARCHAR(40) NULL
   );
+
+  -- 21. Historical Archives (Day 5 Database Integrity)
+  IF OBJECT_ID('collection_tasks_archive', 'U') IS NULL
+  CREATE TABLE collection_tasks_archive (
+    id NVARCHAR(64) PRIMARY KEY,
+    customer_id NVARCHAR(64) NOT NULL,
+    customer_name NVARCHAR(200) NOT NULL,
+    sale_id NVARCHAR(64) NOT NULL,
+    installment_id NVARCHAR(64) NOT NULL,
+    due_date NVARCHAR(20) NOT NULL,
+    amount DECIMAL(18,2) NOT NULL,
+    status NVARCHAR(30) NOT NULL,
+    assigned_to_user_id NVARCHAR(64),
+    assigned_to_name NVARCHAR(200),
+    visit_notes NVARCHAR(1000),
+    visit_result NVARCHAR(1000),
+    created_at NVARCHAR(40) NOT NULL,
+    updated_at NVARCHAR(40) NOT NULL
+  );
+
+  IF OBJECT_ID('payments_archive', 'U') IS NULL
+  CREATE TABLE payments_archive (
+    id NVARCHAR(64) PRIMARY KEY,
+    type NVARCHAR(10) NOT NULL,
+    amount DECIMAL(18,2) NOT NULL,
+    sale_id NVARCHAR(64) NULL,
+    installment_id NVARCHAR(64) NULL,
+    description NVARCHAR(600) NOT NULL,
+    date NVARCHAR(20) NOT NULL,
+    receipt_number NVARCHAR(100) NOT NULL,
+    status NVARCHAR(20) NOT NULL,
+    void_ref NVARCHAR(64) NULL,
+    approved_by NVARCHAR(200) NULL,
+    channel NVARCHAR(30) NULL,
+    created_by NVARCHAR(200) NOT NULL,
+    created_at NVARCHAR(40) NOT NULL,
+    reference_id NVARCHAR(64),
+    reference_type NVARCHAR(30),
+    customer_id NVARCHAR(64),
+    supplier_id NVARCHAR(64),
+    invoice_number NVARCHAR(100),
+    affects_customer_balance BIT
+  );
   `);
 
 
