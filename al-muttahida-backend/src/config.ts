@@ -30,7 +30,7 @@ export const config = {
       acquireTimeoutMillis: 15000,
     },
     connectionTimeout: 15000,
-    requestTimeout: 30000,
+    requestTimeout: 5000, // Query timeout cap at 5 seconds
     // Add extra options for connection reliability
     connectionOptions: {
       keepAlive: true,

@@ -11,6 +11,40 @@ export const poolPromise = sql.connect(config.sql);
 export const dbPromise = (async () => {
   const pool = await poolPromise;
 
+  // Simulated critical alert hook for database latency/timeouts
+  async function triggerCriticalAlert(errorMsg: string, query: string, params: any[]) {
+    // eslint-disable-next-line no-console
+    console.error('\x1b[41m\x1b[37m 🚨 CRITICAL DB TIMEOUT ALERT 🚨 \x1b[0m');
+    // eslint-disable-next-line no-console
+    console.error(`Error: ${errorMsg}`);
+    // eslint-disable-next-line no-console
+    console.error(`Statement: ${query}`);
+    // eslint-disable-next-line no-console
+    console.error(`Parameters: ${JSON.stringify(params)}`);
+  }
+
+  async function executeQueryWithMonitoring<T>(
+    queryFn: () => Promise<T>,
+    sqlText: string,
+    params: any[] = []
+  ): Promise<T> {
+    const startTime = Date.now();
+    try {
+      return await queryFn();
+    } catch (error: any) {
+      const elapsed = Date.now() - startTime;
+      const isTimeout = error.message?.toLowerCase().includes('timeout') || elapsed >= 5000;
+      if (isTimeout) {
+        await triggerCriticalAlert(
+          `Database query timed out after ${elapsed}ms (Limit: 5000ms)`,
+          sqlText,
+          params
+        );
+      }
+      throw error;
+    }
+  }
+
   function prepareRequest(query: string, params: any[], request?: any) {
     const req = request || pool.request();
     let index = 0;
@@ -32,20 +66,25 @@ export const dbPromise = (async () => {
     /** Execute a query that returns multiple rows. */
     async all<T = any>(query: string, ...params: any[]): Promise<T[]> {
       const { request, preparedQuery } = prepareRequest(query, params);
-      const result = await request.query(preparedQuery);
-      return result.recordset as T[];
+      return await executeQueryWithMonitoring(async () => {
+        const result = await request.query(preparedQuery);
+        return result.recordset as T[];
+      }, query, params);
     },
     /** Execute a query that returns a single row. */
     async get<T = any>(query: string, ...params: any[]): Promise<T | undefined> {
       const { request, preparedQuery } = prepareRequest(query, params);
-      const result = await request.query(preparedQuery);
-      return result.recordset[0] as T | undefined;
+      return await executeQueryWithMonitoring(async () => {
+        const result = await request.query(preparedQuery);
+        return result.recordset[0] as T | undefined;
+      }, query, params);
     },
     /** Execute a non‐select statement (INSERT/UPDATE/DELETE). */
     async run(query: string, ...params: any[]) {
       const { request, preparedQuery } = prepareRequest(query, params);
-      const result = await request.query(preparedQuery);
-      return result;
+      return await executeQueryWithMonitoring(async () => {
+        return await request.query(preparedQuery);
+      }, query, params);
     },
     /** Execute operations within a transaction with transient deadlock retries. */
     async withTransaction<T>(work: (db: any) => Promise<T>, maxRetries = 3, delayMs = 100): Promise<T> {

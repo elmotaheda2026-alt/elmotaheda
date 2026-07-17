@@ -344,8 +344,13 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     const includeItems = String(req.query.includeItems) === 'true';
     const customerId = typeof req.query.customerId === 'string' ? req.query.customerId.trim() : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
-    const requestedLimit = Number(req.query.limit || 0);
-    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(Math.floor(requestedLimit), 100) : 0;
+
+    // Pagination parameters
+    const page = Math.max(1, Number(req.query.page || 1));
+    const requestedLimit = Number(req.query.limit || 20);
+    const limit = Math.min(Math.max(1, requestedLimit), 50); // Hard maximum ceiling of 50 rows
+    const offset = (page - 1) * limit;
+
     const whereParts: string[] = [];
     const args: any[] = [];
 
@@ -360,26 +365,37 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     }
 
     const where = whereParts.length ? ` WHERE ${whereParts.join(' AND ')}` : '';
-    const topClause = limit ? `TOP (${limit}) ` : '';
+
+    // Offset parameters appended to the query args list
+    args.push(offset, limit);
 
     const query = `
-      SELECT ${topClause}s.*,
+      SELECT s.*,
+             COUNT(*) OVER() AS total_count_metadata,
              (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
              ${includeItems ? ', (SELECT * FROM sale_items WHERE sale_id = s.id FOR JSON PATH) AS items_json' : ''}
       FROM sales s
       ${where}
       ORDER BY s.created_at DESC
+      OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
     `;
 
-    const rows = await db.all<SaleRow & { schedules_json?: string; items_json?: string }>(query, ...args);
+    const rows = await db.all<SaleRow & { schedules_json?: string; items_json?: string; total_count_metadata?: number }>(query, ...args);
 
-    const mapped = rows.map((row) => {
+    const total = rows.length > 0 ? (rows[0].total_count_metadata || 0) : 0;
+
+    const sales = rows.map((row) => {
       const schedules = row.schedules_json ? JSON.parse(row.schedules_json) : [];
       const items = row.items_json ? JSON.parse(row.items_json) : [];
       return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
     });
 
-    return res.json(mapped);
+    return res.json({
+      total,
+      page,
+      limit,
+      sales
+    });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
