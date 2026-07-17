@@ -324,10 +324,17 @@ async function insertInstallmentSchedules(db: Awaited<typeof dbPromise>, saleId:
 
 async function getMappedSale(id: string) {
   const db = await dbPromise;
-  const row = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', id);
+  const row = await db.get<SaleRow & { items_json?: string; schedules_json?: string }>(
+    `SELECT s.*,
+            (SELECT * FROM sale_items WHERE sale_id = s.id FOR JSON PATH) AS items_json,
+            (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
+     FROM sales s
+     WHERE s.id = ?`,
+    id
+  );
   if (!row) return null;
-  const items = await db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', id);
-  const schedules = await db.all<ScheduleRow>('SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC', id);
+  const items = row.items_json ? JSON.parse(row.items_json) : [];
+  const schedules = row.schedules_json ? JSON.parse(row.schedules_json) : [];
   return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
 }
 
@@ -343,53 +350,36 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     const args: any[] = [];
 
     if (customerId) {
-      whereParts.push('customer_id = ?');
+      whereParts.push('s.customer_id = ?');
       args.push(customerId);
     }
 
     if (search) {
-      whereParts.push('(customer_name LIKE ? OR invoice_number LIKE ?)');
+      whereParts.push('(s.customer_name LIKE ? OR s.invoice_number LIKE ?)');
       args.push(`%${search}%`, `%${search}%`);
     }
 
     const where = whereParts.length ? ` WHERE ${whereParts.join(' AND ')}` : '';
     const topClause = limit ? `TOP (${limit}) ` : '';
-    const rows = await db.all<SaleRow>(`SELECT ${topClause}* FROM sales${where} ORDER BY created_at DESC`, ...args);
-    const saleIds = rows.map((row) => row.id);
-    const allSchedules = saleIds.length
-      ? await db.all<(ScheduleRow & { sale_id: string })>(
-          `SELECT * FROM installment_schedules WHERE sale_id IN (${saleIds.map(() => '?').join(',')}) ORDER BY sale_id, month_index ASC`,
-          ...saleIds,
-        )
-      : [];
-    const schedulesBySale = new Map<string, ScheduleRow[]>();
-    allSchedules.forEach((schedule) => {
-      const current = schedulesBySale.get(schedule.sale_id) || [];
-      current.push(schedule);
-      schedulesBySale.set(schedule.sale_id, current);
+
+    const query = `
+      SELECT ${topClause}s.*,
+             (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
+             ${includeItems ? ', (SELECT * FROM sale_items WHERE sale_id = s.id FOR JSON PATH) AS items_json' : ''}
+      FROM sales s
+      ${where}
+      ORDER BY s.created_at DESC
+    `;
+
+    const rows = await db.all<SaleRow & { schedules_json?: string; items_json?: string }>(query, ...args);
+
+    const mapped = rows.map((row) => {
+      const schedules = row.schedules_json ? JSON.parse(row.schedules_json) : [];
+      const items = row.items_json ? JSON.parse(row.items_json) : [];
+      return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
     });
 
-    if (includeItems) {
-      const allItems = saleIds.length
-        ? await db.all<(SaleItemRow & { sale_id: string })>(
-            `SELECT * FROM sale_items WHERE sale_id IN (${saleIds.map(() => '?').join(',')})`,
-            ...saleIds,
-          )
-        : [];
-      const itemsBySale = new Map<string, SaleItemRow[]>();
-      allItems.forEach((item) => {
-        const current = itemsBySale.get(item.sale_id) || [];
-        current.push(item);
-        itemsBySale.set(item.sale_id, current);
-      });
-      return res.json(
-        rows.map((row) =>
-          mapSale(row, mapSaleItems(itemsBySale.get(row.id) || []), mapSchedules(schedulesBySale.get(row.id) || [])),
-        ),
-      );
-    }
-    // No items requested
-    return res.json(rows.map((row) => mapSale(row, [], mapSchedules(schedulesBySale.get(row.id) || []))));
+    return res.json(mapped);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

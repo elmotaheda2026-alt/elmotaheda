@@ -105,6 +105,7 @@ export const api = {
   createCustomer: (payload: any) => request<{ id: string }>('/customers', { method: 'POST', body: JSON.stringify(payload) }),
   updateCustomer: (id: string, payload: any) => request<{ message: string }>(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteCustomer: (id: string) => request<{ message: string }>(`/customers/${id}`, { method: 'DELETE' }),
+  getCustomer: (id: string) => request<any>(`/customers/${id}`),
   listSuppliers: () => request<any[]>('/suppliers'),
   createSupplier: (payload: any) => request<{ id: string }>('/suppliers', { method: 'POST', body: JSON.stringify(payload) }),
   updateSupplier: (id: string, payload: any) => request<{ message: string }>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -116,6 +117,7 @@ export const api = {
 
   // Products
   listProducts: () => request<any[]>('/products'),
+  getProduct: (id: string) => request<any>(`/products/${id}`),
   createProduct: (payload: any) => request<{ id: string }>('/products', { method: 'POST', body: JSON.stringify(payload) }),
   updateProduct: (id: string, payload: any) => request<{ message: string }>(`/products/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteProduct: (id: string) => request<{ message: string }>(`/products/${id}`, { method: 'DELETE' }),
@@ -178,6 +180,8 @@ export const api = {
     const query = params.toString();
     return request<any>(`/reports/dashboard/metrics${query ? `?${query}` : ''}`);
   },
+  getDashboardMetricsCached: () => request<any>('/reports/dashboard/metrics-cached'),
+  refreshDashboardCache: () => request<{ message: string; lastRefreshedAt: string }>('/reports/dashboard/refresh-cache', { method: 'POST' }),
 };
 
 

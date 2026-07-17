@@ -47,33 +47,48 @@ export const dbPromise = (async () => {
       const result = await request.query(preparedQuery);
       return result;
     },
-    /** Execute operations within a transaction. */
-    async withTransaction<T>(work: (db: any) => Promise<T>): Promise<T> {
-      const transaction = new sql.Transaction(pool);
-      await transaction.begin();
-      try {
-        const txDb = {
-          all: async (q: string, ...p: any[]) => {
-            const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
-            const result = await request.query(preparedQuery);
-            return result.recordset;
-          },
-          get: async (q: string, ...p: any[]) => {
-            const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
-            const result = await request.query(preparedQuery);
-            return result.recordset[0];
-          },
-          run: async (q: string, ...p: any[]) => {
-            const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
-            return await request.query(preparedQuery);
+    /** Execute operations within a transaction with transient deadlock retries. */
+    async withTransaction<T>(work: (db: any) => Promise<T>, maxRetries = 3, delayMs = 100): Promise<T> {
+      let attempt = 0;
+      while (true) {
+        const transaction = new sql.Transaction(pool);
+        try {
+          await transaction.begin();
+          const txDb = {
+            all: async (q: string, ...p: any[]) => {
+              const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+              const result = await request.query(preparedQuery);
+              return result.recordset;
+            },
+            get: async (q: string, ...p: any[]) => {
+              const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+              const result = await request.query(preparedQuery);
+              return result.recordset[0];
+            },
+            run: async (q: string, ...p: any[]) => {
+              const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+              return await request.query(preparedQuery);
+            }
+          };
+          const result = await work(txDb);
+          await transaction.commit();
+          return result;
+        } catch (err: any) {
+          try {
+            await transaction.rollback();
+          } catch (rollbackErr) {
+            // Ignore rollback failure if transaction is already closed/aborted
           }
-        };
-        const result = await work(txDb);
-        await transaction.commit();
-        return result;
-      } catch (err) {
-        await transaction.rollback();
-        throw err;
+          attempt++;
+          const isDeadlock = err.number === 1205 || err.message?.includes('deadlock');
+          if (isDeadlock && attempt < maxRetries) {
+            // eslint-disable-next-line no-console
+            console.warn(`Deadlock detected (Attempt ${attempt}/${maxRetries}). Retrying transaction in ${delayMs * attempt}ms...`);
+            await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+            continue;
+          }
+          throw err;
+        }
       }
     }
   };
@@ -538,18 +553,26 @@ export async function initDb(): Promise<void> {
         CREATE NONCLUSTERED INDEX IX_payments_receipt_number
         ON payments (receipt_number);
 
-      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sale_items_sale_id' AND object_id = OBJECT_ID('sale_items'))
-        CREATE NONCLUSTERED INDEX IX_sale_items_sale_id
-        ON sale_items (sale_id);
+      -- Covering index for sale_items queries
+      IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sale_items_sale_id' AND object_id = OBJECT_ID('sale_items'))
+        DROP INDEX IX_sale_items_sale_id ON sale_items;
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sale_items_sale_id_covering' AND object_id = OBJECT_ID('sale_items'))
+        CREATE NONCLUSTERED INDEX IX_sale_items_sale_id_covering
+        ON sale_items (sale_id)
+        INCLUDE (product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total);
 
       IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_installment_schedules_sale_month' AND object_id = OBJECT_ID('installment_schedules'))
         CREATE NONCLUSTERED INDEX IX_installment_schedules_sale_month
         ON installment_schedules (sale_id, month_index)
         INCLUDE (due_date, amount, paid_amount, status, paid_at);
 
-      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_purchase_items_purchase_id' AND object_id = OBJECT_ID('purchase_items'))
-        CREATE NONCLUSTERED INDEX IX_purchase_items_purchase_id
-        ON purchase_items (purchase_id);
+      -- Covering index for purchase_items queries
+      IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_purchase_items_purchase_id' AND object_id = OBJECT_ID('purchase_items'))
+        DROP INDEX IX_purchase_items_purchase_id ON purchase_items;
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_purchase_items_purchase_id_covering' AND object_id = OBJECT_ID('purchase_items'))
+        CREATE NONCLUSTERED INDEX IX_purchase_items_purchase_id_covering
+        ON purchase_items (purchase_id)
+        INCLUDE (product_id, product_name, barcode, quantity, unit_price, discount, tax, total);
 
       IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_purchases_supplier_id' AND object_id = OBJECT_ID('purchases'))
         CREATE NONCLUSTERED INDEX IX_purchases_supplier_id
@@ -559,6 +582,16 @@ export async function initDb(): Promise<void> {
         CREATE NONCLUSTERED INDEX IX_customers_sued_id
         ON customers (is_sued, id)
         INCLUDE (phone, address);
+
+      -- Index for installment schedules due_date range searches
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_installment_schedules_due_date' AND object_id = OBJECT_ID('installment_schedules'))
+        CREATE NONCLUSTERED INDEX IX_installment_schedules_due_date
+        ON installment_schedules (due_date);
+
+      -- Index for sales created_at range searches
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_sales_created_at' AND object_id = OBJECT_ID('sales'))
+        CREATE NONCLUSTERED INDEX IX_sales_created_at
+        ON sales (created_at);
     `);
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -604,19 +637,183 @@ export async function initDb(): Promise<void> {
   }
 
   // Migrate existing products to on_demand and zero quantity (as warehouse concept is removed)
+  // Only update rows that actually need changing to avoid unnecessary table locks and disk I/O.
   try {
-    await db.run("UPDATE products SET fulfillment_type = 'on_demand', quantity = 0");
+    const result = await db.run(
+      "UPDATE products SET fulfillment_type = 'on_demand', quantity = 0 WHERE fulfillment_type <> 'on_demand' OR quantity <> 0"
+    );
     // eslint-disable-next-line no-console
-    console.log('Successfully updated all products to on_demand/zero quantity.');
+    console.log(`Boot migration: ${result.rowsAffected?.[0] ?? 0} products needed updating.`);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('Error migrating products to on_demand:', err);
   }
+
+  // ── Dashboard Metrics Cache (pre-aggregation for fast boot) ───────────
+  try {
+    await db.run(`
+      IF OBJECT_ID('dashboard_metrics_cache', 'U') IS NULL
+      CREATE TABLE dashboard_metrics_cache (
+        id INT NOT NULL DEFAULT 1 PRIMARY KEY CHECK (id = 1),
+        cash_in_total        DECIMAL(18,2) NOT NULL DEFAULT 0,
+        cash_out_total       DECIMAL(18,2) NOT NULL DEFAULT 0,
+        inventory_value      DECIMAL(18,2) NOT NULL DEFAULT 0,
+        customer_receivables DECIMAL(18,2) NOT NULL DEFAULT 0,
+        supplier_payables    DECIMAL(18,2) NOT NULL DEFAULT 0,
+        subscribed_capital   DECIMAL(18,2) NOT NULL DEFAULT 0,
+        capital_deposits     DECIMAL(18,2) NOT NULL DEFAULT 0,
+        capital_withdrawals  DECIMAL(18,2) NOT NULL DEFAULT 0,
+        all_time_sales       DECIMAL(18,2) NOT NULL DEFAULT 0,
+        all_time_cogs        DECIMAL(18,2) NOT NULL DEFAULT 0,
+        all_time_expenses    DECIMAL(18,2) NOT NULL DEFAULT 0,
+        realized_cash_total  DECIMAL(18,2) NOT NULL DEFAULT 0,
+        total_customers      INT NOT NULL DEFAULT 0,
+        total_products       INT NOT NULL DEFAULT 0,
+        total_suppliers      INT NOT NULL DEFAULT 0,
+        pending_installments INT NOT NULL DEFAULT 0,
+        overdue_installments INT NOT NULL DEFAULT 0,
+        last_refreshed_at    DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+      );
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error creating dashboard_metrics_cache table:', err);
+  }
+
+  // Create or replace the stored procedure that refreshes the cache
+  try {
+    await db.run(`
+      IF OBJECT_ID('sp_refresh_dashboard_metrics', 'P') IS NOT NULL
+        DROP PROCEDURE sp_refresh_dashboard_metrics;
+    `);
+    await db.run(`
+      CREATE PROCEDURE sp_refresh_dashboard_metrics
+      AS
+      BEGIN
+        SET NOCOUNT ON;
+
+        DECLARE
+          @cash_in       DECIMAL(18,2),
+          @cash_out      DECIMAL(18,2),
+          @inventory     DECIMAL(18,2),
+          @receivables   DECIMAL(18,2),
+          @payables      DECIMAL(18,2),
+          @sub_capital   DECIMAL(18,2),
+          @cap_deposits  DECIMAL(18,2),
+          @cap_withdraw  DECIMAL(18,2),
+          @all_sales     DECIMAL(18,2),
+          @all_cogs      DECIMAL(18,2),
+          @all_expenses  DECIMAL(18,2),
+          @realized      DECIMAL(18,2),
+          @tot_cust      INT,
+          @tot_prod      INT,
+          @tot_supp      INT,
+          @pending_inst  INT,
+          @overdue_inst  INT;
+
+        SELECT @cash_in = COALESCE(SUM(amount), 0)
+          FROM payments WHERE type = 'in' AND status = 'posted';
+
+        SELECT @cash_out = COALESCE(SUM(amount), 0)
+          FROM payments WHERE type = 'out' AND status = 'posted';
+
+        SELECT @inventory = COALESCE(SUM(quantity * purchase_price), 0)
+          FROM products;
+
+        SELECT @receivables = COALESCE(SUM(remaining), 0)
+          FROM sales WHERE status <> 'cancelled' AND remaining > 0;
+
+        SELECT @payables = COALESCE(SUM(remaining), 0)
+          FROM purchases WHERE status <> 'cancelled' AND remaining > 0;
+
+        SELECT @sub_capital = COALESCE(SUM(capital), 0) FROM shareholders;
+
+        SELECT @cap_deposits = COALESCE(SUM(amount), 0)
+          FROM shareholder_transactions WHERE type = 'capital_deposit';
+
+        SELECT @cap_withdraw = COALESCE(SUM(amount), 0)
+          FROM shareholder_transactions WHERE type = 'capital_withdrawal';
+
+        SELECT @all_sales = COALESCE(SUM(total), 0)
+          FROM sales WHERE status <> 'cancelled';
+
+        SELECT @all_cogs = COALESCE(SUM(si.quantity * si.unit_cost), 0)
+          FROM sale_items si
+          INNER JOIN sales s ON s.id = si.sale_id
+          WHERE s.status <> 'cancelled';
+
+        SELECT @all_expenses = COALESCE(SUM(amount), 0) FROM expenses;
+
+        SELECT @realized = COALESCE(SUM(p.amount), 0)
+          FROM payments p
+          WHERE p.type = 'in' AND p.status = 'posted'
+            AND (p.sale_id IS NOT NULL OR p.reference_type = 'sale' OR p.invoice_number IS NOT NULL);
+
+        SELECT @tot_cust = COUNT(*) FROM customers;
+        SELECT @tot_prod = COUNT(*) FROM products;
+        SELECT @tot_supp = COUNT(*) FROM suppliers;
+
+        SELECT @pending_inst = COUNT(*)
+          FROM installment_schedules WHERE status <> 'paid';
+
+        SELECT @overdue_inst = COUNT(*)
+          FROM installment_schedules
+          WHERE status <> 'paid'
+            AND TRY_CONVERT(DATE, due_date) < CAST(GETDATE() AS DATE);
+
+        MERGE dashboard_metrics_cache AS target
+        USING (SELECT 1 AS id) AS source ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET
+          cash_in_total       = @cash_in,
+          cash_out_total      = @cash_out,
+          inventory_value     = @inventory,
+          customer_receivables = @receivables,
+          supplier_payables   = @payables,
+          subscribed_capital  = @sub_capital,
+          capital_deposits    = @cap_deposits,
+          capital_withdrawals = @cap_withdraw,
+          all_time_sales      = @all_sales,
+          all_time_cogs       = @all_cogs,
+          all_time_expenses   = @all_expenses,
+          realized_cash_total = @realized,
+          total_customers     = @tot_cust,
+          total_products      = @tot_prod,
+          total_suppliers     = @tot_supp,
+          pending_installments = @pending_inst,
+          overdue_installments = @overdue_inst,
+          last_refreshed_at   = GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT (
+          id, cash_in_total, cash_out_total, inventory_value,
+          customer_receivables, supplier_payables, subscribed_capital,
+          capital_deposits, capital_withdrawals, all_time_sales,
+          all_time_cogs, all_time_expenses, realized_cash_total,
+          total_customers, total_products, total_suppliers,
+          pending_installments, overdue_installments, last_refreshed_at
+        ) VALUES (
+          1, @cash_in, @cash_out, @inventory,
+          @receivables, @payables, @sub_capital,
+          @cap_deposits, @cap_withdraw, @all_sales,
+          @all_cogs, @all_expenses, @realized,
+          @tot_cust, @tot_prod, @tot_supp,
+          @pending_inst, @overdue_inst, GETUTCDATE()
+        );
+      END;
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error creating sp_refresh_dashboard_metrics:', err);
+  }
+
+  // Refresh dashboard cache on startup
+  try {
+    await db.run('EXEC sp_refresh_dashboard_metrics');
+    // eslint-disable-next-line no-console
+    console.log('Dashboard metrics cache refreshed.');
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error refreshing dashboard cache:', err);
+  }
 }
-
-
-
-
 
 
 

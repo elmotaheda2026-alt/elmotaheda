@@ -37,12 +37,48 @@ const productSchema = z.object({
   description: z.string().optional().nullable(),
 });
 
-// GET /products
+// GET /products — List (lightweight: excludes image NVARCHAR(MAX) column)
 router.get('/', async (_req, res) => {
   try {
     const db = await dbPromise;
-    const rows = await db.all('SELECT * FROM products ORDER BY created_at DESC');
+    const rows = await db.all(`
+      SELECT id, name, barcode, category, fulfillment_type, unit,
+             purchase_price, sale_price, discount, tax, quantity,
+             min_quantity, description, created_at, updated_at
+      FROM products
+      ORDER BY created_at DESC
+    `);
     const mapped = rows.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      barcode: row.barcode,
+      category: row.category,
+      fulfillmentType: row.fulfillment_type,
+      unit: row.unit,
+      purchasePrice: Number(row.purchase_price),
+      salePrice: Number(row.sale_price),
+      discount: Number(row.discount),
+      tax: Number(row.tax),
+      quantity: Number(row.quantity),
+      minQuantity: Number(row.min_quantity),
+      image: null, // Loaded on demand via GET /products/:id
+      description: row.description,
+      createdAt: formatDate(row.created_at),
+      updatedAt: formatDate(row.updated_at),
+    }));
+    return res.json(mapped);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// GET /products/:id — Single product (full detail, includes image)
+router.get('/:id', async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const row = await db.get<any>('SELECT * FROM products WHERE id = ?', req.params.id);
+    if (!row) return res.status(404).json({ message: 'Product not found' });
+    return res.json({
       id: row.id,
       name: row.name,
       barcode: row.barcode,
@@ -59,8 +95,7 @@ router.get('/', async (_req, res) => {
       description: row.description,
       createdAt: formatDate(row.created_at),
       updatedAt: formatDate(row.updated_at),
-    }));
-    return res.json(mapped);
+    });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

@@ -232,7 +232,74 @@ router.get('/dashboard/metrics', async (req, res) => {
     deferredProfits: money((customers?.total || 0) - (periodCogs?.total || 0)),
   });
 });
+
+// ── Cached Dashboard Metrics (fast boot endpoint — reads 1 row) ─────────
+
+function mapCacheToResponse(cache: any) {
+  const m = (v: unknown) => Number(Number(v || 0).toFixed(2));
+  const cashInSafe = m(Number(cache.cash_in_total) - Number(cache.cash_out_total));
+  const subscribedCapital = m(cache.subscribed_capital);
+  const postedCapital = m(Number(cache.capital_deposits) - Number(cache.capital_withdrawals));
+  const paidInCapital = subscribedCapital > 0 ? subscribedCapital : postedCapital > 0 ? postedCapital : 8500000;
+  const capitalSource = subscribedCapital > 0 ? 'shareholders' : postedCapital > 0 ? 'posted_capital_transactions' : 'system_baseline';
+  const allTimeNetProfit = m(Number(cache.all_time_sales) - Number(cache.all_time_cogs) - Number(cache.all_time_expenses));
+  const totalAssets = m(cashInSafe + Number(cache.inventory_value) + Number(cache.customer_receivables));
+  const totalLiabilities = m(cache.supplier_payables);
+  const totalEquity = m(paidInCapital + allTimeNetProfit);
+
+  return {
+    capital: paidInCapital,
+    capitalSource,
+    cashInSafe,
+    inventoryValue: m(cache.inventory_value),
+    totalCustomersBalance: m(cache.customer_receivables),
+    totalSuppliersBalance: m(cache.supplier_payables),
+    retainedEarnings: allTimeNetProfit,
+    allTimeNetProfit,
+    shareholdersEquity: totalEquity,
+    totalAssets,
+    totalLiabilities,
+    totalEquity,
+    accountingVariance: m(totalAssets - (totalLiabilities + totalEquity)),
+    isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) <= 0.01,
+    totalCustomers: cache.total_customers,
+    totalProducts: cache.total_products,
+    totalSuppliers: cache.total_suppliers,
+    pendingInstallments: cache.pending_installments,
+    overdueInstallments: cache.overdue_installments,
+    lastRefreshedAt: cache.last_refreshed_at,
+    isCached: true,
+  };
+}
+
+router.get('/dashboard/metrics-cached', async (_req, res) => {
+  try {
+    const db = await dbPromise;
+
+    let cache = await db.get<any>('SELECT * FROM dashboard_metrics_cache WHERE id = 1');
+    if (!cache) {
+      // Cache miss — refresh and return
+      await db.run('EXEC sp_refresh_dashboard_metrics');
+      cache = await db.get<any>('SELECT * FROM dashboard_metrics_cache WHERE id = 1');
+      if (!cache) return res.status(500).json({ message: 'Failed to compute metrics' });
+    }
+
+    return res.json(mapCacheToResponse(cache));
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// POST /reports/dashboard/refresh-cache — Force refresh the dashboard cache
+router.post('/dashboard/refresh-cache', async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    await db.run('EXEC sp_refresh_dashboard_metrics');
+    const cache = await db.get<any>('SELECT * FROM dashboard_metrics_cache WHERE id = 1');
+    return res.json({ message: 'Cache refreshed', lastRefreshedAt: cache?.last_refreshed_at });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 export default router;
-
-
-
