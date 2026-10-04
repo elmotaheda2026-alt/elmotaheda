@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { Permission } from '../types.js';
@@ -58,41 +58,55 @@ function parseStoredPermissions(value?: string | null): Record<string, boolean> 
   }
 }
 
-router.post('/seed-admin', async (_req, res) => {
-  if (process.env.ALLOW_SEED !== 'true') {
+function isAllowedInitialPassword(password?: string): password is string {
+  if (!password || password.length < 12) return false;
+  const blocked = new Set(['admin123', 'password123', '123456789012']);
+  return !blocked.has(password.toLowerCase());
+}
+
+router.post('/seed-admin', async (req, res) => {
+  const provisioningEnabled = process.env.ENABLE_ADMIN_PROVISIONING === 'true';
+  const provisioningToken = process.env.ADMIN_PROVISIONING_TOKEN;
+  const requestedToken = req.headers['x-admin-provisioning-token'];
+  const initialPassword = process.env.ADMIN_INITIAL_PASSWORD;
+
+  if (!provisioningEnabled) {
     return res.status(404).json({ message: 'Not found' });
   }
+
+  if (!provisioningToken || provisioningToken.length < 32) {
+    return res.status(503).json({ message: 'Admin provisioning is not configured securely' });
+  }
+
+  if (requestedToken !== provisioningToken) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  if (!isAllowedInitialPassword(initialPassword)) {
+    return res.status(503).json({ message: 'Admin initial password is not configured securely' });
+  }
+
   const db = await dbPromise;
-  const hashed = await hashPassword('admin123');
   const existing = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
 
   if (existing?.id) {
-    await db.run(
-      `UPDATE users
-       SET name = ?, password_hash = ?, role = ?, is_active = 1
-       WHERE username = ?`,
-      'مدير النظام',
-      hashed,
-      'admin',
-      'admin',
-    );
-    return res.json({ message: 'Admin updated', username: 'admin', password: 'admin123' });
+    return res.status(409).json({ message: 'Admin already exists' });
   }
 
+  const hashed = await hashPassword(initialPassword);
   const id = uid();
   await db.run(
     `INSERT INTO users (id, name, username, password_hash, role, is_active, created_at)` +
     ` VALUES (?, ?, ?, ?, ?, 1, ?)`,
     id,
-    'مدير النظام',
+    'System Admin',
     'admin',
     hashed,
     'admin',
     new Date().toISOString(),
   );
-  return res.json({ message: 'Admin created', username: 'admin', password: 'admin123' });
+  return res.status(201).json({ message: 'Admin created', username: 'admin' });
 });
-
 router.post('/login', async (req, res) => {
   const schema = z.object({ username: z.string().min(3), password: z.string().min(6) });
   const parsed = schema.safeParse(req.body);

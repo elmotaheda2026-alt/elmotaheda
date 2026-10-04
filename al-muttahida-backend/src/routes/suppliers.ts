@@ -14,7 +14,7 @@ router.use(requireAuth);
 function requireAnyPermission(...permissions: Permission[]) {
   return (req: AuthedRequest, res: any, next: any) => {
     if (!req.user) {
-      req.user = { userId: 'dev-user-id', role: 'admin', name: 'Dev Admin' };
+      return res.status(401).json({ message: 'Unauthorized' });
     }
     const granted = permissions.some((permission) => hasPermission(req.user!.role, permission, req.user!.permissions));
     if (!granted) {

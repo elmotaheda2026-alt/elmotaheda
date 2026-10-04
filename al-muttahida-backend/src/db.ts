@@ -730,42 +730,16 @@ export async function initDb(): Promise<void> {
     console.error('Error creating performance indexes:', err);
   }
 
-  // Ensure the default admin account exists on every start.
+  // Admin provisioning must be performed explicitly through a secured operational process.
   try {
     const admin = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
-    const { hashPassword, uid } = await import('./utils.js');
-    const hashed = await hashPassword('admin123');
-
-    if (admin?.id) {
-      await db.run(
-        `UPDATE users
-         SET name = ?, password_hash = ?, role = ?, is_active = 1
-         WHERE username = ?`,
-        'مدير النظام',
-        hashed,
-        'admin',
-        'admin',
-      );
+    if (!admin?.id) {
       // eslint-disable-next-line no-console
-      console.log('Ensured default admin user: admin / admin123');
-    } else {
-      const id = uid();
-      await db.run(
-        `INSERT INTO users (id, name, username, password_hash, role, is_active, created_at)
-         VALUES (?, ?, ?, ?, ?, 1, ?)`,
-        id,
-        'مدير النظام',
-        'admin',
-        hashed,
-        'admin',
-        new Date().toISOString(),
-      );
-      // eslint-disable-next-line no-console
-      console.log('Seeded default admin user: admin / admin123');
+      console.warn('No admin user exists. Create one through the secured /auth/seed-admin provisioning flow.');
     }
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('Error auto-seeding default admin:', err);
+    console.error('Error checking admin provisioning state:', err);
   }
 
   // Migrate existing products to on_demand and zero quantity (as warehouse concept is removed)

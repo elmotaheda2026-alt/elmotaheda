@@ -5,8 +5,9 @@ import { Store, Lock, Mail, Eye, EyeOff } from 'lucide-react';
 // Helmet import removed; title set via useEffect
 
 export default function Login() {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const showDemoCredentials = import.meta.env.DEV && import.meta.env.VITE_SHOW_DEMO_CREDENTIALS === 'true';
+  const [username, setUsername] = useState(showDemoCredentials ? 'admin' : '');
+  const [password, setPassword] = useState(showDemoCredentials ? 'admin123' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -127,13 +128,14 @@ export default function Login() {
               </button>
             </div>
 
-            {/* Demo Credentials */}
-            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-              <p className="text-xs text-gray-500 text-center">
-                بيانات الدخول التجريبية:<br />
-                <span className="font-mono text-indigo-600">admin</span> / <span className="font-mono text-indigo-600">admin123</span>
-              </p>
-            </div>
+            {showDemoCredentials && (
+              <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 text-center">
+                  بيانات الدخول التجريبية:<br />
+                  <span className="font-mono text-indigo-600">admin</span> / <span className="font-mono text-indigo-600">admin123</span>
+                </p>
+              </div>
+            )}
           </form>
         </div>
 
