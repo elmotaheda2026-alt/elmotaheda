@@ -1,5 +1,6 @@
 import sql from 'mssql';
 import { config } from './config.js';
+import { normalizeQueryParams, prepareSqlRequest, type PaginationOptions, type QueryParam, type QueryParams, type RequestLike } from './dbQuery.js';
 
 /**
  * Create a connection pool to the SQL Server database using the
@@ -12,7 +13,7 @@ export const dbPromise = (async () => {
   const pool = await poolPromise;
 
   // Simulated critical alert hook for database latency/timeouts
-  async function triggerCriticalAlert(errorMsg: string, query: string, params: any[]) {
+  async function triggerCriticalAlert(errorMsg: string, query: string, params: QueryParams) {
     // eslint-disable-next-line no-console
     console.error('\x1b[41m\x1b[37m 🚨 CRITICAL DB TIMEOUT ALERT 🚨 \x1b[0m');
     // eslint-disable-next-line no-console
@@ -26,7 +27,7 @@ export const dbPromise = (async () => {
   async function executeQueryWithMonitoring<T>(
     queryFn: () => Promise<T>,
     sqlText: string,
-    params: any[] = []
+    params: QueryParams = []
   ): Promise<T> {
     const startTime = Date.now();
     try {
@@ -47,42 +48,33 @@ export const dbPromise = (async () => {
 
 
 
-  function prepareRequest(query: string, params: any[], request?: any) {
-    const req = request || pool.request();
-    let index = 0;
-    const preparedQuery = query.replace(/\?/g, () => {
-      index += 1;
-      const paramName = `p${index}`;
-      req.input(paramName, params[index - 1]);
-      return `@${paramName}`;
-    });
-
-    if (index !== params.length) {
-      throw new Error(`SQL parameter mismatch: query has ${index} placeholders but received ${params.length} values`);
-    }
-
-    return { request: req, preparedQuery };
+  function prepareRequest(query: string, params: QueryParams, request?: RequestLike) {
+    return prepareSqlRequest(query, params, request || pool.request());
   }
 
-  function extractPaginationAndPrepare(query: string, params: any[], pagination?: { page?: number; limit?: number }, request?: any) {
-    let finalPagination = pagination;
-    const cleanParams = [...params];
+  function isPaginationOptions(value: QueryParam): value is PaginationOptions {
+    return !!value && typeof value === 'object' && ('page' in value || 'limit' in value);
+  }
 
-    // Detect pagination passed as the last param object (legacy pattern)
-    if (!finalPagination && cleanParams.length) {
-      const lastParam = cleanParams[cleanParams.length - 1];
-      if (lastParam && typeof lastParam === 'object' && ('page' in lastParam || 'limit' in lastParam)) {
-        finalPagination = cleanParams.pop();
-      }
+  function normalizeReadArgs(args: QueryParam[]): { params: QueryParam[]; pagination?: PaginationOptions } {
+    if (args.length >= 2 && Array.isArray(args[0]) && isPaginationOptions(args[1])) {
+      return { params: [...args[0]], pagination: args[1] };
     }
 
+    if (args.length === 1) {
+      return { params: normalizeQueryParams(args[0]) };
+    }
+
+    return { params: args };
+  }
+
+  function extractPaginationAndPrepare(query: string, params: QueryParams, pagination?: PaginationOptions, request?: RequestLike) {
+    const cleanParams = [...params];
     let finalQuery = query.trim();
 
-    // Ensure we have a pagination object to avoid reading properties of undefined
-    finalPagination = finalPagination || { page: 1, limit: 20 };
-
-      const limit = Math.min(Number(finalPagination.limit) || 20, 50); // Hard ceiling guardrail of 50
-      const offset = ((Number(finalPagination.page) || 1) - 1) * limit;
+    if (pagination) {
+      const limit = Math.min(Math.max(1, Number(pagination.limit) || 20), 50);
+      const offset = (Math.max(1, Number(pagination.page) || 1) - 1) * limit;
 
       // Ensure an ORDER BY clause exists for deterministic pagination
       let orderByStr = '';
@@ -103,15 +95,15 @@ export const dbPromise = (async () => {
       } else {
         finalQuery = `${finalQuery} ${paginationTokens}`;
       }
-    
+    }
 
     const { request: req, preparedQuery } = prepareRequest(finalQuery, cleanParams, request);
     return { request: req, preparedQuery, cleanParams, finalQuery };
   }
   return {
     /** Execute a query that returns multiple rows. */
-    async all<T = any>(query: string, params: any[] = [], pagination?: { page?: number; limit?: number }): Promise<T[]> {
-      const actualParams = Array.isArray(params) ? params : [params];
+    async all<T = any>(query: string, ...args: QueryParam[]): Promise<T[]> {
+      const { params: actualParams, pagination } = normalizeReadArgs(args);
       const { request, preparedQuery, cleanParams, finalQuery } = extractPaginationAndPrepare(query, actualParams, pagination);
       return await executeQueryWithMonitoring(async () => {
         const result = await request.query(preparedQuery);
@@ -119,8 +111,8 @@ export const dbPromise = (async () => {
       }, finalQuery, cleanParams);
     },
     /** Execute a query that returns a single row. */
-    async get<T = any>(query: string, params: any[] = [], pagination?: { page?: number; limit?: number }): Promise<T | undefined> {
-      const actualParams = Array.isArray(params) ? params : [params];
+    async get<T = any>(query: string, ...args: QueryParam[]): Promise<T | undefined> {
+      const { params: actualParams, pagination } = normalizeReadArgs(args);
       const { request, preparedQuery, cleanParams, finalQuery } = extractPaginationAndPrepare(query, actualParams, pagination);
       return await executeQueryWithMonitoring(async () => {
         const result = await request.query(preparedQuery);
@@ -128,7 +120,7 @@ export const dbPromise = (async () => {
       }, finalQuery, cleanParams);
     },
     /** Execute a non‐select statement (INSERT/UPDATE/DELETE). */
-    async run(query: string, ...params: any[]) {
+    async run(query: string, ...params: QueryParam[]) {
       const { request, preparedQuery } = prepareRequest(query, params);
       return await executeQueryWithMonitoring(async () => {
         return await request.query(preparedQuery);
@@ -142,19 +134,19 @@ export const dbPromise = (async () => {
         try {
           await transaction.begin();
           const txDb = {
-            all: async (q: string, p: any[] = [], pag?: { page?: number; limit?: number }) => {
-              const actualParams = Array.isArray(p) ? p : [p];
+            all: async (q: string, p?: QueryParam | QueryParams, pag?: PaginationOptions) => {
+              const actualParams = normalizeQueryParams(p);
               const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pag, new sql.Request(transaction));
               const result = await request.query(preparedQuery);
               return result.recordset;
             },
-            get: async (q: string, p: any[] = [], pag?: { page?: number; limit?: number }) => {
-              const actualParams = Array.isArray(p) ? p : [p];
+            get: async (q: string, p?: QueryParam | QueryParams, pag?: PaginationOptions) => {
+              const actualParams = normalizeQueryParams(p);
               const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pag, new sql.Request(transaction));
               const result = await request.query(preparedQuery);
               return result.recordset[0];
             },
-            run: async (q: string, ...p: any[]) => {
+            run: async (q: string, ...p: QueryParam[]) => {
               const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
               return await request.query(preparedQuery);
             }
@@ -920,6 +912,8 @@ export async function initDb(): Promise<void> {
     console.error('Error refreshing dashboard cache:', err);
   }
 }
+
+
 
 
 
