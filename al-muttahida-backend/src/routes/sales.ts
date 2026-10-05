@@ -324,17 +324,14 @@ async function insertInstallmentSchedules(db: Awaited<typeof dbPromise>, saleId:
 
 async function getMappedSale(id: string) {
   const db = await dbPromise;
-  const row = await db.get<SaleRow & { items_json?: string; schedules_json?: string }>(
-    `SELECT s.*,
-            (SELECT * FROM sale_items WHERE sale_id = s.id FOR JSON PATH) AS items_json,
-            (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
-     FROM sales s
-     WHERE s.id = ?`,
-    id
-  );
+  const row = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', id);
   if (!row) return null;
-  const items = row.items_json ? JSON.parse(row.items_json) : [];
-  const schedules = row.schedules_json ? JSON.parse(row.schedules_json) : [];
+
+  const [items, schedules] = await Promise.all([
+    db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', id),
+    db.all<ScheduleRow>('SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC', id),
+  ]);
+
   return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
 }
 
@@ -370,27 +367,55 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
 
     const query = `
       SELECT s.*,
-             COUNT(*) OVER() AS total_count_metadata,
-             (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
-             ${includeItems ? ', (SELECT * FROM sale_items WHERE sale_id = s.id FOR JSON PATH) AS items_json' : ''}
+             COUNT(*) OVER() AS total_count_metadata
       FROM sales s
       ${where}
       ORDER BY s.created_at DESC
     `;
 
-    const rows = await db.all<SaleRow & { schedules_json?: string; items_json?: string; total_count_metadata?: number }>(
+    const rows = await db.all<SaleRow & { total_count_metadata?: number }>(
       query,
       args,
       pagination
     );
 
     const total = rows.length > 0 ? (rows[0].total_count_metadata || 0) : 0;
+    const saleIds = rows.map((row) => row.id);
+    const schedulesBySaleId = new Map<string, ScheduleRow[]>();
+    const itemsBySaleId = new Map<string, SaleItemRow[]>();
 
-    const sales = rows.map((row) => {
-      const schedules = row.schedules_json ? JSON.parse(row.schedules_json) : [];
-      const items = row.items_json ? JSON.parse(row.items_json) : [];
-      return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
-    });
+    if (saleIds.length) {
+      const placeholders = saleIds.map(() => '?').join(',');
+      const scheduleRows = await db.all<ScheduleRow & { sale_id: string }>(
+        `SELECT * FROM installment_schedules WHERE sale_id IN (${placeholders}) ORDER BY sale_id ASC, month_index ASC`,
+        ...saleIds,
+      );
+      scheduleRows.forEach((schedule) => {
+        const saleSchedules = schedulesBySaleId.get(schedule.sale_id) || [];
+        saleSchedules.push(schedule);
+        schedulesBySaleId.set(schedule.sale_id, saleSchedules);
+      });
+
+      if (includeItems) {
+        const itemRows = await db.all<SaleItemRow & { sale_id: string }>(
+          `SELECT * FROM sale_items WHERE sale_id IN (${placeholders})`,
+          ...saleIds,
+        );
+        itemRows.forEach((item) => {
+          const saleItems = itemsBySaleId.get(item.sale_id) || [];
+          saleItems.push(item);
+          itemsBySaleId.set(item.sale_id, saleItems);
+        });
+      }
+    }
+
+    const sales = rows.map((row) => (
+      mapSale(
+        row,
+        mapSaleItems(itemsBySaleId.get(row.id) || []),
+        mapSchedules(schedulesBySaleId.get(row.id) || []),
+      )
+    ));
 
     return res.json({
       total,

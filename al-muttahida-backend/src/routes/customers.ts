@@ -43,9 +43,69 @@ const customerSchema = z.object({
 router.get('/', requirePermission('sales:read'), async (_req, res) => {
   try {
     const db = await dbPromise;
-    const rows = await db.all('SELECT * FROM customers ORDER BY created_at DESC');
+    const queryStart = performance.now();
+    const rows = await db.all(`
+      SELECT id, customer_number, name, phone, address,
+             balance, balance_type, is_sued, sued_date, created_at, updated_at
+      FROM customers
+      ORDER BY created_at DESC
+    `);
+    const queryElapsed = performance.now() - queryStart;
+    const logQueryTiming = queryElapsed > 50 ? console.warn : console.info;
+    logQueryTiming(`/customers SQL query took ${queryElapsed.toFixed(1)}ms for ${rows.length} rows`);
     const mapped = rows.map((row: any) => ({
-      ...row,
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      email: row.email,
+      address: row.address,
+      gender: row.gender,
+      city: row.city,
+      governorate: row.governorate,
+      region: row.region,
+      notes: row.notes,
+      age: Number(row.age),
+      balance: Number(row.balance),
+      isSued: row.is_sued === 1 || row.is_sued === true,
+      guarantors: [null, null, null],
+      customerNumber: row.customer_number,
+      balanceType: row.balance_type,
+      dateOfBirth: formatDate(row.date_of_birth),
+      nationalId: row.national_id,
+      pensionDate: formatDate(row.pension_date),
+      suedDate: formatDate(row.sued_date),
+      createdAt: formatDate(row.created_at),
+      updatedAt: formatDate(row.updated_at),
+    }));
+    const payloadBytes = Buffer.byteLength(JSON.stringify(mapped), 'utf8');
+    if (payloadBytes > 100 * 1024) {
+      console.warn(`/customers list payload is ${payloadBytes} bytes for ${mapped.length} rows`);
+    } else {
+      console.info(`/customers list payload is ${payloadBytes} bytes for ${mapped.length} rows`);
+    }
+    return res.json(mapped);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// GET /customers/:id
+router.get('/:id', requirePermission('sales:read'), async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const row = await db.get<any>('SELECT * FROM customers WHERE id = ?', req.params.id);
+    if (!row) return res.status(404).json({ message: 'Customer not found' });
+    return res.json({
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      email: row.email,
+      address: row.address,
+      gender: row.gender,
+      city: row.city,
+      governorate: row.governorate,
+      region: row.region,
+      notes: row.notes,
       age: Number(row.age),
       balance: Number(row.balance),
       isSued: row.is_sued === 1 || row.is_sued === true,
@@ -58,8 +118,7 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
       suedDate: formatDate(row.sued_date),
       createdAt: formatDate(row.created_at),
       updatedAt: formatDate(row.updated_at),
-    }));
-    return res.json(mapped);
+    });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

@@ -61,6 +61,10 @@ export const dbPromise = (async () => {
       return { params: [...args[0]], pagination: args[1] };
     }
 
+    if (args.length >= 2 && Array.isArray(args[0]) && args[1] === undefined) {
+      return { params: [...args[0]] };
+    }
+
     if (args.length === 1) {
       return { params: normalizeQueryParams(args[0]) };
     }
@@ -685,6 +689,16 @@ export async function initDb(): Promise<void> {
         CREATE NONCLUSTERED INDEX IX_customers_sued_id
         ON customers (is_sued, id)
         INCLUDE (phone, address);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_customers_created_at_lookup' AND object_id = OBJECT_ID('customers'))
+        CREATE NONCLUSTERED INDEX IX_customers_created_at_lookup
+        ON customers (created_at DESC)
+        INCLUDE (customer_number, name, phone, balance, is_sued, updated_at);
+
+      IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_products_created_at_lookup' AND object_id = OBJECT_ID('products'))
+        CREATE NONCLUSTERED INDEX IX_products_created_at_lookup
+        ON products (created_at DESC)
+        INCLUDE (name, barcode, category, unit, purchase_price, sale_price, discount, tax, quantity, min_quantity, updated_at);
 
       -- Index for installment schedules due_date range searches
       IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_installment_schedules_due_date' AND object_id = OBJECT_ID('installment_schedules'))

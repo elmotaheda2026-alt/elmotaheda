@@ -1,9 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Package, Search, Plus, Edit, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Product } from '../types';
-import { getProducts, createProduct, updateProduct, deleteProduct, syncProducts } from '../lib/storage';
+import { getProducts, createProduct, updateProduct, deleteProduct } from '../lib/storage';
 import { formatWholeCurrency } from '../lib/utils';
+import { api, isApiMode } from '../lib/apiClient';
+
+const PRODUCT_RENDER_LIMIT = 100;
 
 export default function ProductsInventory() {
   const { settings } = useAuth();
@@ -11,6 +14,9 @@ export default function ProductsInventory() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState(PRODUCT_RENDER_LIMIT);
+  const didLoadRef = useRef(false);
+  const pendingRenderMeasureRef = useRef(false);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -23,17 +29,43 @@ export default function ProductsInventory() {
   });
 
   const loadData = async () => {
+    console.time('ProductsInventory.totalLoad');
     try {
-      await syncProducts();
+      console.time('ProductsInventory.networkApiCall');
+      const data = isApiMode() ? await api.listProducts() : getProducts();
+      console.timeEnd('ProductsInventory.networkApiCall');
+      const payloadBytes = new Blob([JSON.stringify(data)]).size;
+      console.info(`ProductsInventory payload: ${payloadBytes} bytes for ${data.length} rows`);
+
+      console.time('ProductsInventory.transformAndState');
+      const normalized = data.map((product: Product) => ({
+        ...product,
+        fulfillmentType: product.fulfillmentType || 'stocked',
+      }));
+      pendingRenderMeasureRef.current = true;
+      console.time('ProductsInventory.initialRenderCommit');
+      setProducts(normalized);
+      console.timeEnd('ProductsInventory.transformAndState');
     } catch (err) {
-      console.error('Failed to sync products:', err);
+      console.error('Failed to load products:', err);
+    } finally {
+      console.timeEnd('ProductsInventory.totalLoad');
     }
-    setProducts(getProducts());
   };
 
   useEffect(() => {
+    if (didLoadRef.current) return;
+    didLoadRef.current = true;
     void loadData();
   }, []);
+
+  useEffect(() => {
+    if (!pendingRenderMeasureRef.current) return;
+    pendingRenderMeasureRef.current = false;
+    requestAnimationFrame(() => {
+      console.timeEnd('ProductsInventory.initialRenderCommit');
+    });
+  });
 
   const filteredProducts = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -45,6 +77,11 @@ export default function ProductsInventory() {
       (product.category || '').toLowerCase().includes(term),
     );
   }, [products, searchTerm]);
+
+  const visibleProducts = useMemo(
+    () => filteredProducts.slice(0, visibleLimit),
+    [filteredProducts, visibleLimit],
+  );
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -81,16 +118,19 @@ export default function ProductsInventory() {
     }
   };
 
-  const handleEdit = (product: Product) => {
-    setEditingProduct(product);
+  const handleEdit = async (product: Product) => {
+    console.time('ProductsInventory.editDetailFetch');
+    const fullProduct = isApiMode() ? await api.getProduct(product.id) as Product : product;
+    console.timeEnd('ProductsInventory.editDetailFetch');
+    setEditingProduct(fullProduct);
     setFormData({
-      name: product.name,
-      barcode: product.barcode || '',
-      category: product.category || 'عام',
-      unit: product.unit || 'قطعة',
-      purchasePrice: product.purchasePrice,
-      salePrice: product.salePrice,
-      description: product.description || '',
+      name: fullProduct.name,
+      barcode: fullProduct.barcode || '',
+      category: fullProduct.category || product.category || '',
+      unit: fullProduct.unit || product.unit || '',
+      purchasePrice: fullProduct.purchasePrice,
+      salePrice: fullProduct.salePrice,
+      description: fullProduct.description || '',
     });
     setShowModal(true);
   };
@@ -144,7 +184,10 @@ export default function ProductsInventory() {
               <input
                 type="text"
                 value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
+                onChange={(event) => {
+                  setSearchTerm(event.target.value);
+                  setVisibleLimit(PRODUCT_RENDER_LIMIT);
+                }}
                 placeholder="بحث باسم الصنف، الكود، أو التصنيف..."
                 className="input-ui h-10 pr-10 text-sm w-full"
               />
@@ -179,7 +222,7 @@ export default function ProductsInventory() {
                   </td>
                 </tr>
               ) : (
-                filteredProducts.map((product) => (
+                visibleProducts.map((product) => (
                   <tr key={product.id} className="transition hover:bg-slate-50">
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-3">
@@ -220,6 +263,17 @@ export default function ProductsInventory() {
             </tbody>
           </table>
         </div>
+        {filteredProducts.length > visibleProducts.length && (
+          <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-center">
+            <button
+              type="button"
+              onClick={() => setVisibleLimit((limit) => limit + PRODUCT_RENDER_LIMIT)}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100"
+            >
+              عرض المزيد ({filteredProducts.length - visibleProducts.length})
+            </button>
+          </div>
+        )}
       </section>
 
       {/* Modal */}

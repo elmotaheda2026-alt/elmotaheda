@@ -41,13 +41,17 @@ const productSchema = z.object({
 router.get('/', async (_req, res) => {
   try {
     const db = await dbPromise;
+    const queryStart = performance.now();
     const rows = await db.all(`
       SELECT id, name, barcode, category, fulfillment_type, unit,
              purchase_price, sale_price, discount, tax, quantity,
-             min_quantity, description, created_at, updated_at
+             min_quantity, created_at, updated_at
       FROM products
       ORDER BY created_at DESC
     `);
+    const queryElapsed = performance.now() - queryStart;
+    const logQueryTiming = queryElapsed > 50 ? console.warn : console.info;
+    logQueryTiming(`/products SQL query took ${queryElapsed.toFixed(1)}ms for ${rows.length} rows`);
     const mapped = rows.map((row: any) => ({
       id: row.id,
       name: row.name,
@@ -62,10 +66,16 @@ router.get('/', async (_req, res) => {
       quantity: Number(row.quantity),
       minQuantity: Number(row.min_quantity),
       image: null, // Loaded on demand via GET /products/:id
-      description: row.description,
+      description: undefined,
       createdAt: formatDate(row.created_at),
       updatedAt: formatDate(row.updated_at),
     }));
+    const payloadBytes = Buffer.byteLength(JSON.stringify(mapped), 'utf8');
+    if (payloadBytes > 100 * 1024) {
+      console.warn(`/products list payload is ${payloadBytes} bytes for ${mapped.length} rows`);
+    } else {
+      console.info(`/products list payload is ${payloadBytes} bytes for ${mapped.length} rows`);
+    }
     return res.json(mapped);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });

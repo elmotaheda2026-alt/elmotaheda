@@ -111,7 +111,10 @@ export const api = {
   searchSales: (filters: { search?: string; limit?: number; includeItems?: boolean } = {}) => {
     const params = new URLSearchParams({ includeItems: filters.includeItems === false ? 'false' : 'true' });
     if (filters.search) params.set('search', filters.search);
-    if (filters.limit) params.set('limit', String(filters.limit));
+    if (filters.limit) {
+      params.set('page', '1');
+      params.set('limit', String(filters.limit));
+    }
     return requestArray<any>(`/sales?${params.toString()}`, 'sales search');
   },
   listSalesForCollection: (filters: { customerId?: string; search?: string } = {}) => {
@@ -135,7 +138,10 @@ export const api = {
     const params = new URLSearchParams();
     if (filters.date) params.set('date', filters.date);
     if (filters.search) params.set('search', filters.search);
-    if (filters.limit) params.set('limit', String(filters.limit));
+    if (filters.limit) {
+      params.set('page', '1');
+      params.set('limit', String(filters.limit));
+    }
     const query = params.toString();
     return requestArray<any>(`/payments${query ? `?${query}` : ''}`, 'payments');
   },

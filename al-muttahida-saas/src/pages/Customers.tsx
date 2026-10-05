@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Edit, Trash2, Search, Save, X, Camera, Upload, User,
   MapPin, Phone, Calendar, FileText, AlertTriangle, Gavel,
@@ -6,10 +6,14 @@ import {
   Grid, List, TrendingUp, UserCheck, Coins, Eye
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer, syncCustomers } from '../lib/storage';
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
+import { api, isApiMode } from '../lib/apiClient';
+
+const CUSTOMER_RENDER_LIMIT = 100;
+const SEARCH_MODAL_LIMIT = 50;
 
 const initialGuarantor: Guarantor = {
   name: '',
@@ -63,10 +67,13 @@ export default function Customers() {
   const [searchModal, setSearchModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [visibleLimit, setVisibleLimit] = useState(CUSTOMER_RENDER_LIMIT);
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [filterTab, setFilterTab] = useState<'all' | 'debtor' | 'sued'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
+  const didLoadRef = useRef(false);
+  const pendingRenderMeasureRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const emptyForm = {
@@ -94,7 +101,9 @@ export default function Customers() {
   const { settings } = useAuth();
 
   useEffect(() => {
-    loadCustomers();
+    if (didLoadRef.current) return;
+    didLoadRef.current = true;
+    void loadCustomers();
   }, []);
 
   useEffect(() => {
@@ -103,24 +112,48 @@ export default function Customers() {
     }
   }, [showForm]);
 
+  useEffect(() => {
+    if (!pendingRenderMeasureRef.current) return;
+    pendingRenderMeasureRef.current = false;
+    requestAnimationFrame(() => {
+      console.timeEnd('Customers.initialRenderCommit');
+    });
+  });
+
   const loadCustomers = async () => {
-    await syncCustomers();
-    const data = getCustomers();
-    // Generate customer numbers for existing customers without one
-    const updated = data.map((c, index) => ({
-      ...c,
-      customerNumber: c.customerNumber || `C-${String(index + 1).padStart(4, '0')}`
-    }));
-    setCustomers(updated);
+    console.time('Customers.totalLoad');
+    try {
+      console.time('Customers.networkApiCall');
+      const data = isApiMode() ? await api.listCustomers() : getCustomers();
+      console.timeEnd('Customers.networkApiCall');
+      const payloadBytes = new Blob([JSON.stringify(data)]).size;
+      console.info(`Customers payload: ${payloadBytes} bytes for ${data.length} rows`);
+
+      console.time('Customers.transformAndState');
+      const updated = data.map((c: Customer, index: number) => ({
+        ...c,
+        customerNumber: c.customerNumber || `C-${String(index + 1).padStart(4, '0')}`,
+      }));
+      pendingRenderMeasureRef.current = true;
+      console.time('Customers.initialRenderCommit');
+      setCustomers(updated);
+      console.timeEnd('Customers.transformAndState');
+    } finally {
+      console.timeEnd('Customers.totalLoad');
+    }
   };
 
-  const generateCustomerNumber = () => {
+  const nextGeneratedCustomerNumber = useMemo(() => {
+    if (!showForm || isEditing) return '';
+    console.time('Customers.generateCustomerNumber');
     const maxNum = customers.reduce((max, c) => {
       const num = parseInt(c.customerNumber?.replace('C-', '') || '0');
       return num > max ? num : max;
     }, 0);
-    return `C-${String(maxNum + 1).padStart(4, '0')}`;
-  };
+    const nextNumber = `C-${String(maxNum + 1).padStart(4, '0')}`;
+    console.timeEnd('Customers.generateCustomerNumber');
+    return nextNumber;
+  }, [customers, isEditing, showForm]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,7 +186,7 @@ export default function Customers() {
       } else {
         await createCustomer({
           ...customerData,
-          customerNumber: generateCustomerNumber(),
+          customerNumber: nextGeneratedCustomerNumber,
           balance: 0,
           balanceType: 'debtor'
         } as Customer);
@@ -166,27 +199,30 @@ export default function Customers() {
     }
   };
 
-  const handleEdit = (customer: Customer) => {
-    setSelectedCustomer(customer);
+  const handleEdit = async (customer: Customer) => {
+    console.time('Customers.editDetailFetch');
+    const fullCustomer = isApiMode() ? await api.getCustomer(customer.id) as Customer : customer;
+    console.timeEnd('Customers.editDetailFetch');
+    setSelectedCustomer(fullCustomer);
     setFormData({
-      name: customer.name,
-      phone: customer.phone,
-      email: customer.email || '',
-      address: customer.address,
-      gender: customer.gender,
-      city: customer.city || '',
-      governorate: customer.governorate || '',
-      region: customer.region || '',
-      dateOfBirth: customer.dateOfBirth || '',
-      nationalId: customer.nationalId || '',
-      age: customer.age?.toString() || '',
-      pensionDate: customer.pensionDate || '',
-      balance: customer.balance?.toString() || '',
+      name: fullCustomer.name,
+      phone: fullCustomer.phone,
+      email: fullCustomer.email || '',
+      address: fullCustomer.address,
+      gender: fullCustomer.gender,
+      city: fullCustomer.city || '',
+      governorate: fullCustomer.governorate || '',
+      region: fullCustomer.region || '',
+      dateOfBirth: fullCustomer.dateOfBirth || '',
+      nationalId: fullCustomer.nationalId || '',
+      age: fullCustomer.age?.toString() || '',
+      pensionDate: fullCustomer.pensionDate || '',
+      balance: fullCustomer.balance?.toString() || '',
       balanceType: 'debtor' as 'debtor',
-      notes: customer.notes || '',
-      guarantors: customer.guarantors || [null, null, null],
-      isSued: customer.isSued || false,
-      suedDate: customer.suedDate || '',
+      notes: fullCustomer.notes || '',
+      guarantors: fullCustomer.guarantors || [null, null, null],
+      isSued: fullCustomer.isSued || false,
+      suedDate: fullCustomer.suedDate || '',
     });
     setIsEditing(true);
     setShowForm(true);
@@ -247,31 +283,52 @@ export default function Customers() {
     }));
   };
 
-  const filteredCustomers = customers.filter(c => {
-    const matchesSearch = 
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.phone.includes(searchTerm) ||
-      c.customerNumber?.toLowerCase().includes(searchTerm.toLowerCase());
-      
-    if (!matchesSearch) return false;
-    
-    if (filterTab === 'debtor') {
-      return Math.round(Number(c.balance)) > 0;
-    }
-    if (filterTab === 'sued') return !!c.isSued;
-    
-    return true;
-  });
+  const filteredCustomers = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return customers.filter((customer) => {
+      const matchesSearch =
+        !term ||
+        customer.name.toLowerCase().includes(term) ||
+        customer.phone.includes(term) ||
+        (customer.customerNumber || '').toLowerCase().includes(term);
+
+      if (!matchesSearch) return false;
+      if (filterTab === 'debtor') return Math.round(Number(customer.balance)) > 0;
+      if (filterTab === 'sued') return !!customer.isSued;
+      return true;
+    });
+  }, [customers, filterTab, searchTerm]);
+
+  const visibleCustomers = useMemo(
+    () => filteredCustomers.slice(0, visibleLimit),
+    [filteredCustomers, visibleLimit],
+  );
+
+  const modalCustomers = useMemo(
+    () => (searchModal ? filteredCustomers.slice(0, SEARCH_MODAL_LIMIT) : []),
+    [filteredCustomers, searchModal],
+  );
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
-  const nextCustomerNumber = selectedCustomer?.customerNumber || generateCustomerNumber();
+  const nextCustomerNumber = showForm ? selectedCustomer?.customerNumber || nextGeneratedCustomerNumber : '';
 
-  // Statistics calculations
-  const totalCustomersCount = customers.length;
-  const suedCustomersCount = customers.filter(c => c.isSued).length;
-  const activeCustomersCount = customers.filter(c => Math.round(Number(c.balance)) > 0 && !c.isSued).length;
-  const totalDebtsAmount = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
+  const customerStats = useMemo(
+    () => customers.reduce(
+      (stats, customer) => {
+        const balance = Number(customer.balance || 0);
+        stats.totalCustomersCount += 1;
+        stats.totalDebtsAmount += balance;
+        if (customer.isSued) stats.suedCustomersCount += 1;
+        if (Math.round(balance) > 0 && !customer.isSued) stats.activeCustomersCount += 1;
+        return stats;
+      },
+      { totalCustomersCount: 0, suedCustomersCount: 0, activeCustomersCount: 0, totalDebtsAmount: 0 },
+    ),
+    [customers],
+  );
+
+  const { totalCustomersCount, suedCustomersCount, activeCustomersCount, totalDebtsAmount } = customerStats;
 
   return (
     <div className="space-y-5">
@@ -334,7 +391,10 @@ export default function Customers() {
             type="text"
             placeholder="بحث باسم العميل، رقم العميل، أو الهاتف..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+            }}
             className="w-full pr-10 pl-4 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all bg-slate-50/50"
           />
         </div>
@@ -343,19 +403,28 @@ export default function Customers() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex bg-slate-100 rounded-xl p-1 shrink-0">
             <button
-              onClick={() => setFilterTab('all')}
+              onClick={() => {
+                setFilterTab('all');
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
             >
               الكل
             </button>
             <button
-              onClick={() => setFilterTab('debtor')}
+              onClick={() => {
+                setFilterTab('debtor');
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'debtor' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
             >
               مدينون
             </button>
             <button
-              onClick={() => setFilterTab('sued')}
+              onClick={() => {
+                setFilterTab('sued');
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'sued' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
             >
               شئون قانونية ({suedCustomersCount})
@@ -408,7 +477,7 @@ export default function Customers() {
                     </td>
                   </tr>
                 ) : (
-                  filteredCustomers.map(customer => (
+                  visibleCustomers.map(customer => (
                     <tr key={customer.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4">
                         <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-600 border border-indigo-100/50 font-mono">
@@ -467,7 +536,7 @@ export default function Customers() {
               <p className="text-sm font-bold">لا يوجد عملاء مطابِقين للبحث الحالي</p>
             </div>
           ) : (
-            filteredCustomers.map(customer => (
+            visibleCustomers.map(customer => (
               <div key={customer.id} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between gap-4 group ${customer.isSued ? 'border-red-100 hover:border-red-200' : 'border-slate-100 hover:border-slate-200'}`}>
                 {/* Card Header */}
                 <div className="flex items-start justify-between gap-3">
@@ -531,6 +600,18 @@ export default function Customers() {
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {filteredCustomers.length > visibleCustomers.length && (
+        <div className="text-center">
+          <button
+            type="button"
+            onClick={() => setVisibleLimit((limit) => limit + CUSTOMER_RENDER_LIMIT)}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            عرض المزيد ({filteredCustomers.length - visibleCustomers.length})
+          </button>
         </div>
       )}
 
@@ -986,7 +1067,7 @@ export default function Customers() {
                 autoFocus
               />
               <div className="max-h-80 overflow-y-auto border border-gray-200 rounded-lg">
-                {filteredCustomers.map(customer => (
+                {modalCustomers.map(customer => (
                   <div
                     key={customer.id}
                     onClick={() => {
@@ -1022,4 +1103,3 @@ export default function Customers() {
     </div>
   );
 }
-
