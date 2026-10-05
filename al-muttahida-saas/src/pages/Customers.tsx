@@ -71,6 +71,7 @@ export default function Customers() {
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [filterTab, setFilterTab] = useState<'all' | 'debtor' | 'sued'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
   const didLoadRef = useRef(false);
   const pendingRenderMeasureRef = useRef(false);
@@ -119,6 +120,10 @@ export default function Customers() {
       console.timeEnd('Customers.initialRenderCommit');
     });
   });
+
+  useEffect(() => {
+    searchInputRef.current?.focus();
+  }, []);
 
   const loadCustomers = async () => {
     console.time('Customers.totalLoad');
@@ -257,6 +262,26 @@ export default function Customers() {
     setError(null);
   };
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'F2') {
+        event.preventDefault();
+        handleNew();
+      }
+      if (event.key === 'F5') {
+        event.preventDefault();
+        void loadCustomers();
+      }
+      if (event.key === 'Escape') {
+        if (searchModal) setSearchModal(false);
+        if (showForm) handleClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [searchModal, showForm]);
+
   const updateGuarantor = (index: number, field: keyof Guarantor, value: string) => {
     const cleanedValue = (field === 'phone' || field === 'nationalId') ? value.replace(/\D/g, '') : value;
     const newGuarantors = [...formData.guarantors] as [Guarantor | null, Guarantor | null, Guarantor | null];
@@ -331,21 +356,69 @@ export default function Customers() {
   const { totalCustomersCount, suedCustomersCount, activeCustomersCount, totalDebtsAmount } = customerStats;
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-        <h2 className="text-xl font-black text-slate-900">العملاء</h2>
-        <button
-          onClick={handleNew}
-          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-xl hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
-        >
-          <Plus size={16} />
-          <span>عميل جديد</span>
-        </button>
+    <div className="space-y-2">
+      {/* Unified Compact Header Strip */}
+      <div className="erp-action-bar">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-lg font-black text-slate-900 shrink-0">العملاء</h2>
+          <div className="flex bg-slate-100 rounded-lg p-0.5 shrink-0">
+            <button
+              onClick={() => {
+                setFilterTab('all');
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
+              className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${filterTab === 'all' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
+            >
+              الكل ({totalCustomersCount})
+            </button>
+            <button
+              onClick={() => {
+                setFilterTab('debtor');
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
+              className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${filterTab === 'debtor' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
+            >
+              مدينون ({activeCustomersCount})
+            </button>
+            <button
+              onClick={() => {
+                setFilterTab('sued');
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
+              className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${filterTab === 'sued' ? 'bg-white text-rose-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
+            >
+              نزاعات ({suedCustomersCount})
+            </button>
+          </div>
+          <div className="relative flex-1 min-w-[240px] max-w-md">
+            <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              ref={searchInputRef}
+              autoFocus
+              placeholder="بحث باسم العميل، رقم العميل، أو الهاتف..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
+              }}
+              className="input-ui h-9 w-full pr-9 pl-3 text-xs bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleNew}
+            className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs"
+          >
+            <Plus size={15} />
+            <span>+ عميل جديد</span>
+          </button>
+        </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="hidden grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Customers */}
         <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between">
           <div className="space-y-1">
@@ -382,141 +455,75 @@ export default function Customers() {
         </div>
       </div>
 
-      {/* Toolbar / Search & Filter Tabs */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Search */}
-        <div className="relative w-full md:max-w-xs">
-          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="بحث باسم العميل، رقم العميل، أو الهاتف..."
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setVisibleLimit(CUSTOMER_RENDER_LIMIT);
-            }}
-            className="w-full pr-10 pl-4 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all bg-slate-50/50"
-          />
-        </div>
-
-        {/* Filter Tabs & View Toggle */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex bg-slate-100 rounded-xl p-1 shrink-0">
-            <button
-              onClick={() => {
-                setFilterTab('all');
-                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
-            >
-              الكل
-            </button>
-            <button
-              onClick={() => {
-                setFilterTab('debtor');
-                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'debtor' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
-            >
-              مدينون
-            </button>
-            <button
-              onClick={() => {
-                setFilterTab('sued');
-                setVisibleLimit(CUSTOMER_RENDER_LIMIT);
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${filterTab === 'sued' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
-            >
-              شئون قانونية ({suedCustomersCount})
-            </button>
-          </div>
-
-          <div className="h-6 w-px bg-slate-200 hidden sm:block"></div>
-
-          {/* View Switcher Toggle */}
-          <div className="flex bg-slate-100 rounded-xl p-1 shrink-0">
-            <button
-              onClick={() => setViewMode('table')}
-              className={`p-1.5 rounded-lg transition-all ${viewMode === 'table' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-              title="عرض جدول"
-            >
-              <List size={16} />
-            </button>
-            <button
-              onClick={() => setViewMode('grid')}
-              className={`p-1.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-              title="عرض بطاقات"
-            >
-              <Grid size={16} />
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Customers List / Grid */}
       {viewMode === 'table' ? (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="bg-white rounded-lg shadow-2xs border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto max-h-[calc(100vh-190px)]">
             <table className="w-full border-collapse">
               <thead>
-                <tr className="bg-slate-50/75 border-b border-slate-100">
-                  <th className="px-6 py-4 text-right text-xs font-black text-slate-500 tracking-wider">رقم العميل</th>
-                  <th className="px-6 py-4 text-right text-xs font-black text-slate-500 tracking-wider">الاسم</th>
-                  <th className="px-6 py-4 text-right text-xs font-black text-slate-500 tracking-wider">رقم الهاتف</th>
-                  <th className="px-6 py-4 text-right text-xs font-black text-slate-500 tracking-wider">العنوان</th>
-                  <th className="px-6 py-4 text-right text-xs font-black text-slate-500 tracking-wider">الرصيد الحالي</th>
-                  <th className="px-6 py-4 text-center text-xs font-black text-slate-500 tracking-wider">إجراءات</th>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">كود العميل</th>
+                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">اسم العميل</th>
+                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الهاتف</th>
+                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">العنوان</th>
+                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الرصيد الحالي</th>
+                  <th className="py-2.5 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredCustomers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-16 text-center text-slate-400">
-                      <Users size={40} className="mx-auto mb-3 text-slate-300" />
-                      <p className="text-sm font-bold">لا يوجد عملاء مطابِقين للبحث الحالي</p>
+                    <td colSpan={6} className="py-12 px-4 text-center text-slate-400">
+                      <Users size={36} className="mx-auto mb-2 text-slate-300" />
+                      <p className="text-xs font-bold">لا يوجد عملاء مطابِقين للبحث الحالي</p>
                     </td>
                   </tr>
                 ) : (
                   visibleCustomers.map(customer => (
-                    <tr key={customer.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-600 border border-indigo-100/50 font-mono">
+                    <tr
+                      key={customer.id}
+                      onDoubleClick={() => handleEdit(customer)}
+                      title="انقر مرتين للتعديل"
+                      className="group cursor-pointer hover:bg-slate-50 transition-colors"
+                    >
+                      <td className="py-2.5 px-4">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-blue-50 text-blue-700 font-mono border border-blue-100">
                           {customer.customerNumber}
                         </span>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
-                            {customer.isSued ? <Gavel size={16} /> : <User size={16} />}
+                      <td className="py-2.5 px-4">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                            {customer.isSued ? <Gavel size={14} /> : <User size={14} />}
                           </div>
                           <div className="flex flex-col">
-                            <span className={`font-semibold text-sm ${customer.isSued ? 'text-red-600 line-through' : 'text-slate-800'}`}>{customer.name}</span>
-                            {customer.isSued && <span className="text-[10px] text-red-500 font-bold flex items-center gap-1 mt-0.5"><AlertTriangle size={10} /> محال للقضاء</span>}
+                            <span className={`font-bold text-xs md:text-sm ${customer.isSued ? 'text-red-600 line-through' : 'text-slate-800'}`}>{customer.name}</span>
+                            {customer.isSued && <span className="text-[10px] text-red-500 font-bold flex items-center gap-1"><AlertTriangle size={10} /> محال للقضاء</span>}
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm text-slate-600 font-mono">{customer.phone}</td>
-                      <td className="px-6 py-4 text-sm text-slate-500 truncate max-w-[200px]">{customer.address || '—'}</td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black shadow-sm/5 border ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/5' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                      <td className="py-2.5 px-4 text-xs md:text-sm text-slate-600 font-mono">{customer.phone}</td>
+                      <td className="py-2.5 px-4 text-xs md:text-sm text-slate-500 truncate max-w-[200px]">{customer.address || '—'}</td>
+                      <td className="py-2.5 px-4">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-slate-100 text-slate-600'}`}>
                           {formatCurrency(customer.balance)} {Math.round(Number(customer.balance)) > 0 ? 'مدين' : ''}
                         </span>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center justify-center gap-1.5">
+                      <td className="py-2.5 px-4">
+                        <div className="erp-icon-actions">
                           <button
                             onClick={() => handleEdit(customer)}
-                            className="p-2 text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 rounded-xl transition-all"
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
                             title="تعديل"
                           >
-                            <Edit size={14} />
+                            <Edit size={15} />
                           </button>
                           <button
                             onClick={() => handleDelete(customer.id)}
-                            className="p-2 text-red-500 hover:bg-red-50 border border-transparent hover:border-red-100 rounded-xl transition-all"
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
                             title="حذف"
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={15} />
                           </button>
                         </div>
                       </td>
@@ -525,6 +532,11 @@ export default function Customers() {
                 )}
               </tbody>
             </table>
+          </div>
+          {/* Sticky Summary Footer Bar */}
+          <div className="erp-status-bar">
+            <span className="font-bold text-slate-700">إجمالي السجلات: <span className="text-blue-700 font-extrabold">{filteredCustomers.length}</span> (المعروض: {visibleCustomers.length})</span>
+            <span className="font-bold text-slate-700">إجمالي المديونية الحالية: <span className="text-rose-700 font-extrabold">{formatCurrency(totalDebtsAmount)}</span></span>
           </div>
         </div>
       ) : (

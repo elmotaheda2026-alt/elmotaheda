@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   Package,
@@ -226,6 +226,10 @@ export default function Invoices() {
   const [modalSearchQuery, setModalSearchQuery] = useState('');
   const [modalSearchLoading, setModalSearchLoading] = useState(false);
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+  const customerInputRef = useRef<HTMLInputElement>(null);
+  const productSelectRef = useRef<HTMLSelectElement>(null);
+  const quantityInputRef = useRef<HTMLInputElement>(null);
+  const addLineButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshSalesList = async () => {
     await syncSales();
@@ -366,6 +370,31 @@ export default function Invoices() {
     };
     loadData();
   }, []);
+
+  useEffect(() => {
+    customerInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'F2') {
+        event.preventDefault();
+        resetForm();
+        customerInputRef.current?.focus();
+      }
+      if (event.key === 'F5') {
+        event.preventDefault();
+        void refreshSalesList();
+      }
+      if (event.key === 'Escape') {
+        if (showSearchModal) setShowSearchModal(false);
+        if (savedSaleForPrinting) setSavedSaleForPrinting(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSearchModal, savedSaleForPrinting, suppliers]);
 
   const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId) || null;
   const selectedProduct = products.find((product) => product.id === lineProductId) || null;
@@ -761,19 +790,19 @@ export default function Invoices() {
   };
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+    <div className="space-y-2 pb-9">
+      <section className="erp-action-bar">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex-1">
             <h2 className="text-2xl font-bold text-slate-900">{editingSaleId ? 'تعديل تعاقد قائم' : 'إصدار فاتورة بيع'}</h2>
             <p className="mt-1 text-sm text-slate-500 leading-relaxed max-w-2xl">
               {editingSaleId ? 'أنت في وضع التعديل الآن. سيتم تحديث الكميات وحسابات العملاء تلقائياً عند الحفظ.' : 'شاشة واحدة تجمع العميل والصنف والتقسيط والشراء التلقائي عند الحاجة.'}
             </p>
-            <div className="mt-4 flex items-center gap-2">
+            <div className="mt-1 flex items-center gap-2">
               <button
                 type="button"
                 onClick={openContractsSearch}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-2xl text-sm transition-all shadow-sm active:scale-95"
+                className="inline-flex items-center gap-2 px-3 py-2 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-sm transition-all shadow-sm active:scale-95"
               >
                 <Search size={16} />
                 البحث في سجل التعاقدات
@@ -820,14 +849,22 @@ export default function Invoices() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,1.7fr)_420px]">
-        <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-2 2xl:grid-cols-[minmax(0,1.7fr)_360px]">
+        <div className="space-y-2">
           <Panel title="1. بيانات العميل والفاتورة" icon={<CalendarDays size={18} className="text-sky-600" />}>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <Field label="العميل">
                 <div className="relative w-full">
                   <input
+                    ref={customerInputRef}
+                    autoFocus
                     value={customerSearchTerm}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        productSelectRef.current?.focus();
+                      }
+                    }}
                     onChange={(e) => {
                       setCustomerSearchTerm(e.target.value);
                       setShowCustomerSuggestions(true);
@@ -960,7 +997,14 @@ export default function Invoices() {
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_110px_110px_110px_auto]">
                 <Field label="الصنف">
                   <select
+                    ref={productSelectRef}
                     value={lineProductId}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        quantityInputRef.current?.focus();
+                      }
+                    }}
                     onChange={(e) => {
                       const product = products.find((entry) => entry.id === e.target.value);
                       setLineProductId(e.target.value);
@@ -979,12 +1023,19 @@ export default function Invoices() {
 
                 <Field label="الكمية">
                   <input
+                    ref={quantityInputRef}
                     type="number"
                     min="1"
                     value={lineQuantity}
                     onChange={(e) => setLineQuantity(e.target.value === '' ? '' : Number(e.target.value))}
                     className="input-ui"
-                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-'].includes(e.key)) e.preventDefault();
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addLineButtonRef.current?.focus();
+                      }
+                    }}
                   />
                 </Field>
 
@@ -1016,8 +1067,16 @@ export default function Invoices() {
 
                 <div className="flex items-end">
                   <button
+                    ref={addLineButtonRef}
                     onClick={addLine}
-                    className="inline-flex h-[50px] items-center gap-2 rounded-2xl bg-sky-600 px-4 font-bold text-white hover:bg-sky-700"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addLine();
+                        productSelectRef.current?.focus();
+                      }
+                    }}
+                    className="inline-flex h-10 items-center gap-2 rounded-lg bg-sky-600 px-4 font-bold text-white hover:bg-sky-700"
                   >
                     <Plus size={18} />
                     إضافة
@@ -1123,18 +1182,18 @@ export default function Invoices() {
               )}
             </div>
 
-            <div className="mt-5 overflow-hidden rounded-[24px] border border-slate-200">
+            <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 shadow-xs">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] bg-white">
-                  <thead className="bg-slate-100 text-slate-700">
+                <table className="w-full min-w-[850px] bg-white">
+                  <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-4 py-3 text-right">الصنف</th>
-                      <th className="px-4 py-3 text-right">النوع</th>
-                      <th className="px-4 py-3 text-right">الكمية</th>
-                      <th className="px-4 py-3 text-right">المتاح</th>
-                      <th className="px-4 py-3 text-right">حالة التوريد</th>
-                      <th className="px-4 py-3 text-right">الإجمالي</th>
-                      <th className="px-4 py-3 text-right">إجراءات</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الصنف</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">النوع</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الكمية</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">المتاح بالمخزن</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">حالة التوريد</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الإجمالي</th>
+                      <th className="py-2.5 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1501,10 +1560,10 @@ function Panel({
   icon?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm transition-all focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-200 focus-within:shadow-md">
-      <div className="mb-5 flex items-center gap-3">
+    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition-all focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-200 focus-within:shadow-md">
+      <div className="mb-3 flex items-center gap-2">
         {icon}
-        <h3 className="text-lg font-bold text-slate-800">{title}</h3>
+        <h3 className="text-sm font-bold text-slate-800">{title}</h3>
       </div>
       {children}
     </section>
@@ -1514,7 +1573,7 @@ function Panel({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-sm font-bold text-slate-700">{label}</span>
+      <span className="mb-1 block text-xs font-bold text-slate-700">{label}</span>
       {children}
     </label>
   );

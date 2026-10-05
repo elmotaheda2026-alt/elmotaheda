@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -33,10 +33,10 @@
   body {
     direction: rtl;
     text-align: right;
-    background: #f1f5f9;
+    background: #f8fafc;
     color: #0f172a;
-    font-size: 16.5px;
-    line-height: 1.6;
+    font-size: 14px;
+    line-height: 1.45;
     min-height: 100%;
     overflow-y: auto;
   }
@@ -63,8 +63,20 @@
 
 @layer utilities {
   .input-ui {
-    @apply w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3.5 text-base text-slate-800 outline-none transition-all duration-200;
-    @apply focus:border-sky-500 focus:bg-white focus:ring-4 focus:ring-sky-500/10 hover:border-slate-300 hover:bg-slate-50;
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition-all duration-150;
+    @apply focus:border-blue-500 focus:ring-2 focus:ring-blue-100 hover:border-slate-300;
+  }
+
+  .erp-action-bar {
+    @apply flex min-h-14 flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm md:flex-row md:items-center md:justify-between;
+  }
+
+  .erp-status-bar {
+    @apply sticky bottom-0 z-20 flex min-h-11 items-center justify-between gap-4 border-t border-slate-200 bg-white/95 px-4 py-2.5 text-xs font-bold text-slate-700 backdrop-blur shadow-sm;
+  }
+
+  .erp-icon-actions {
+    @apply flex items-center justify-center gap-1 opacity-80 transition-opacity group-hover:opacity-100;
   }
 
   .line-clamp-2 {
@@ -86,7 +98,7 @@
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-6px);
   }
   to {
     opacity: 1;
@@ -95,7 +107,7 @@
 }
 
 .animate-fadeIn {
-  animation: fadeIn 0.3s ease-out;
+  animation: fadeIn 0.2s ease-out;
 }
 
 /* RTL specific styles */
@@ -107,28 +119,59 @@
   margin-right: 18rem;
 }
 
-[dir="rtl"] .mr-64 {
-  margin-right: 16rem;
+[dir="rtl"] .mr-16 {
+  margin-right: 4rem;
 }
 
 [dir="rtl"] .ml-64 {
   margin-left: 16rem;
 }
 
-/* Table RTL fixes */
+/* Table RTL & High Density Grid Styling */
 table {
   direction: rtl;
-  font-size: 1rem;
+  font-size: 0.875rem;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 th {
   text-align: right;
   white-space: nowrap;
+  background-color: #f8fafc;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #e2e8f0;
 }
 
 td {
   text-align: right;
   vertical-align: middle;
+  color: #1e293b;
+  font-size: 0.875rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+th, td {
+  padding: 0.625rem 1rem !important; /* py-2.5 px-4 */
+}
+
+tbody tr {
+  transition: background-color 100ms ease;
+  cursor: pointer;
+}
+
+tbody tr:hover {
+  background-color: #f8fafc;
 }
 
 /* Input RTL fixes */
@@ -142,12 +185,12 @@ section[class*="rounded"], div[class*="rounded-[24px]"], div[class*="rounded-[26
 
 @media (min-width: 1280px) {
   table {
-    font-size: 0.95rem;
+    font-size: 0.875rem;
   }
 
   th, td {
-    padding-top: 1rem;
-    padding-bottom: 1rem;
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
   }
 }
 
@@ -174,4 +217,3 @@ section[class*="rounded"], div[class*="rounded-[24px]"], div[class*="rounded-[26
     border: 1px solid #ddd !important;
   }
 }
-

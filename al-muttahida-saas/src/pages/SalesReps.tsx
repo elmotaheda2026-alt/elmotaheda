@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Edit, Trash2, Search, UserCheck } from 'lucide-react';
 import { SalesRep } from '../types';
 import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSalesReps } from '../lib/storage';
@@ -9,6 +9,7 @@ export default function SalesReps() {
   const [showModal, setShowModal] = useState(false);
   const [editingRep, setEditingRep] = useState<SalesRep | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -20,13 +21,40 @@ export default function SalesReps() {
     isActive: true,
   });
 
+  const loadData = async () => {
+    if (isApiMode()) await syncSalesReps();
+    setReps(getSalesReps());
+  };
+
   useEffect(() => {
-    const load = async () => {
-      if (isApiMode()) await syncSalesReps();
-      setReps(getSalesReps());
-    };
-    load();
+    void loadData();
   }, []);
+
+  useEffect(() => {
+    searchInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'F2') {
+        event.preventDefault();
+        resetForm();
+        setEditingRep(null);
+        setShowModal(true);
+      }
+      if (event.key === 'F5') {
+        event.preventDefault();
+        void loadData();
+      }
+      if (event.key === 'Escape' && showModal) {
+        setShowModal(false);
+        setEditingRep(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showModal]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,9 +102,9 @@ export default function SalesReps() {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {/* Header */}
-      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+      <div className="erp-action-bar">
         <h2 className="text-xl font-black text-slate-900">المناديب</h2>
         <button
           onClick={() => { resetForm(); setShowModal(true); }}
@@ -88,11 +116,13 @@ export default function SalesReps() {
       </div>
 
       {/* Toolbar / Search */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-2">
         <div className="relative max-w-sm">
           <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
+            ref={searchInputRef}
+            autoFocus
             placeholder="بحث عن مندوب..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -102,7 +132,7 @@ export default function SalesReps() {
       </div>
 
       {/* Reps Table */}
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[800px]">
             <thead className="bg-slate-50 border-b border-slate-200">
@@ -126,7 +156,7 @@ export default function SalesReps() {
                 filteredReps.map(rep => {
                   const percentage = rep.target > 0 ? Math.min((rep.achieved / rep.target) * 100, 100) : 0;
                   return (
-                    <tr key={rep.id} className="hover:bg-slate-50/50 transition-colors">
+                    <tr key={rep.id} onDoubleClick={() => handleEdit(rep)} className="group cursor-default hover:bg-slate-50/50 transition-colors">
                       <td className="px-5 py-3">
                         <span className="font-bold text-slate-900 text-sm">{rep.name}</span>
                       </td>
@@ -148,7 +178,7 @@ export default function SalesReps() {
                         </span>
                       </td>
                       <td className="px-5 py-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
+                        <div className="erp-icon-actions">
                           <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
                             <Edit size={15} />
                           </button>
@@ -163,6 +193,10 @@ export default function SalesReps() {
               )}
             </tbody>
           </table>
+        </div>
+        <div className="erp-status-bar">
+          <span>المعروض: {filteredReps.length}</span>
+          <span>إجمالي المناديب: {reps.length}</span>
         </div>
       </section>
 

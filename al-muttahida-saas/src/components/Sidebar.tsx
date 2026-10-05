@@ -5,20 +5,18 @@ import { Permission } from '../types';
 import { hasPermission as userHasPermission } from '../lib/permissions';
 import {
   Banknote,
-  BarChart3,
   Bell,
   Calculator,
   ChevronDown,
+  ChevronsLeft,
+  ChevronsRight,
   ClipboardList,
   FileSearch,
-  LayoutDashboard,
-  LogOut,
   Package,
   PieChart,
   Receipt,
   Settings,
   ShoppingBag,
-  ShoppingCart,
   Truck,
   UserCheck,
   UserCircle,
@@ -29,6 +27,7 @@ import {
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
+  onToggle: () => void;
 }
 
 type PermissionKey = Permission;
@@ -43,15 +42,15 @@ const menuGroups: {
     defaultOpen: true,
     items: [
       { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
-      { icon: Receipt, label: 'العقود', path: '/invoices', permission: 'sales:read' },
+      { icon: Receipt, label: 'العقود والفواتير', path: '/invoices', permission: 'sales:read' },
       { icon: Truck, label: 'الموردين', path: '/suppliers', permission: 'sales:read' },
       { icon: UserCheck, label: 'المناديب', path: '/sales-reps', permission: 'sales:read' },
-      { icon: Package, label: 'الأصناف', path: '/products-inventory', permission: 'inventory:manage' },
+      { icon: Package, label: 'الأصناف والمخزون', path: '/products-inventory', permission: 'inventory:manage' },
     ],
   },
   {
     title: 'الخزينة والتحصيل',
-    defaultOpen: false,
+    defaultOpen: true,
     items: [
       { icon: Banknote, label: 'الخزينة', path: '/payments', permission: 'payments:read' },
       { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
@@ -60,10 +59,8 @@ const menuGroups: {
   },
   {
     title: 'التقارير والمالية',
-    defaultOpen: false,
+    defaultOpen: true,
     items: [
-      
-
       { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
       { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
       { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
@@ -71,7 +68,7 @@ const menuGroups: {
   },
   {
     title: 'الإدارة',
-    defaultOpen: false,
+    defaultOpen: true,
     items: [
       { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
       { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
@@ -80,11 +77,10 @@ const menuGroups: {
   },
 ];
 
-export default function Sidebar({ isOpen, onClose }: SidebarProps) {
+export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, settings } = useAuth();
-
 
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
@@ -93,102 +89,133 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   };
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(menuGroups.map((group) => [group.title, Boolean(group.defaultOpen)])),
+    () => Object.fromEntries(menuGroups.map((group) => [group.title, true])),
   );
 
   const toggleGroup = (title: string) => {
-    setOpenGroups((current) => {
-      const isAlreadyOpen = !!current[title];
-      // Close all and only open the clicked one if it wasn't open
-      const newState: Record<string, boolean> = {};
-      menuGroups.forEach(g => {
-        newState[g.title] = false;
-      });
-      if (!isAlreadyOpen) {
-        newState[title] = true;
-      }
-      return newState;
-    });
+    setOpenGroups((current) => ({
+      ...current,
+      [title]: !current[title],
+    }));
   };
 
   return (
     <>
-      {isOpen && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} />}
+      {/* Mobile backdrop */}
+      {isOpen && <div className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden" onClick={onClose} />}
 
       <aside
-        className={`fixed right-0 top-0 z-50 flex h-full w-72 transform flex-col border-l border-slate-200/80 bg-white/95 backdrop-blur-md text-slate-800 shadow-[0_0_40px_rgba(0,0,0,0.05)] transition-transform duration-300 ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
+        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col border-l border-slate-200/90 bg-white text-slate-800 shadow-[0_0_25px_rgba(15,23,42,0.06)] transition-all duration-300 ${
+          isOpen ? 'w-64 translate-x-0 xl:w-72' : 'w-16 translate-x-full lg:translate-x-0'
         }`}
       >
-        <div className="border-b border-slate-200 px-6 py-8">
+        {/* Header / Branding */}
+        <div className={`flex items-center justify-between border-b border-slate-200 ${isOpen ? 'px-4 py-4' : 'px-2 py-4 justify-center'}`}>
           <button
             type="button"
-            onClick={() => { navigate('/'); onClose(); }}
-            className="w-full text-center group transition-opacity hover:opacity-75 active:scale-95"
+            onClick={() => {
+              navigate('/');
+              onClose();
+            }}
+            className="flex items-center gap-3 overflow-hidden text-right transition-opacity hover:opacity-85"
+            title={settings.companyName || 'شركة المتحدة'}
           >
-            <h1 className="text-3xl font-extrabold leading-tight text-slate-900 group-hover:text-sky-700 transition-colors">{settings.companyName || 'شركة المتحدة'}</h1>
-            <p className="mt-2 text-sm text-slate-500">بوابات عمل متكاملة للمحاسبة والإدارة</p>
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-md shadow-blue-500/20">
+              <Warehouse size={22} />
+            </div>
+            {isOpen && (
+              <div className="flex flex-col truncate">
+                <h1 className="truncate text-base font-extrabold tracking-tight text-slate-900">
+                  {settings.companyName || 'شركة المتحدة'}
+                </h1>
+                <span className="text-[11px] font-medium text-slate-500">نظام ERP المتكامل</span>
+              </div>
+            )}
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-5 py-3 no-scrollbar">
-          <div className="space-y-2">
+        {/* Navigation Items */}
+        <nav className={`flex-1 overflow-y-auto py-3 custom-scrollbar ${isOpen ? 'px-3' : 'px-2'}`}>
+          <div className="space-y-3">
             {menuGroups.map((group) => {
-              // If group is 'التقارير والمالية' and user lacks 'reports:read', hide the entire group
-              if (group.title === 'التقارير والمالية' && !hasPermission('reports:read')) {
-                return null;
-              }
+              if (group.title === 'التقارير والمالية' && !hasPermission('reports:read')) return null;
 
-              const allowedItems = group.items.filter(item => hasPermission(item.permission));
-              
+              const allowedItems = group.items.filter((item) => hasPermission(item.permission));
               if (allowedItems.length === 0) return null;
 
               return (
-              <section key={group.title} className="border-b border-slate-200 pb-3 last:border-b-0">
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.title)}
-                  className="flex w-full items-center justify-between py-2 text-right"
-                >
-                  <span className="text-sm font-bold text-slate-500">{group.title}</span>
-                  <ChevronDown
-                    size={18}
-                    className={`text-slate-500 transition-transform ${openGroups[group.title] ? 'rotate-180' : ''}`}
-                  />
-                </button>
+                <section key={group.title} className="space-y-1">
+                  {isOpen ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(group.title)}
+                      className="flex w-full items-center justify-between px-2 py-1.5 text-right text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      <span>{group.title}</span>
+                      <ChevronDown
+                        size={14}
+                        className={`transition-transform duration-200 ${openGroups[group.title] ? 'rotate-180' : ''}`}
+                      />
+                    </button>
+                  ) : (
+                    <div className="my-2 border-t border-slate-100" />
+                  )}
 
-                {openGroups[group.title] && (
-                  <div className="mt-1 space-y-1">
-                    {allowedItems.map((item) => {
-                      const Icon = item.icon;
-                      const isActive = location.pathname === item.path;
+                  {(isOpen ? openGroups[group.title] : true) && (
+                    <div className="space-y-0.5">
+                      {allowedItems.map((item) => {
+                        const Icon = item.icon;
+                        const isActive = location.pathname === item.path;
 
-                      return (
-                        <button
-                          key={item.path}
-                          onClick={() => {
-                            navigate(item.path);
-                            onClose();
-                          }}
-                          className={`flex w-full items-center justify-between rounded-2xl px-4 py-3.5 text-[1.03rem] font-semibold transition ${
-                            isActive
-                              ? 'bg-sky-600 text-white shadow-sm'
-                              : 'text-slate-700 hover:bg-slate-200/70 hover:text-slate-900'
-                          }`}
-                        >
-                          <span>{item.label}</span>
-                          <Icon size={18} />
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            )})}
+                        return (
+                          <button
+                            key={item.path}
+                            type="button"
+                            title={item.label}
+                            onClick={() => {
+                              navigate(item.path);
+                              onClose();
+                            }}
+                            className={`group flex w-full items-center gap-3 rounded-lg font-bold transition-all duration-150 ${
+                              isOpen ? 'px-3 py-2 text-sm' : 'justify-center px-2 py-2.5 text-xs'
+                            } ${
+                              isActive
+                                ? 'border-r-4 border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-sm'
+                                : 'border-r-4 border-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                            }`}
+                          >
+                            <Icon
+                              size={19}
+                              className={`shrink-0 transition-colors ${
+                                isActive ? 'text-blue-600' : 'text-slate-500 group-hover:text-slate-700'
+                              }`}
+                            />
+                            {isOpen && <span className="truncate">{item.label}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </div>
         </nav>
 
+        {/* Footer / Toggle Button */}
+        <div className="border-t border-slate-200 p-2.5 bg-slate-50/50">
+          <button
+            type="button"
+            onClick={onToggle}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 active:scale-98"
+            title={isOpen ? 'تصغير القائمة' : 'توسيع القائمة'}
+          >
+            {isOpen ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+            {isOpen && <span>تصغير القائمة</span>}
+          </button>
+        </div>
       </aside>
     </>
   );
 }
+

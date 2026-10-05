@@ -641,24 +641,29 @@ export default function Payments() {
   const closingNet = closingTotalIn - closingTotalOut;
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
-        <h2 className="text-xl font-black text-slate-900">الخزينة</h2>
-        <div className="flex gap-2">
+    <div className="space-y-3">
+      {/* Unified Compact Header Strip */}
+      <div className="erp-action-bar">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-black text-slate-900 shrink-0">الخزينة والتحصيل</h2>
+          <span className="text-xs bg-slate-100 px-2.5 py-1 rounded-md font-bold text-slate-600">
+            حركة اليوم: {todayPayments.length} معاملة
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
           <button
             onClick={() => openModal('in')}
-            className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold shadow-sm"
+            className="flex items-center gap-1.5 bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold shadow-xs"
           >
-            <Plus size={16} />
-            <span>سداد عميل</span>
+            <Plus size={15} />
+            <span>+ سداد عميل</span>
           </button>
           <button
             onClick={() => openModal('out')}
-            className="flex items-center gap-1.5 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-bold shadow-sm"
+            className="flex items-center gap-1.5 bg-rose-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-rose-700 transition-colors text-xs font-bold shadow-xs"
           >
-            <Plus size={16} />
-            <span>دفعة مورد</span>
+            <Plus size={15} />
+            <span>+ دفعة مورد</span>
           </button>
           {hasPermission(user, 'closing:write') && (
             <button
@@ -667,9 +672,9 @@ export default function Payments() {
                 setClosingNotes('');
                 setShowClosingModal(true);
               }}
-              className="flex items-center gap-1.5 bg-slate-700 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors text-sm font-bold shadow-sm"
+              className="flex items-center gap-1.5 bg-slate-800 text-white px-3.5 py-1.5 rounded-lg hover:bg-slate-900 transition-colors text-xs font-bold shadow-xs"
             >
-              <Lock size={16} />
+              <Lock size={15} />
               <span>إغلاق اليومية</span>
             </button>
           )}
@@ -678,73 +683,67 @@ export default function Payments() {
 
       {message && (
         <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
+          className={`rounded-xl border px-4 py-2.5 text-xs font-bold ${
             message.type === 'success'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-red-200 bg-red-50 text-red-700'
+              : 'border-rose-200 bg-rose-50 text-rose-700'
           }`}
         >
           {message.text}
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
         <StatCard
-          icon={<ArrowDownLeft size={22} className="text-emerald-600" />}
-          label="إجمالي الوارد"
+          icon={<ArrowDownLeft size={20} className="text-emerald-600" />}
+          label="إجمالي الوارد اليوم"
           value={formatCurrency(totalIn)}
           tone="emerald"
         />
         <StatCard
-          icon={<ArrowUpRight size={22} className="text-rose-600" />}
-          label="إجمالي الصادر"
+          icon={<ArrowUpRight size={20} className="text-rose-600" />}
+          label="إجمالي الصادر اليوم"
           value={formatCurrency(totalOut)}
           tone="rose"
         />
         <StatCard
-          icon={<Banknote size={22} className="text-sky-600" />}
-          label="صافي الحركة"
+          icon={<Banknote size={20} className="text-sky-600" />}
+          label="صافي النقدية بالخزينة"
           value={formatCurrency(totalIn - totalOut)}
           tone="sky"
         />
       </div>
 
-      <div className="rounded-[26px] border border-slate-200 bg-white p-5 text-sm font-semibold text-slate-600 shadow-sm">
-        المعروض الآن معاملات اليوم فقط. السجلات السابقة يمكن مراجعتها من نافذة إغلاق اليومية.
-      </div>
-
-      <div className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[950px]">
-            <thead className="bg-slate-100 text-slate-700">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+        <div className="overflow-x-auto max-h-[calc(100vh-230px)]">
+          <table className="w-full min-w-[850px]">
+            <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="px-4 py-4 text-right text-sm font-bold">الوصف</th>
-                <th className="px-4 py-4 text-right text-sm font-bold">الجهة</th>
-                <th className="px-4 py-4 text-right text-sm font-bold">الفاتورة / القسط</th>
-                <th className="px-4 py-4 text-right text-sm font-bold">التاريخ</th>
-                <th className="px-4 py-4 text-right text-sm font-bold">المبلغ</th>
+                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">نوع الحركة</th>
+                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">اسم الطرف الآخر</th>
+                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الفاتورة / القسط</th>
+                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">البيان / الوصف</th>
+                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">التاريخ</th>
+                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">المبلغ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-slate-400 text-sm">
+                  <td colSpan={6} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
                     <div className="flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-5 w-5 text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                      </svg>
+                      <span className="animate-spin text-blue-600">⏳</span>
                       <span>جاري تحميل الحركات المالية...</span>
                     </div>
                   </td>
                 </tr>
-              ) : payments.length === 0 ? (
+              ) : todayPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-slate-400 text-sm">
-                    لا توجد معاملات بتاريخ اليوم
+                  <td colSpan={6} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
+                    لا توجد معاملات مضافة بتاريخ اليوم
                   </td>
                 </tr>
-              ) : payments.map((payment) => {
+              ) : todayPayments.map((payment) => {
                 const customerName =
                   customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
                 const supplierName =
@@ -757,23 +756,25 @@ export default function Payments() {
                   : null;
 
                 return (
-                  <tr key={payment.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-4">
-                      <p className="font-medium text-slate-800">{displayArabic(payment.description)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{payment.type === 'in' ? 'وارد' : 'صادر'}</p>
+                  <tr key={payment.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-2.5 px-4">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold ${payment.type === 'in' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                        {payment.type === 'in' ? 'قبض وارد' : 'صرف صادرات'}
+                      </span>
                     </td>
-                    <td className="px-4 py-4 text-sm text-slate-700">
+                    <td className="py-2.5 px-4 font-bold text-slate-800 text-xs md:text-sm">
                       {displayArabic(payment.type === 'in' ? customerName : supplierName)}
                     </td>
-                    <td className="px-4 py-4">
-                      <div className="space-y-1 text-sm">
-                        <p className="font-semibold text-slate-700">{payment.invoiceNumber || '-'}</p>
-                        <p className="text-xs text-slate-500">{displayArabic(linkedSchedule?.label) || '-'}</p>
+                    <td className="py-2.5 px-4">
+                      <div className="flex items-center gap-1.5 text-xs font-mono">
+                        <span className="font-bold text-slate-700">{payment.invoiceNumber || '-'}</span>
+                        {linkedSchedule?.label && <span className="text-slate-500 font-sans">({displayArabic(linkedSchedule.label)})</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-sm text-slate-600">{formatDateDisplay(payment.date)}</td>
-                    <td className="px-4 py-4">
-                      <span className={`font-bold ${payment.type === 'in' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    <td className="py-2.5 px-4 text-xs md:text-sm text-slate-600 truncate max-w-[200px]">{displayArabic(payment.description)}</td>
+                    <td className="py-2.5 px-4 text-xs text-slate-500 font-mono">{formatDateDisplay(payment.date)}</td>
+                    <td className="py-2.5 px-4">
+                      <span className={`font-bold text-xs md:text-sm ${payment.type === 'in' ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {payment.type === 'in' ? '+' : '-'} {formatCurrency(payment.amount)}
                       </span>
                     </td>
@@ -782,6 +783,10 @@ export default function Payments() {
               })}
             </tbody>
           </table>
+        </div>
+        <div className="erp-status-bar">
+          <span className="font-bold text-slate-700">معاملات الخزينة اليوم: <span className="text-blue-700 font-extrabold">{todayPayments.length}</span></span>
+          <span className="font-bold text-slate-700">صافي الحركة اليومية: <span className="text-emerald-700 font-extrabold">{formatCurrency(totalIn - totalOut)}</span></span>
         </div>
       </div>
 
