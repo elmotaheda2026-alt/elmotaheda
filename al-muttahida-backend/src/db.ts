@@ -1,6 +1,6 @@
 import sql from 'mssql';
 import { config } from './config.js';
-import { normalizeQueryParams, prepareSqlRequest, type PaginationOptions, type QueryParam, type QueryParams, type RequestLike } from './dbQuery.js';
+import { applyPagination, normalizeQueryParams, prepareSqlRequest, type PaginationOptions, type QueryParam, type QueryParams, type RequestLike } from './dbQuery.js';
 
 /**
  * Create a connection pool to the SQL Server database using the
@@ -73,28 +73,7 @@ export const dbPromise = (async () => {
     let finalQuery = query.trim();
 
     if (pagination) {
-      const limit = Math.min(Math.max(1, Number(pagination.limit) || 20), 50);
-      const offset = (Math.max(1, Number(pagination.page) || 1) - 1) * limit;
-
-      // Ensure an ORDER BY clause exists for deterministic pagination
-      let orderByStr = '';
-      if (!finalQuery.toUpperCase().includes('ORDER BY')) {
-        if (finalQuery.toUpperCase().includes('FROM SALES')) {
-          orderByStr = ' ORDER BY created_at DESC';
-        } else {
-          orderByStr = ' ORDER BY (SELECT NULL)';
-        }
-      }
-
-      const paginationTokens = `${orderByStr} OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
-
-      // Insert pagination before FOR JSON PATH if present, handling trailing whitespace/content
-      const forJsonRegex = /FOR\s+JSON\s+PATH\s*$/i;
-      if (forJsonRegex.test(finalQuery)) {
-        finalQuery = finalQuery.replace(forJsonRegex, `${paginationTokens} FOR JSON PATH`);
-      } else {
-        finalQuery = `${finalQuery} ${paginationTokens}`;
-      }
+      finalQuery = applyPagination(finalQuery, pagination);
     }
 
     const { request: req, preparedQuery } = prepareRequest(finalQuery, cleanParams, request);

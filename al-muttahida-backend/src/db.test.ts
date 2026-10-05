@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeQueryParams, prepareSqlRequest } from './dbQuery.js';
+import { applyPagination, hasTopLevelOrderBy, normalizeQueryParams, prepareSqlRequest } from './dbQuery.js';
 
 function createRequestRecorder() {
   const inputs: Array<{ name: string; value: unknown }> = [];
@@ -54,3 +54,43 @@ test('prepareSqlRequest rejects extra parameters', () => {
     /SQL parameter mismatch: query has 1 placeholders but received 2 values/,
   );
 });
+test('hasTopLevelOrderBy ignores nested subquery ordering', () => {
+  const query = `
+    SELECT s.*,
+           (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
+    FROM sales s
+  `;
+
+  assert.equal(hasTopLevelOrderBy(query), false);
+});
+
+test('applyPagination preserves explicit outer ORDER BY before OFFSET FETCH', () => {
+  const query = 'SELECT * FROM sales ORDER BY created_at DESC';
+
+  assert.equal(
+    applyPagination(query, { page: 2, limit: 10 }),
+    'SELECT * FROM sales ORDER BY created_at DESC OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY',
+  );
+});
+
+test('applyPagination adds fallback ORDER BY when only nested subqueries are ordered', () => {
+  const query = `
+    SELECT s.*,
+           (SELECT * FROM installment_schedules WHERE sale_id = s.id ORDER BY month_index ASC FOR JSON PATH) AS schedules_json
+    FROM sales s
+  `;
+
+  const paginated = applyPagination(query, { page: 1, limit: 20 });
+
+  assert.match(paginated, /FROM sales s\s+ORDER BY id OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY$/);
+});
+
+test('applyPagination inserts OFFSET FETCH before top-level FOR JSON PATH', () => {
+  const query = 'SELECT * FROM customers FOR JSON PATH';
+
+  assert.equal(
+    applyPagination(query, { page: 1, limit: 5 }),
+    'SELECT * FROM customers ORDER BY id OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY FOR JSON PATH',
+  );
+});
+

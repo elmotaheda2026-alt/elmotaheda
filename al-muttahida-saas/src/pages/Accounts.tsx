@@ -61,7 +61,7 @@ export default function Accounts() {
   const [endDate, setEndDate] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [metrics, setMetrics] = React.useState<DashboardMetrics>(fallbackMetrics);
+  const [metrics, setMetrics] = React.useState<DashboardMetrics | null>(null);
   const settings = getSettings();
 
   React.useEffect(() => {
@@ -77,7 +77,7 @@ export default function Accounts() {
         console.error('CEO dashboard metrics request failed:', err);
         if (!active) return;
         setError(err instanceof Error ? err.message : 'تعذر تحميل البيانات المالية');
-        setMetrics(fallbackMetrics);
+        setMetrics(null);
       } finally {
         if (active) setLoading(false);
       }
@@ -88,7 +88,7 @@ export default function Accounts() {
     };
   }, [startDate, endDate]);
 
-  const m = metrics ?? fallbackMetrics;
+  const m = metrics;
   const formatCurrency = (amount: number) => formatWholeCurrency(toNumber(amount), settings?.currency || 'جنيه');
 
   if (loading) {
@@ -138,6 +138,14 @@ export default function Accounts() {
         </div>
       )}
 
+      {!m && !loading && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-800">
+          لا توجد بيانات مالية صالحة من الخادم. لم يتم استخدام أي بيانات بديلة محلية.
+        </div>
+      )}
+
+      {m && (
+        <>
       {/* Liquidity Section */}
       <div>
         <h3 className="mb-3 text-sm font-black text-slate-600">السيولة والأرصدة الجارية</h3>
@@ -204,6 +212,8 @@ export default function Accounts() {
           />
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

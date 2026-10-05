@@ -41,24 +41,58 @@ export const DB_KEYS = {
   RECEIPT_COUNTER: 'almuttahida_receipt_counter',
 };
 
+const API_MEMORY_KEYS = new Set<string>([
+  DB_KEYS.USERS,
+  DB_KEYS.CUSTOMERS,
+  DB_KEYS.SUPPLIERS,
+  DB_KEYS.PRODUCTS,
+  DB_KEYS.SALES,
+  DB_KEYS.PURCHASES,
+  DB_KEYS.PAYMENTS,
+  DB_KEYS.EXPENSES,
+  DB_KEYS.NOTIFICATIONS,
+  DB_KEYS.SALES_REPS,
+  DB_KEYS.SHAREHOLDERS,
+  DB_KEYS.SHAREHOLDER_TRANSACTIONS,
+  DB_KEYS.AUDIT_LOGS,
+  DB_KEYS.COLLECTION_TASKS,
+  DB_KEYS.RESCHEDULE_REQUESTS,
+  DB_KEYS.CLOSING_PERIODS,
+]);
+
+const apiMemoryStore = new Map<string, unknown[]>();
+
+function isApiMemoryKey(key: string): boolean {
+  return isApiMode() && API_MEMORY_KEYS.has(key);
+}
+
 export function getStorage<T>(key: string): T[] {
+  if (isApiMemoryKey(key)) {
+    return [...(apiMemoryStore.get(key) || [])] as T[];
+  }
+
   try {
     const data = localStorage.getItem(key);
     return data ? JSON.parse(data) : [];
-  } catch {
+  } catch (error) {
+    if (isApiMode()) {
+      throw new Error(`Failed to read local cache for ${key}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return [];
   }
 }
 
 export function setStorage<T>(key: string, data: T[]): void {
-  if (isApiMode() && key === DB_KEYS.PAYMENTS) {
+  if (isApiMemoryKey(key)) {
+    apiMemoryStore.set(key, [...data]);
     try {
       localStorage.removeItem(key);
     } catch {
-      // Ignore cleanup failures; payment data is loaded from the API in API mode.
+      // Best-effort stale-cache cleanup only; API mode never reads this key from localStorage.
     }
     return;
   }
+
   localStorage.setItem(key, JSON.stringify(data));
 }
 
@@ -104,7 +138,7 @@ export function addMonths(dateStr: string, months: number): string {
   const daysInTargetMonth = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 0).getDate();
   newDate.setDate(Math.min(originalDay, daysInTargetMonth));
   const year = newDate.getFullYear();
-  const month = newDate.getMonth() + 1; // getMonth is zero‑based
+  const month = newDate.getMonth() + 1; // getMonth is zeroâ€‘based
   const day = newDate.getDate();
   return `${year}-${pad(month)}-${pad(day)}`;
 }
@@ -125,7 +159,7 @@ export function buildInstallmentSchedule(startDate: string, amount: number, mont
     return {
       id: generateId(),
       monthIndex: index + 1,
-      label: `القسط ${index + 1}`,
+      label: `ط§ظ„ظ‚ط³ط· ${index + 1}`,
       dueDate: addMonths(startDate, index),
       amount: installmentAmount,
       paidAmount: 0,
@@ -192,11 +226,12 @@ export function applyPaymentToSale(sale: Sale, payment: Payment): Sale {
 
 // Initialize default admin user if not exists
 export function initializeDatabase(): void {
+  if (isApiMode()) return;
   const users = getStorage<User>(DB_KEYS.USERS);
   if (users.length === 0) {
     const adminUser: User = {
       id: generateId(),
-      name: 'مدير النظام',
+      name: 'ظ…ط¯ظٹط± ط§ظ„ظ†ط¸ط§ظ…',
       username: 'admin',
       password: 'admin123',
       role: 'admin',
@@ -211,14 +246,14 @@ export function initializeDatabase(): void {
   const settings = localStorage.getItem(DB_KEYS.SETTINGS);
   if (!settings) {
     const defaultSettings: Setting = {
-      companyName: 'شركة المتحدة',
-      companyAddress: 'الشارع المقابل للبوابة الخلفية للمستشفى العام',
+      companyName: 'ط´ط±ظƒط© ط§ظ„ظ…طھط­ط¯ط©',
+      companyAddress: 'ط§ظ„ط´ط§ط±ط¹ ط§ظ„ظ…ظ‚ط§ط¨ظ„ ظ„ظ„ط¨ظˆط§ط¨ط© ط§ظ„ط®ظ„ظپظٹط© ظ„ظ„ظ…ط³طھط´ظپظ‰ ط§ظ„ط¹ط§ظ…',
       companyPhone: '01001207474',
       companyEmail: 'info@almuttahida.com',
       taxRate: 0,
-      currency: 'جنيه',
+      currency: 'ط¬ظ†ظٹظ‡',
       invoicePrefix: 'INV',
-      invoiceFooter: 'شكراً للتعامل معنا - شركة المتحدة',
+      invoiceFooter: 'ط´ظƒط±ط§ظ‹ ظ„ظ„طھط¹ط§ظ…ظ„ ظ…ط¹ظ†ط§ - ط´ط±ظƒط© ط§ظ„ظ…طھط­ط¯ط©',
       whatsappRemindersEnabled: false,
       whatsappPhoneNumberId: '',
       whatsappAccessToken: '',
@@ -265,23 +300,23 @@ export function initializeDatabase(): void {
     const defaultShareholders = [
       {
         id: generateId(),
-        name: 'م. أحمد المصري',
+        name: 'ظ…. ط£ط­ظ…ط¯ ط§ظ„ظ…طµط±ظٹ',
         phone: '01000000001',
         sharePercentage: 60,
         capital: 600000,
         currentBalance: 0,
-        notes: 'المدير التنفيذي والمؤسس للشركة',
+        notes: 'ط§ظ„ظ…ط¯ظٹط± ط§ظ„طھظ†ظپظٹط°ظٹ ظˆط§ظ„ظ…ط¤ط³ط³ ظ„ظ„ط´ط±ظƒط©',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
       {
         id: generateId(),
-        name: 'م. خالد الدسوقي',
+        name: 'ظ…. ط®ط§ظ„ط¯ ط§ظ„ط¯ط³ظˆظ‚ظٹ',
         phone: '01000000002',
         sharePercentage: 40,
         capital: 400000,
         currentBalance: 0,
-        notes: 'شريك استراتيجي',
+        notes: 'ط´ط±ظٹظƒ ط§ط³طھط±ط§طھظٹط¬ظٹ',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
@@ -299,6 +334,8 @@ export async function clearAllData(): Promise<void> {
   if (isApiMode()) {
     try {
       await api.clearAllData();
+      apiMemoryStore.clear();
+      return;
     } catch (err) {
       console.error('Failed to clear remote database:', err);
       throw err;
@@ -317,6 +354,6 @@ export async function clearAllData(): Promise<void> {
   setStorage(DB_KEYS.SHAREHOLDERS, []);
   setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, []);
   localStorage.setItem(DB_KEYS.INVOICE_COUNTER, '1000');
-  console.log('تم حذف جميع البيانات الافتراضية بنجاح');
+  console.log('طھظ… ط­ط°ظپ ط¬ظ…ظٹط¹ ط§ظ„ط¨ظٹط§ظ†ط§طھ ط§ظ„ط§ظپطھط±ط§ط¶ظٹط© ط¨ظ†ط¬ط§ط­');
 }
 
