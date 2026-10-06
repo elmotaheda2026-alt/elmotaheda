@@ -1,8 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { Save, Building, FileText, Trash2, MessageCircle, Download, Upload } from 'lucide-react';
+import { Save, Building, FileText, Trash2, MessageCircle, Download, Upload, Landmark, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { Setting } from '../types';
-import { clearAllData, downloadDatabaseBackup, restoreDatabaseBackup } from '../lib/storage';
+import { Setting, OpeningBalances } from '../types';
+import { clearAllData, downloadDatabaseBackup, restoreDatabaseBackup, getOpeningBalances, saveOpeningBalances } from '../lib/storage';
 
 export default function Settings() {
   const { settings, updateSettings } = useAuth();
@@ -11,6 +11,25 @@ export default function Settings() {
   const [backupBusy, setBackupBusy] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Opening Balances state
+  const [obData, setObData] = useState<Omit<OpeningBalances, 'updatedAt'>>(() => {
+    const ob = getOpeningBalances();
+    return {
+      startingCashBalance: ob.startingCashBalance,
+      startingReceivables: ob.startingReceivables,
+      startingPayables: ob.startingPayables,
+      startingInventoryValue: ob.startingInventoryValue,
+    };
+  });
+  const [obSaved, setObSaved] = useState(false);
+
+  const handleObSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    saveOpeningBalances(obData);
+    setObSaved(true);
+    setTimeout(() => setObSaved(false), 3000);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -269,6 +288,94 @@ export default function Settings() {
           />
         </div>
       </div>
+      {/* Opening Balances Section */}
+      <form onSubmit={handleObSubmit} className="bg-white rounded-xl p-6 shadow-sm border border-indigo-100">
+        <h3 className="font-bold text-gray-800 mb-1 flex items-center gap-2">
+          <Landmark size={20} className="text-indigo-600" />
+          &#x627;&#x644;&#x623;&#x631;&#x635;&#x62f;&#x629; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a;&#x629; &#x644;&#x644;&#x646;&#x638;&#x627;&#x645;
+        </h3>
+        <p className="text-sm text-gray-500 mb-5">
+          &#x627;&#x636;&#x628;&#x637; &#x627;&#x644;&#x623;&#x631;&#x635;&#x62f;&#x629; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a;&#x629; &#x639;&#x646;&#x62f; &#x627;&#x644;&#x62a;&#x631;&#x62d;&#x64a;&#x644; &#x645;&#x646; &#x646;&#x638;&#x627;&#x645; &#x642;&#x62f;&#x64a;&#x645;. &#x633;&#x64a;&#x636;&#x627;&#x641; &#x631;&#x635;&#x64a;&#x62f; &#x627;&#x644;&#x62e;&#x632;&#x64a;&#x646;&#x629; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a; &#x625;&#x644;&#x649; &#x625;&#x62c;&#x645;&#x627;&#x644;&#x64a; &#x62d;&#x631;&#x643;&#x629; &#x627;&#x644;&#x646;&#x642;&#x62f;&#x64a;&#x629;.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              &#x627;&#x644;&#x631;&#x635;&#x64a;&#x62f; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a; &#x644;&#x644;&#x62e;&#x632;&#x64a;&#x646;&#x629; (&#x646;&#x642;&#x62f;&#x64a;&#x629; &#x627;&#x644;&#x645;&#x62a;&#x627;&#x62d;&#x629;)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={obData.startingCashBalance}
+              onChange={(e) => setObData({ ...obData, startingCashBalance: Number(e.target.value) })}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+              placeholder="0.00"
+            />
+            <p className="text-xs text-gray-400 mt-1">&#x627;&#x644;&#x646;&#x642;&#x62f; &#x627;&#x644;&#x641;&#x639;&#x644;&#x64a; &#x641;&#x64a; &#x627;&#x644;&#x62e;&#x632;&#x64a;&#x646;&#x629; &#x639;&#x646;&#x62f; &#x628;&#x62f;&#x627;&#x64a;&#x629; &#x627;&#x633;&#x62a;&#x62e;&#x62f;&#x627;&#x645; &#x627;&#x644;&#x646;&#x638;&#x627;&#x645;</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              &#x625;&#x62c;&#x645;&#x627;&#x644;&#x64a; &#x631;&#x635;&#x64a;&#x62f; &#x627;&#x644;&#x639;&#x645;&#x644;&#x627;&#x621; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a; (&#x645;&#x633;&#x62a;&#x62d;&#x642;&#x627;&#x62a; &#x642;&#x62f;&#x64a;&#x645;&#x629;)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={obData.startingReceivables}
+              onChange={(e) => setObData({ ...obData, startingReceivables: Number(e.target.value) })}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+              placeholder="0.00"
+            />
+            <p className="text-xs text-gray-400 mt-1">&#x645;&#x633;&#x62a;&#x62d;&#x642;&#x627;&#x62a; &#x639;&#x644;&#x649; &#x639;&#x645;&#x644;&#x627;&#x621; &#x643;&#x627;&#x646;&#x648;&#x627; &#x645;&#x633;&#x62c;&#x644;&#x64a;&#x646; &#x642;&#x628;&#x644; &#x628;&#x62f;&#x627;&#x64a;&#x629; &#x627;&#x633;&#x62a;&#x62e;&#x62f;&#x627;&#x645; &#x627;&#x644;&#x646;&#x638;&#x627;&#x645;</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              &#x625;&#x62c;&#x645;&#x627;&#x644;&#x64a; &#x631;&#x635;&#x64a;&#x62f; &#x627;&#x644;&#x645;&#x648;&#x631;&#x62f;&#x64a;&#x646; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a; (&#x645;&#x633;&#x62a;&#x62d;&#x642;&#x627;&#x62a; &#x642;&#x62f;&#x64a;&#x645;&#x629;)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={obData.startingPayables}
+              onChange={(e) => setObData({ ...obData, startingPayables: Number(e.target.value) })}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+              placeholder="0.00"
+            />
+            <p className="text-xs text-gray-400 mt-1">&#x645;&#x633;&#x62a;&#x62d;&#x642;&#x627;&#x62a; &#x644;&#x644;&#x645;&#x648;&#x631;&#x62f;&#x64a;&#x646; &#x645;&#x646; &#x642;&#x628;&#x644; &#x628;&#x62f;&#x627;&#x64a;&#x629; &#x627;&#x633;&#x62a;&#x62e;&#x62f;&#x627;&#x645; &#x627;&#x644;&#x646;&#x638;&#x627;&#x645;</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              &#x642;&#x64a;&#x645;&#x629; &#x628;&#x636;&#x627;&#x639;&#x629; &#x623;&#x648;&#x644; &#x627;&#x644;&#x645;&#x62f;&#x629; (&#x627;&#x644;&#x645;&#x62e;&#x632;&#x648;&#x646; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a;)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={obData.startingInventoryValue}
+              onChange={(e) => setObData({ ...obData, startingInventoryValue: Number(e.target.value) })}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+              placeholder="0.00"
+            />
+            <p className="text-xs text-gray-400 mt-1">&#x62a;&#x642;&#x64a;&#x64a;&#x645; &#x627;&#x644;&#x645;&#x62e;&#x632;&#x648;&#x646; &#x639;&#x646;&#x62f; &#x628;&#x62f;&#x627;&#x64a;&#x629; &#x627;&#x633;&#x62a;&#x62e;&#x62f;&#x627;&#x645; &#x627;&#x644;&#x646;&#x638;&#x627;&#x645;</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 mt-5">
+          <button
+            type="submit"
+            className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+          >
+            <Save size={18} />
+            <span>&#x62d;&#x641;&#x638; &#x627;&#x644;&#x623;&#x631;&#x635;&#x62f;&#x629; &#x627;&#x644;&#x627;&#x641;&#x62a;&#x62a;&#x627;&#x62d;&#x64a;&#x629;</span>
+          </button>
+          {obSaved && (
+            <span className="flex items-center gap-1 text-green-600 font-medium text-sm">
+              <CheckCircle2 size={16} />
+              &#x62a;&#x645; &#x627;&#x644;&#x62d;&#x641;&#x638; &#x628;&#x646;&#x62c;&#x627;&#x62d;
+            </span>
+          )}
+        </div>
+      </form>
+
       {/* Danger Zone - Clear Data */}
       <div className="bg-red-50 border border-red-200 rounded-xl p-6">
         <h3 className="font-bold text-red-800 mb-2 flex items-center gap-2">

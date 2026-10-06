@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
@@ -18,6 +18,13 @@ const settingsSchema = z.object({
   invoiceFooter: z.string().optional().nullable(),
 });
 
+const openingBalancesSchema = z.object({
+  startingCashBalance: z.number().nonnegative(),
+  startingReceivables: z.number().nonnegative(),
+  startingPayables: z.number().nonnegative(),
+  startingInventoryValue: z.number().nonnegative(),
+});
+
 // GET /settings
 router.get('/', async (_req, res) => {
   try {
@@ -35,7 +42,7 @@ router.get('/', async (_req, res) => {
         'info@almuttahida.com',
         'جنيه',
         'INV',
-        'شكراً للتعامل معنا - شركة المتحدة',
+        'شكراً للتعامل معنا - شركة المتحدة'
       );
       settings = await db.get<any>('SELECT TOP 1 * FROM settings');
     } else if (Number(settings.tax_rate) === 14) {
@@ -82,7 +89,7 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
         data.taxRate,
         data.currency,
         data.invoicePrefix,
-        data.invoiceFooter || null,
+        data.invoiceFooter || null
       );
     } else {
       await db.run(
@@ -96,12 +103,68 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
         data.taxRate,
         data.currency,
         data.invoicePrefix,
-        data.invoiceFooter || null,
+        data.invoiceFooter || null
       );
     }
 
     await audit('settings.update', 'settings', 'global', req.user?.name || 'system', data);
     return res.json({ message: 'Settings updated successfully' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// GET /settings/opening-balances
+router.get('/opening-balances', async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    const settings = await db.get<any>('SELECT TOP 1 starting_cash_balance, starting_receivables, starting_payables, starting_inventory_value FROM settings');
+    return res.json({
+      startingCashBalance: Number(settings?.starting_cash_balance || 0),
+      startingReceivables: Number(settings?.starting_receivables || 0),
+      startingPayables: Number(settings?.starting_payables || 0),
+      startingInventoryValue: Number(settings?.starting_inventory_value || 0),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// PUT /settings/opening-balances
+router.put('/opening-balances', requirePermission('settings:manage'), async (req: AuthedRequest, res) => {
+  const parsed = openingBalancesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid opening balances payload', errors: parsed.error.format() });
+  }
+
+  const { startingCashBalance, startingReceivables, startingPayables, startingInventoryValue } = parsed.data;
+
+  try {
+    const db = await dbPromise;
+    const existing = await db.get('SELECT TOP 1 company_name FROM settings');
+    if (!existing) {
+      await db.run(
+        `INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, starting_cash_balance, starting_receivables, starting_payables, starting_inventory_value)
+         VALUES ('شركة المتحدة', '', '01001207474', 'info@almuttahida.com', 0, 'جنيه', 'INV', ?, ?, ?, ?)`,
+        startingCashBalance,
+        startingReceivables,
+        startingPayables,
+        startingInventoryValue
+      );
+    } else {
+      await db.run(
+        `UPDATE settings
+         SET starting_cash_balance = ?, starting_receivables = ?, starting_payables = ?, starting_inventory_value = ?`,
+        startingCashBalance,
+        startingReceivables,
+        startingPayables,
+        startingInventoryValue
+      );
+    }
+
+    await audit('opening_balances.update', 'settings', 'global', req.user?.name || 'system', parsed.data);
+    return res.json({ message: 'Opening balances updated successfully' });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
@@ -141,4 +204,3 @@ router.post('/clear-data', requirePermission('settings:manage'), async (req: Aut
 });
 
 export default router;
-

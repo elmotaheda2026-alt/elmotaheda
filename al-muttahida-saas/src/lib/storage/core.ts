@@ -39,6 +39,7 @@ export const DB_KEYS = {
   RESCHEDULE_REQUESTS: 'almuttahida_reschedule_requests',
   CLOSING_PERIODS: 'almuttahida_closing_periods',
   RECEIPT_COUNTER: 'almuttahida_receipt_counter',
+  OPENING_BALANCES: 'almuttahida_opening_balances',
 };
 
 const API_MEMORY_KEYS = new Set<string>([
@@ -295,33 +296,9 @@ export function initializeDatabase(): void {
     localStorage.setItem(DB_KEYS.RECEIPT_COUNTER, '5000');
   }
 
-  // Initialize Default Shareholders
+  // Initialize Shareholders
   if (!localStorage.getItem(DB_KEYS.SHAREHOLDERS)) {
-    const defaultShareholders = [
-      {
-        id: generateId(),
-        name: 'ظ…. ط£ط­ظ…ط¯ ط§ظ„ظ…طµط±ظٹ',
-        phone: '01000000001',
-        sharePercentage: 60,
-        capital: 600000,
-        currentBalance: 0,
-        notes: 'ط§ظ„ظ…ط¯ظٹط± ط§ظ„طھظ†ظپظٹط°ظٹ ظˆط§ظ„ظ…ط¤ط³ط³ ظ„ظ„ط´ط±ظƒط©',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: generateId(),
-        name: 'ظ…. ط®ط§ظ„ط¯ ط§ظ„ط¯ط³ظˆظ‚ظٹ',
-        phone: '01000000002',
-        sharePercentage: 40,
-        capital: 400000,
-        currentBalance: 0,
-        notes: 'ط´ط±ظٹظƒ ط§ط³طھط±ط§طھظٹط¬ظٹ',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
-    localStorage.setItem(DB_KEYS.SHAREHOLDERS, JSON.stringify(defaultShareholders));
+    localStorage.setItem(DB_KEYS.SHAREHOLDERS, JSON.stringify([]));
   }
   if (!localStorage.getItem(DB_KEYS.AUDIT_LOGS)) localStorage.setItem(DB_KEYS.AUDIT_LOGS, JSON.stringify([] as AuditLogEntry[]));
   if (!localStorage.getItem(DB_KEYS.COLLECTION_TASKS)) localStorage.setItem(DB_KEYS.COLLECTION_TASKS, JSON.stringify([] as InstallmentCollectionTask[]));

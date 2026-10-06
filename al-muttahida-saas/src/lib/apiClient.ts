@@ -199,6 +199,8 @@ export const api = {
   // Settings
   getSettings: () => request<any>('/settings'),
   updateSettings: (payload: any) => request<{ message: string }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  getOpeningBalances: () => request<any>('/settings/opening-balances'),
+  updateOpeningBalances: (payload: any) => request<{ message: string }>('/settings/opening-balances', { method: 'PUT', body: JSON.stringify(payload) }),
   clearAllData: () => request<{ message: string }>('/settings/clear-data', { method: 'POST' }),
   exportBackup: () => request<any>('/settings/backup'),
   restoreBackup: (payload: any) => request<{ message: string }>('/settings/restore-backup', { method: 'POST', body: JSON.stringify(payload) }),

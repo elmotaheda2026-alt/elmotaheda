@@ -417,3 +417,13 @@ vite.err
 al-muttahida-saas/release/
 al-muttahida-saas/release-nomenu/
 
+# Desktop Installer & Packaging Outputs (NEVER COMMIT)
+release/
+release-*/
+dist-desktop/
+*.exe
+*.msi
+*.appImage
+*.dmg
+*.deb
+*.rpm

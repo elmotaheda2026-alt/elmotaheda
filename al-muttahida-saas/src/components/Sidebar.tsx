@@ -41,8 +41,9 @@ const menuGroups: {
     title: 'المبيعات والعملاء',
     defaultOpen: true,
     items: [
+      { icon: Warehouse, label: 'الرئيسية', path: '/' },
       { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
-      { icon: Receipt, label: 'العقود والفواتير', path: '/invoices', permission: 'sales:read' },
+      { icon: Receipt, label: 'إصدار فاتورة', path: '/invoices', permission: 'sales:read' },
       { icon: Truck, label: 'الموردين', path: '/suppliers', permission: 'sales:read' },
       { icon: UserCheck, label: 'المناديب', path: '/sales-reps', permission: 'sales:read' },
       { icon: Package, label: 'الأصناف والمخزون', path: '/products-inventory', permission: 'inventory:manage' },
@@ -105,7 +106,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
       {isOpen && <div className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden" onClick={onClose} />}
 
       <aside
-        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col border-l border-slate-200/90 bg-white text-slate-800 shadow-[0_0_25px_rgba(15,23,42,0.06)] transition-all duration-300 ${
+        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col border-l border-slate-200 bg-white text-slate-800 transition-all duration-300 ${
           isOpen ? 'w-64 translate-x-0 xl:w-72' : 'w-16 translate-x-full lg:translate-x-0'
         }`}
       >

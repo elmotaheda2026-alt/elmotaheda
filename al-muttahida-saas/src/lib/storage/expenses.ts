@@ -35,6 +35,26 @@ export async function createExpense(expense: Omit<Expense, 'id' | 'createdAt'>):
   };
   expenses.push(newExpense);
   setStorage(DB_KEYS.EXPENSES, expenses);
+
+  // Auto-register cash-out transaction record in payments treasury ledger
+  const payments = getStorage<any>(DB_KEYS.PAYMENTS);
+  const cashOutPayment = {
+    id: generateId(),
+    type: 'out',
+    amount: newExpense.amount,
+    date: newExpense.date,
+    description: `مصروفات - ${newExpense.category}: ${newExpense.description}`,
+    receiptNumber: `EXP-${newExpense.id.slice(-6).toUpperCase()}`,
+    status: 'posted',
+    createdAt: new Date().toISOString(),
+    createdBy: expense.createdBy || 'current_user',
+    referenceId: newExpense.id,
+    referenceType: 'expense',
+    channel: 'cash',
+  };
+  payments.push(cashOutPayment);
+  setStorage(DB_KEYS.PAYMENTS, payments);
+
   void createNotification({
     type: 'warning',
     title: 'سند صرف جديد',

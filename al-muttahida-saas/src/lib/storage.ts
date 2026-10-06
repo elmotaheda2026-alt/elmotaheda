@@ -16,3 +16,4 @@ export * from './storage/shareholders';
 export * from './storage/operations';
 
 export * from './storage/backup';
+export * from './storage/openingBalances';

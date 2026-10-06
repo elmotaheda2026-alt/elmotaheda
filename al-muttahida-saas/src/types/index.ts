@@ -288,6 +288,14 @@ export interface Setting {
   whatsappTemplateLanguage?: string;
 }
 
+
+export interface OpeningBalances {
+  startingCashBalance: number;
+  startingReceivables: number;
+  startingPayables: number;
+  startingInventoryValue: number;
+  updatedAt: string;
+}
 export interface Notification {
   id: string;
   type: 'info' | 'warning' | 'success' | 'error';

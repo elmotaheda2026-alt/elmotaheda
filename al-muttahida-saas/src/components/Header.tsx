@@ -75,7 +75,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   };
 
   return (
-    <header className="w-full border-b border-slate-200 bg-white/95 backdrop-blur-md shadow-sm h-14 flex items-center">
+    <header className="w-full border-b border-slate-200 bg-white/95 backdrop-blur-md h-14 flex items-center">
       <div className="mx-auto flex w-full max-w-[1920px] items-center justify-between px-4">
         <div className="flex items-center gap-3">
           <button onClick={onMenuClick} className="rounded-lg p-1.5 hover:bg-slate-100 text-slate-600 transition-colors">

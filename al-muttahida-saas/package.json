@@ -97,6 +97,7 @@
   "build": {
     "appId": "com.almuttahida.erp",
     "productName": "Al-Muttahida ERP",
+    "artifactName": "AlMuttahida-ERP-Setup-${version}.${ext}",
     "directories": {
       "output": "release"
     },

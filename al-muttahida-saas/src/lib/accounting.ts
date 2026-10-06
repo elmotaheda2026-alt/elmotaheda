@@ -44,3 +44,34 @@ export function calculateInventoryValue(products: Product[]): number {
 export function calculatePurchaseTotal(purchases: Purchase[]): number {
   return roundMoney(purchases.reduce((sum, purchase) => sum + Number(purchase.total || 0), 0));
 }
+
+/**
+ * Calculates the cumulative net cash balance in the treasury/vault.
+ *
+ * Formula:
+ *   totalCash = openingCashBalance + cumulativeInflows - (paymentOutflows + standaloneExpenseOutflows)
+ *
+ * - openingCashBalance: Starting cash from the opening balances wizard (migration baseline).
+ * - cumulativeInflows:  All non-voided cash-in payment records.
+ * - paymentOutflows:    All non-voided cash-out payment records.
+ * - standaloneExpenseOutflows: Expenses not already linked to a payment record (avoids double-counting).
+ */
+export function calculateTotalCashBalance(
+  payments: Array<{ type?: string; amount?: number; status?: string; referenceId?: string; description?: string }>,
+  expenses: Array<{ id?: string; amount?: number }> = [],
+  openingCashBalance = 0,
+): number {
+  const cumulativeInflow = payments
+    .filter((p) => p.type === 'in' && p.status !== 'voided')
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+  const paymentOutflow = payments
+    .filter((p) => p.type === 'out' && p.status !== 'voided')
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+  const standaloneExpenseOutflow = expenses
+    .filter((exp) => exp.id && !payments.some((p) => p.referenceId === exp.id || (p.description && exp.id && p.description.includes(exp.id))))
+    .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+
+  return roundMoney(Number(openingCashBalance || 0) + cumulativeInflow - (paymentOutflow + standaloneExpenseOutflow));
+}

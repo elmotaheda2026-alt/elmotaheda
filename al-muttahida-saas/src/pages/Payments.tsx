@@ -11,14 +11,15 @@ import {
   Search,
   CheckCircle2,
 } from 'lucide-react';
-import { ClosingPeriod, Customer, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, getPayments, getCustomers, getSales, getSuppliers, syncCustomers, syncPayments, syncSales, syncSuppliers, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi } from '../lib/storage';
+import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
+import { createPayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, getOpeningBalances } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
+import { calculateTotalCashBalance } from '../lib/accounting';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -89,6 +90,7 @@ export default function Payments() {
   const { settings, user } = useAuth();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [dailyPayments, setDailyPayments] = useState<Payment[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -147,14 +149,15 @@ export default function Payments() {
 
   const loadData = async () => {
     setLoading(true);
-    // 1. Load cached data for non-payment data immediately (payments skip localStorage due to size)
     const nextSales = getSales().slice().reverse();
     const nextCustomers = getCustomers();
     const nextSuppliers = getSuppliers();
+    const nextExpenses = getExpenses();
 
     setSales(nextSales);
     setCustomers(nextCustomers);
     setSuppliers(nextSuppliers);
+    setExpenses(nextExpenses);
     setClosedPeriods(getClosingPeriods());
 
     if (isApiMode()) {
@@ -162,7 +165,7 @@ export default function Payments() {
         // Fetch payments directly from API to avoid localStorage quota issues
         // (payments list can be very large - 1.7MB+)
         const [freshPaymentsRaw] = await Promise.all([
-          api.listPayments({ date: today(), limit: 500 }),
+          api.listPayments({ limit: 10000 }),
           syncCustomers(),
           syncSuppliers(),
           syncSales(),
@@ -298,9 +301,33 @@ export default function Payments() {
   });
 
   const todayYYYYMMDD = today();
-  const todayPayments = dailyPayments.filter((payment) => toYYYYMMDD(payment.date) === todayYYYYMMDD);
-  const totalIn = todayPayments.filter((payment) => payment.type === 'in').reduce((sum, payment) => sum + payment.amount, 0);
-  const totalOut = todayPayments.filter((payment) => payment.type === 'out').reduce((sum, payment) => sum + payment.amount, 0);
+
+  // Historical cumulative cash balance calculation across all ledger entries:
+  const totalCashBalance = calculateTotalCashBalance(payments, expenses);
+
+  // Today's cash activity filtering:
+  const todayPaymentsList = payments.filter(
+    (p) => toYYYYMMDD(p.date) === todayYYYYMMDD && p.status !== 'voided'
+  );
+  const todayInflow = todayPaymentsList
+    .filter((p) => p.type === 'in')
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+  const todayPaymentOutflow = todayPaymentsList
+    .filter((p) => p.type === 'out')
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+  const todayExpenseOutflow = expenses
+    .filter(
+      (exp) =>
+        toYYYYMMDD(exp.date) === todayYYYYMMDD &&
+        !todayPaymentsList.some((p) => p.referenceId === exp.id || p.description?.includes(exp.id))
+    )
+    .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+
+  const todayOutflow = todayPaymentOutflow + todayExpenseOutflow;
+  const todayNetMovement = todayInflow - todayOutflow;
+  const todayPayments = todayPaymentsList;
 
   const openModal = (type: PaymentType) => {
     setPaymentType(type);
@@ -693,24 +720,30 @@ export default function Payments() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          icon={<Banknote size={20} className="text-indigo-600" />}
+          label="إجمالي النقدية بالخزينة (الرصيد الكلي)"
+          value={formatCurrency(totalCashBalance)}
+          tone="indigo"
+        />
         <StatCard
           icon={<ArrowDownLeft size={20} className="text-emerald-600" />}
-          label="إجمالي الوارد اليوم"
-          value={formatCurrency(totalIn)}
+          label="إجمالي الوارد (اليوم)"
+          value={formatCurrency(todayInflow)}
           tone="emerald"
         />
         <StatCard
           icon={<ArrowUpRight size={20} className="text-rose-600" />}
-          label="إجمالي الصادر اليوم"
-          value={formatCurrency(totalOut)}
+          label="إجمالي الصادر (اليوم)"
+          value={formatCurrency(todayOutflow)}
           tone="rose"
         />
         <StatCard
-          icon={<Banknote size={20} className="text-sky-600" />}
-          label="صافي النقدية بالخزينة"
-          value={formatCurrency(totalIn - totalOut)}
-          tone="sky"
+          icon={<CreditCard size={20} className="text-sky-600" />}
+          label="صافي حركة اليوم"
+          value={formatCurrency(todayNetMovement)}
+          tone={todayNetMovement >= 0 ? 'sky' : 'rose'}
         />
       </div>
 
@@ -786,7 +819,7 @@ export default function Payments() {
         </div>
         <div className="erp-status-bar">
           <span className="font-bold text-slate-700">معاملات الخزينة اليوم: <span className="text-blue-700 font-extrabold">{todayPayments.length}</span></span>
-          <span className="font-bold text-slate-700">صافي الحركة اليومية: <span className="text-emerald-700 font-extrabold">{formatCurrency(totalIn - totalOut)}</span></span>
+          <span className="font-bold text-slate-700">صافي الحركة اليومية: <span className="text-emerald-700 font-extrabold">{formatCurrency(todayNetMovement)}</span></span>
         </div>
       </div>
 
@@ -1261,21 +1294,22 @@ function StatCard({
   icon: React.ReactNode;
   label: string;
   value: string;
-  tone: 'emerald' | 'rose' | 'sky';
+  tone: 'emerald' | 'rose' | 'sky' | 'indigo';
 }) {
   const toneClass = {
-    emerald: 'border-emerald-100 bg-emerald-50',
-    rose: 'border-rose-100 bg-rose-50',
-    sky: 'border-sky-100 bg-sky-50',
+    emerald: 'border-emerald-100 bg-emerald-50/70',
+    rose: 'border-rose-100 bg-rose-50/70',
+    sky: 'border-sky-100 bg-sky-50/70',
+    indigo: 'border-indigo-100 bg-indigo-50/70',
   }[tone];
 
   return (
-    <div className={`rounded-[24px] border p-5 ${toneClass}`}>
-      <div className="flex items-center gap-4">
-        <div className="rounded-2xl bg-white p-3 shadow-sm">{icon}</div>
-        <div>
-          <p className="text-sm text-slate-500">{label}</p>
-          <p className="mt-1 text-xl font-bold text-slate-800">{value}</p>
+    <div className={`rounded-xl border p-4 ${toneClass} shadow-none`}>
+      <div className="flex items-center gap-3">
+        <div className="rounded-lg bg-white p-2.5 shadow-none shrink-0 border border-slate-100">{icon}</div>
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-slate-500 truncate">{label}</p>
+          <p className="mt-0.5 text-lg font-black text-slate-900 tabular-nums">{value}</p>
         </div>
       </div>
     </div>
