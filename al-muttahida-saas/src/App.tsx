@@ -1,6 +1,5 @@
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-// Removed HelmetProvider import (handled in main.tsx)
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -21,38 +20,41 @@ import SalesReps from './pages/SalesReps';
 import CollectionStatement from './pages/CollectionStatement';
 import Shareholders from './pages/Shareholders';
 import ProductsInventory from './pages/ProductsInventory';
+import OnboardingWizard from './pages/OnboardingWizard';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import WhatsappReminderRunner from './components/WhatsappReminderRunner';
 
 function AppRoutes() {
   const { isAuthenticated, settings } = useAuth();
+  const isConfigured = localStorage.getItem('almuttahida_configured') === 'true' || settings.isConfigured;
 
   return (
     <>
       <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
       <Routes>
-      <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
+        <Route path="/onboarding" element={<ProtectedRoute permission="settings:manage"><OnboardingWizard /></ProtectedRoute>} />
+        <Route path="/login" element={isAuthenticated ? (isConfigured ? <Navigate to="/" /> : <Navigate to="/onboarding" />) : <Login />} />
 
-      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-        <Route index element={<ProtectedRoute permission="dashboard:view"><Dashboard /></ProtectedRoute>} />
-        <Route path="users" element={<ProtectedRoute permission="users:manage"><Users /></ProtectedRoute>} />
-        <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
-        <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
-        <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
-        <Route path="sales" element={<ProtectedRoute permission="sales:read"><Sales /></ProtectedRoute>} />
-        <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
-        <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
-        <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
-        <Route path="accounts" element={<ProtectedRoute permission="payments:read"><Accounts /></ProtectedRoute>} />
-        <Route path="reports" element={<ProtectedRoute permission="reports:read"><Reports /></ProtectedRoute>} />
+        <Route path="/" element={<ProtectedRoute>{!isConfigured ? <Navigate to="/onboarding" replace /> : <Layout />}</ProtectedRoute>}>
+          <Route index element={<ProtectedRoute permission="dashboard:view"><Dashboard /></ProtectedRoute>} />
+          <Route path="users" element={<ProtectedRoute permission="users:manage"><Users /></ProtectedRoute>} />
+          <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
+          <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
+          <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
+          <Route path="sales" element={<ProtectedRoute permission="sales:read"><Sales /></ProtectedRoute>} />
+          <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
+          <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
+          <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
+          <Route path="accounts" element={<ProtectedRoute permission="payments:read"><Accounts /></ProtectedRoute>} />
+          <Route path="reports" element={<ProtectedRoute permission="reports:read"><Reports /></ProtectedRoute>} />
 
-        <Route path="settings" element={<ProtectedRoute permission="settings:manage"><Settings /></ProtectedRoute>} />
-        <Route path="notifications" element={<ProtectedRoute permission="notifications:read"><Notifications /></ProtectedRoute>} />
-        <Route path="sales-reps" element={<ProtectedRoute permission="sales:read"><SalesReps /></ProtectedRoute>} />
-        <Route path="collection-statement" element={<ProtectedRoute permission="payments:read"><CollectionStatement /></ProtectedRoute>} />
-        <Route path="shareholders" element={<ProtectedRoute permission="shareholders:manage"><Shareholders /></ProtectedRoute>} />
-      </Route>
+          <Route path="settings" element={<ProtectedRoute permission="settings:manage"><Settings /></ProtectedRoute>} />
+          <Route path="notifications" element={<ProtectedRoute permission="notifications:read"><Notifications /></ProtectedRoute>} />
+          <Route path="sales-reps" element={<ProtectedRoute permission="sales:read"><SalesReps /></ProtectedRoute>} />
+          <Route path="collection-statement" element={<ProtectedRoute permission="payments:read"><CollectionStatement /></ProtectedRoute>} />
+          <Route path="shareholders" element={<ProtectedRoute permission="shareholders:manage"><Shareholders /></ProtectedRoute>} />
+        </Route>
       </Routes>
     </>
   );

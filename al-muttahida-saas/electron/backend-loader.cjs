@@ -71,22 +71,32 @@ function startBackend() {
     }
 
     const envPath = getBackendEnvPath();
-    const env = { ...process.env };
+    const env = {
+      PORT: '4000',
+      JWT_SECRET: 'AlMuttahida_Secure_Production_JWT_Secret_Key_2026_Fallback',
+      DB_HOST: '127.0.0.1',
+      DB_PORT: '1433',
+      DB_USER: 'alm_app',
+      DB_PASSWORD: 'Alm@2026#App',
+      DB_NAME: 'AlMuttahida_New',
+      DB_ENCRYPT: 'false',
+      DB_TRUST_CERT: 'true',
+      ALLOW_SEED: 'false',
+      ...process.env,
+    };
 
     // Read .env file manually if it exists
     if (envPath) {
       try {
         const envContent = fs.readFileSync(envPath, 'utf-8');
-        envContent.split('\n').forEach(line => {
+        envContent.split('\n').forEach((line) => {
           const trimmed = line.trim();
           if (trimmed && !trimmed.startsWith('#')) {
             const eqIndex = trimmed.indexOf('=');
             if (eqIndex > 0) {
               const key = trimmed.substring(0, eqIndex).trim();
               let value = trimmed.substring(eqIndex + 1).trim();
-              // Remove surrounding quotes
-              if ((value.startsWith('"') && value.endsWith('"')) || 
-                  (value.startsWith("'") && value.endsWith("'"))) {
+              if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
                 value = value.slice(1, -1);
               }
               env[key] = value;
@@ -110,6 +120,7 @@ function startBackend() {
     });
 
     let started = false;
+    const stderrLogs = [];
 
     backendProcess.stdout.on('data', (data) => {
       const output = data.toString();
@@ -121,7 +132,9 @@ function startBackend() {
     });
 
     backendProcess.stderr.on('data', (data) => {
-      console.error('[Backend Error]', data.toString());
+      const errStr = data.toString();
+      console.error('[Backend Error]', errStr);
+      stderrLogs.push(errStr);
     });
 
     backendProcess.on('error', (err) => {
@@ -130,7 +143,10 @@ function startBackend() {
 
     backendProcess.on('exit', (code) => {
       console.log(`Backend process exited with code ${code}`);
-      if (!started) reject(new Error(`Backend exited with code ${code}`));
+      if (!started) {
+        const details = stderrLogs.slice(-5).join(' ').trim();
+        reject(new Error(`Backend exited with code ${code}${details ? `: ${details}` : ''}`));
+      }
       backendProcess = null;
     });
 

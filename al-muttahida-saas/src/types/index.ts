@@ -1,4 +1,4 @@
-export type Permission =
+﻿export type Permission =
   | 'dashboard:view'
   | 'sales:read'
   | 'sales:write'
@@ -286,6 +286,7 @@ export interface Setting {
   whatsappAccessToken?: string;
   whatsappTemplateName?: string;
   whatsappTemplateLanguage?: string;
+  isConfigured?: boolean;
 }
 
 

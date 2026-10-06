@@ -119,6 +119,10 @@
       {
         "from": "../al-muttahida-backend/.env",
         "to": "backend/.env"
+      },
+      {
+        "from": "../al-muttahida-backend/package.json",
+        "to": "backend/package.json"
       }
     ],
     "win": {
@@ -134,7 +138,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Al-Muttahida ERP"
+      "shortcutName": "Al-Muttahida ERP",
+      "allowElevation": true,
+      "differentialPackage": false
     }
   }
 }
