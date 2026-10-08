@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { hashPassword, uid } from '../utils.js';
 import { audit } from '../audit.js';
 
@@ -179,7 +179,7 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
 });
 
 // DELETE /users/:id
-router.delete('/:id', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     const current = await db.get<{ id: string }>('SELECT id FROM users WHERE id = ?', req.params.id);
@@ -198,7 +198,7 @@ router.delete('/:id', requirePermission('users:manage'), async (req: AuthedReque
     return res.status(500).json({ message: error.message || 'Database error' });
   }
 });
-router.delete('/', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
+router.delete('/', requirePermission('users:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   // Only enable in development/testing via ALLOW_BULK_DELETE env var
   if (process.env.ALLOW_BULK_DELETE !== 'true') {
     return res.status(403).json({ message: 'Bulk delete not allowed' });

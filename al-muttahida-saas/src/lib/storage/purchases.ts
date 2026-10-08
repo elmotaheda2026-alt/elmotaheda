@@ -15,6 +15,12 @@ export async function syncPurchases(): Promise<void> {
 }
 
 export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNumber' | 'createdAt'>): Promise<Purchase> {
+  const normalizedPurchase = {
+    ...purchase,
+    discount: 0,
+    items: purchase.items.map((item) => ({ ...item, discount: 0 })),
+  };
+
   if (isApiMode()) {
     const settings = getSettings();
     const invoiceCounter = parseInt(localStorage.getItem(DB_KEYS.INVOICE_COUNTER) || '1000') + 1;
@@ -22,12 +28,12 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
     const invoiceNumber = `${settings.invoicePrefix}-PO-${invoiceCounter}`;
 
     const res = await api.createPurchase({
-      ...purchase,
+      ...normalizedPurchase,
       invoiceNumber,
     });
 
     const newPurchase: Purchase = {
-      ...purchase,
+      ...normalizedPurchase,
       id: res.id,
       invoiceNumber,
       createdAt: new Date().toISOString(),
@@ -48,7 +54,7 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
   const invoiceNumber = `${settings.invoicePrefix}-PO-${invoiceCounter}`;
 
   const newPurchase: Purchase = {
-    ...purchase,
+    ...normalizedPurchase,
     id: generateId(),
     invoiceNumber,
     createdAt: new Date().toISOString(),
@@ -57,15 +63,15 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
   setStorage(DB_KEYS.PURCHASES, purchases);
 
   // Update product quantities
-  purchase.items.forEach((item) => {
+  normalizedPurchase.items.forEach((item) => {
     updateProductQuantity(item.productId, item.quantity);
   });
 
   // Update supplier balance
   const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
-  const supplierIndex = suppliers.findIndex((s) => s.id === purchase.supplierId);
+  const supplierIndex = suppliers.findIndex((s) => s.id === normalizedPurchase.supplierId);
   if (supplierIndex !== -1) {
-    suppliers[supplierIndex].balance += purchase.remaining;
+    suppliers[supplierIndex].balance += normalizedPurchase.remaining;
     setStorage(DB_KEYS.SUPPLIERS, suppliers);
   }
 

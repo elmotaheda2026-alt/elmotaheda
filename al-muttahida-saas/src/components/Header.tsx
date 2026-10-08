@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bell, LogOut, Mail, Menu, Search, Shield, User } from 'lucide-react';
+import { Bell, LogOut, Mail, Menu, Search, Shield, User, Wifi, WifiOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getNotifications, syncNotifications } from '../lib/storage';
+import { getNotifications, markAllNotificationsRead, markNotificationRead, syncNotifications } from '../lib/storage';
+import { checkBackendHealth } from '../lib/apiClient';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -12,12 +13,27 @@ interface HeaderProps {
 export default function Header({ onMenuClick, title }: HeaderProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [isConnected, setIsConnected] = useState<boolean | null>(true);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
   const [notifications, setNotifications] = useState(() => getNotifications().slice(0, 5));
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
+
+  useEffect(() => {
+    let active = true;
+    const testConnection = async () => {
+      const ok = await checkBackendHealth();
+      if (active) setIsConnected(ok);
+    };
+    void testConnection();
+    const interval = window.setInterval(testConnection, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
   const roleLabel =
     user?.role === 'admin'
       ? 'مدير النظام'
@@ -74,6 +90,38 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
     navigate('/login');
   };
 
+  const refreshNotificationState = () => {
+    setNotifications(getNotifications().slice(0, 5));
+  };
+
+  const openNotifications = async () => {
+    const nextOpen = !showNotifications;
+    setShowNotifications(nextOpen);
+    if (!nextOpen) return;
+
+    setNotifications((current) => current.map((notification) => ({ ...notification, isRead: true })));
+    try {
+      await markAllNotificationsRead();
+    } catch (error) {
+      console.error('Failed to mark notifications read:', error);
+    } finally {
+      refreshNotificationState();
+    }
+  };
+
+  const openNotificationPage = async (id: string) => {
+    setNotifications((current) =>
+      current.map((notification) => (notification.id === id ? { ...notification, isRead: true } : notification)),
+    );
+    try {
+      await markNotificationRead(id);
+    } catch (error) {
+      console.error('Failed to mark notification read:', error);
+    }
+    setShowNotifications(false);
+    navigate('/notifications');
+  };
+
   return (
     <header className="w-full border-b border-slate-200 bg-white/95 backdrop-blur-md h-14 flex items-center">
       <div className="mx-auto flex w-full max-w-[1920px] items-center justify-between px-4">
@@ -89,8 +137,21 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Dynamic Sync/Network Status Badge */}
+          {isConnected ? (
+            <div className="hidden sm:flex items-center gap-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200/80 px-2.5 py-1 rounded-full text-xs font-bold shadow-2xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>النظام متصل</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 bg-rose-50 text-rose-700 border border-rose-200/80 px-2.5 py-1 rounded-full text-xs font-bold shadow-2xs animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+              <span>غير متصل بالخادم</span>
+            </div>
+          )}
+
           <div className="relative">
-            <button onClick={() => setShowNotifications((current) => !current)} className="relative rounded-xl p-2 hover:bg-slate-100">
+            <button onClick={openNotifications} className="relative rounded-xl p-2 hover:bg-slate-100">
               <Bell size={18} className="text-slate-600" />
               {unreadCount > 0 && (
                 <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
@@ -111,7 +172,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
                     notifications.map((notification) => (
                       <button
                         key={notification.id}
-                        onClick={() => navigate('/notifications')}
+                        onClick={() => openNotificationPage(notification.id)}
                         className={`block w-full border-b border-slate-50 p-4 text-right hover:bg-slate-50 ${!notification.isRead ? 'bg-sky-50' : ''}`}
                       >
                         <p className="text-sm font-semibold text-slate-800">{notification.title}</p>

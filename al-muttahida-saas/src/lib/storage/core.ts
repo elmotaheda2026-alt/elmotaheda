@@ -179,6 +179,22 @@ export function syncSalePaymentStatus(sale: Sale): Sale {
 }
 
 export function applyPaymentToSale(sale: Sale, payment: Payment): Sale {
+  if (payment.isEarlySettlement) {
+    const amt = Number(payment.amount || 0);
+    const disc = Number(payment.settlementDiscount || 0);
+    sale.paid = Number(((sale.paid || 0) + amt).toFixed(2));
+    sale.discount = Number(((sale.discount || 0) + disc).toFixed(2));
+    sale.remaining = 0;
+    sale.status = 'settled_early';
+    if (sale.financing?.schedules) {
+      sale.financing.schedules = sale.financing.schedules.map((schedule) => ({
+        ...schedule,
+        status: (schedule.status === 'paid' ? 'paid' : 'settled_early') as InstallmentSchedule['status'],
+        paidAt: schedule.status === 'paid' ? schedule.paidAt : payment.date,
+      }));
+    }
+    return sale;
+  }
   const amount = Number(payment.amount || 0);
   if (amount <= 0) return sale;
 

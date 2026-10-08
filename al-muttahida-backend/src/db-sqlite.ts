@@ -390,7 +390,10 @@ export async function initSqliteTables(db: SqliteDbWrapper): Promise<void> {
       amount REAL NOT NULL,
       paid_amount REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL,
-      paid_at TEXT
+      paid_at TEXT,
+      deferred INTEGER NOT NULL DEFAULT 0,
+      deferred_at TEXT,
+      notes TEXT
     );
 
     CREATE TABLE IF NOT EXISTS payments (
@@ -621,13 +624,17 @@ export async function initSqliteTables(db: SqliteDbWrapper): Promise<void> {
     'CREATE INDEX IF NOT EXISTS IX_products_created_at ON products(created_at)',
   ];
 
-  for (const idx of indexes) {
-    try {
-      await db.run(idx);
-    } catch (err: any) {
-      console.warn('[SQLite index]', err.message);
+    for (const idx of indexes) {
+      try {
+        await db.run(idx);
+      } catch (err: any) {
+        console.warn('[SQLite index]', err.message);
+      }
     }
-  }
+
+    try { await db.run('ALTER TABLE installment_schedules ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+    try { await db.run('ALTER TABLE installment_schedules ADD COLUMN deferred_at TEXT'); } catch (_) {}
+    try { await db.run('ALTER TABLE installment_schedules ADD COLUMN notes TEXT'); } catch (_) {}
 
   // Seed default admin user if none exists
   try {

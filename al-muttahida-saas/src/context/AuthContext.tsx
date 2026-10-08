@@ -6,6 +6,7 @@ import { api, clearApiToken, getApiUser, isApiMode, setApiSession } from '../lib
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
+  isLoading: boolean;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   settings: Setting;
@@ -16,16 +17,28 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [settings, setSettings] = useState<Setting>(db.getSettings());
+  const [isLoading, setIsLoading] = useState(true);
+  const [settings, setSettings] = useState<Setting>(() => {
+    try {
+      return db.getSettings();
+    } catch {
+      return {} as Setting;
+    }
+  });
 
   useEffect(() => {
-    if (isApiMode()) {
-      setUser(getApiUser<User>());
-      return;
+    try {
+      if (isApiMode()) {
+        setUser(getApiUser<User>());
+      } else {
+        db.initializeDatabase();
+        setUser(db.getCurrentUser());
+      }
+    } catch (e) {
+      console.error('Failed to initialize auth/database:', e);
+    } finally {
+      setIsLoading(false);
     }
-
-    db.initializeDatabase();
-    setUser(db.getCurrentUser());
   }, []);
 
   const login = async (username: string, password: string): Promise<boolean> => {
@@ -83,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user,
       isAuthenticated: !!user,
+      isLoading,
       login,
       logout,
       settings,

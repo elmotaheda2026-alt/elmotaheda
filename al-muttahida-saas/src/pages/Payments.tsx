@@ -15,7 +15,7 @@ import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, S
 import { createPayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, getOpeningBalances } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
-import { hasPermission } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
@@ -97,8 +97,11 @@ export default function Payments() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [paymentType, setPaymentType] = useState<PaymentType>('in');
-  const [closedPeriodSearch, setClosedPeriodSearch] = useState('');
+  const [closedPeriodDateFilter, setClosedPeriodDateFilter] = useState(today());
   const [incomingSubmitMode, setIncomingSubmitMode] = useState<IncomingSubmitMode>('save');
+  const [paymentMode, setPaymentMode] = useState<'normal' | 'early_settlement'>('normal');
+  const [settlementDiscountType, setSettlementDiscountType] = useState<'fixed' | 'percent'>('fixed');
+  const [settlementDiscountValue, setSettlementDiscountValue] = useState<number>(0);
 
   // Daily Closing states
   const [showClosingModal, setShowClosingModal] = useState(false);
@@ -201,10 +204,73 @@ export default function Payments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const toYYYYMMDD = (dateStr: string) => {
+    if (!dateStr) return '';
+    const str = dateStr.trim();
+    // Check YYYY-MM-DD
+    const ymd = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(str);
+    if (ymd) {
+      return `${ymd[1]}-${String(ymd[2]).padStart(2, '0')}-${String(ymd[3]).padStart(2, '0')}`;
+    }
+    // Check DD/MM/YYYY
+    const dmy = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/.exec(str);
+    if (dmy) {
+      return `${dmy[3]}-${String(dmy[2]).padStart(2, '0')}-${String(dmy[1]).padStart(2, '0')}`;
+    }
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const closingDateYYYYMMDD = toYYYYMMDD(closingDate);
+  const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD);
+  const closingTotalIn = closingDatePayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+  const closingTotalOut = closingDatePayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+  const closingNet = closingTotalIn - closingTotalOut;
+
+  // Calculate cumulative treasury cash balance up to and including the closing date:
+  // Formula: Starting Cash Balance + All Inflows up to closing date - (All Outflows + Standalone Expenses up to closing date)
+  const calculateAccumulatedCashUpToDate = (targetDateStr: string) => {
+    const ob = getOpeningBalances();
+    const startingCash = Number(ob?.startingCashBalance || 0);
+
+    const eligiblePayments = payments.filter(
+      (pmt) => toYYYYMMDD(pmt.date) <= targetDateStr && pmt.status !== 'voided'
+    );
+    const inflowUpToDate = eligiblePayments
+      .filter((pmt) => pmt.type === 'in')
+      .reduce((sum, pmt) => sum + (Number(pmt.amount) || 0), 0);
+
+    const paymentOutflowUpToDate = eligiblePayments
+      .filter((pmt) => pmt.type === 'out')
+      .reduce((sum, pmt) => sum + (Number(pmt.amount) || 0), 0);
+
+    const standaloneExpensesUpToDate = expenses
+      .filter(
+        (exp) =>
+          toYYYYMMDD(exp.date) <= targetDateStr &&
+          !eligiblePayments.some((pmt) => pmt.referenceId === exp.id || (pmt.description && pmt.description.includes(exp.id)))
+      )
+      .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
+
+    return startingCash + inflowUpToDate - (paymentOutflowUpToDate + standaloneExpensesUpToDate);
+  };
+
+  const expectedTreasuryClosingBalance = calculateAccumulatedCashUpToDate(closingDateYYYYMMDD);
+
   const handleClosePeriod = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
-      await closePeriodApi('daily', closingDate, user?.name || 'مدير النظام', closingNotes);
+      const closingDayCashBalance = expectedTreasuryClosingBalance;
+      await closePeriodApi('daily', closingDate, user?.name || 'مدير النظام', closingNotes, {
+        totalIn: closingTotalIn,
+        totalOut: closingTotalOut,
+        netMovement: closingNet,
+        closingBalance: closingDayCashBalance,
+      });
       await loadData();
       setShowClosingModal(false);
       setClosingNotes('');
@@ -214,28 +280,71 @@ export default function Payments() {
     }
   };
 
-    // Automatic daily closing at midnight
+    // Automatic daily closing (at 23:59 / midnight, and check for unclosed previous day on startup)
   useEffect(() => {
+    const checkAndAutoClose = async () => {
+      try {
+        const todayStr = today();
+        // Check if yesterday or previous days had unclosed transactions
+        const existingPeriods = getClosingPeriods();
+        const yDate = new Date();
+        yDate.setDate(yDate.getDate() - 1);
+        const yesterdayStr = toYYYYMMDD(yDate.toISOString());
+
+        // Check if yesterday is not closed yet
+        const isYesterdayClosed = existingPeriods.some(p => p.periodType === 'daily' && p.periodDate === yesterdayStr && p.status === 'closed');
+        if (!isYesterdayClosed && yesterdayStr) {
+          // Check if there were any payments on yesterday
+          const yesterdayPayments = payments.filter(p => toYYYYMMDD(p.date) === yesterdayStr);
+          if (yesterdayPayments.length > 0) {
+            const yIn = yesterdayPayments.filter(p => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+            const yOut = yesterdayPayments.filter(p => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+            await closePeriodApi('daily', yesterdayStr, 'النظام التلقائي', 'إغلاق تلقائي عند بدء اليوم الجديد', {
+              totalIn: yIn,
+              totalOut: yOut,
+              netMovement: yIn - yOut,
+              closingBalance: calculateAccumulatedCashUpToDate(yesterdayStr),
+            });
+            await loadData();
+          }
+        }
+      } catch (e) {
+        console.warn('Startup auto-close check skipped:', e);
+      }
+    };
+
+    void checkAndAutoClose();
+
+    // Schedule closing at 23:59:00 PM or midnight
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    const tonight = new Date(now);
+    tonight.setHours(23, 59, 0, 0);
+    let msUntilClose = tonight.getTime() - now.getTime();
+    if (msUntilClose <= 0) {
+      // If past 23:59, set for next day 23:59
+      tonight.setDate(tonight.getDate() + 1);
+      msUntilClose = tonight.getTime() - now.getTime();
+    }
 
     const timerId = setTimeout(async () => {
       try {
         const todayDate = today();
-        await closePeriodApi('daily', todayDate, user?.name || 'مدير النظام', 'إغلاق تلقائي');
+        const currentBalance = calculateAccumulatedCashUpToDate(toYYYYMMDD(todayDate));
+        await closePeriodApi('daily', todayDate, 'النظام التلقائي', 'إغلاق تلقائي في نهاية اليوم (11:59 م)', {
+          totalIn: closingTotalIn,
+          totalOut: closingTotalOut,
+          netMovement: closingNet,
+          closingBalance: currentBalance,
+        });
         await loadData();
-        setMessage({ type: 'success', text: 'تم إغلاق اليومية تلقائيًا عند انتهاء اليوم.' });
+        setMessage({ type: 'success', text: 'تم إغلاق اليومية تلقائيًا (11:59 م).' });
       } catch (err: any) {
         console.error('Auto close failed:', err);
-        setMessage({ type: 'error', text: err.message || 'خطأ في إغلاق اليومية تلقائيًا.' });
       }
-    }, msUntilMidnight);
+    }, msUntilClose);
 
     return () => clearTimeout(timerId);
-  }, [user]);
+  }, [user, payments, expenses, closingTotalIn, closingTotalOut, closingNet]);
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -281,23 +390,42 @@ export default function Payments() {
 
   const pendingSchedules = selectedSchedules.filter((schedule) => schedule.status !== 'paid');
 
-  const toYYYYMMDD = (dateStr: string) => {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return '';
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-  const closedPeriodSearchTerm = closedPeriodSearch.trim().toLowerCase();
+  const totalRemainingUnpaid = selectedSale ? Number(selectedSale.remaining || 0) : 0;
+
+  const settlementDiscountAmount = useMemo(() => {
+    if (paymentMode !== 'early_settlement' || !selectedSale) return 0;
+    if (settlementDiscountType === 'percent') {
+      const pct = Math.min(Math.max(settlementDiscountValue, 0), 100);
+      return Number(((totalRemainingUnpaid * pct) / 100).toFixed(2));
+    }
+    return Number(Math.min(Math.max(settlementDiscountValue, 0), totalRemainingUnpaid).toFixed(2));
+  }, [paymentMode, selectedSale, settlementDiscountType, settlementDiscountValue, totalRemainingUnpaid]);
+
+  const netSettlementRequired = useMemo(() => {
+    if (paymentMode !== 'early_settlement' || !selectedSale) return 0;
+    return Math.max(0, Number((totalRemainingUnpaid - settlementDiscountAmount).toFixed(2)));
+  }, [paymentMode, selectedSale, totalRemainingUnpaid, settlementDiscountAmount]);
+
+  useEffect(() => {
+    if (paymentMode === 'early_settlement' && selectedSale) {
+      setIncomingForm((curr) => ({
+        ...curr,
+        amount: netSettlementRequired,
+        installmentId: '',
+        description: `تكييش وتصفية الفاتورة ${selectedSale.invoiceNumber}${settlementDiscountAmount > 0 ? ` - خصم تسوية ${formatCurrency(settlementDiscountAmount)}` : ''}`,
+      }));
+    }
+  }, [paymentMode, selectedSale?.id, netSettlementRequired, settlementDiscountAmount]);
+
+
   const filteredClosedPeriods = closedPeriods.filter((period) => {
-    if (!closedPeriodSearchTerm) return true;
-    return (
-      formatDateDisplay(period.periodDate).toLowerCase().includes(closedPeriodSearchTerm) ||
-      period.periodDate.toLowerCase().includes(closedPeriodSearchTerm) ||
-      period.closedBy.toLowerCase().includes(closedPeriodSearchTerm) ||
-      (period.notes || '').toLowerCase().includes(closedPeriodSearchTerm)
-    );
+    // Date filter: strictly match against the selected single date
+    if (closedPeriodDateFilter) {
+      const filterDate = toYYYYMMDD(closedPeriodDateFilter);
+      const periodDate = toYYYYMMDD(period.periodDate);
+      if (filterDate && periodDate && filterDate !== periodDate) return false;
+    }
+    return true;
   });
 
   const todayYYYYMMDD = today();
@@ -332,12 +460,16 @@ export default function Payments() {
   const openModal = (type: PaymentType) => {
     setPaymentType(type);
     setShowModal(true);
+    setPaymentMode('normal');
+    setSettlementDiscountValue(0);
     setIncomingSubmitMode('save');
     setMessage(null);
   };
 
   const closeModal = () => {
     setShowModal(false);
+    setPaymentMode('normal');
+    setSettlementDiscountValue(0);
   };
 
   const printInstallmentReceipt = (params: {
@@ -494,6 +626,98 @@ export default function Payments() {
 
     if (user?.role !== 'admin' && isDateClosed(incomingForm.date)) {
       setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
+      return;
+    }
+
+    if (paymentMode === 'early_settlement') {
+      if (!incomingForm.customerId || !incomingForm.saleId) {
+        setMessage({ type: 'error', text: 'اختر العميل والفاتورة المطلوب تصفيتها وتكييشها.' });
+        return;
+      }
+      if (!selectedSale) {
+        setMessage({ type: 'error', text: 'تعذر تحديد بيانات الفاتورة المختارة.' });
+        return;
+      }
+      if (incomingForm.amount <= 0 && netSettlementRequired > 0) {
+        setMessage({ type: 'error', text: 'أدخل مبلغ التسوية الصحيح.' });
+        return;
+      }
+      if (incomingForm.amount > netSettlementRequired) {
+        setMessage({
+          type: 'error',
+          text: `المبلغ أكبر من صافي التسوية المطلوب (${formatCurrency(netSettlementRequired)}).`,
+        });
+        return;
+      }
+
+      if (isApiMode()) {
+        const created = await api.createPayment({
+          type: 'in',
+          amount: incomingForm.amount,
+          saleId: selectedSale.id,
+          installmentId: null,
+          customerId: incomingForm.customerId,
+          description:
+            incomingForm.description.trim() ||
+            `تكييش وتصفية الفاتورة ${selectedSale.invoiceNumber}${settlementDiscountAmount > 0 ? ` (خصم تسوية ${formatCurrency(settlementDiscountAmount)})` : ''}`,
+          date: incomingForm.date,
+          channel: 'cash',
+          invoiceNumber: selectedSale.invoiceNumber,
+          isEarlySettlement: true,
+          settlementDiscount: settlementDiscountAmount,
+        });
+
+        await loadData();
+        closeModal();
+        setIncomingForm((current) => ({
+          customerId: current.customerId,
+          saleId: '',
+          installmentId: '',
+          amount: 0,
+          date: today(),
+          description: '',
+        }));
+        setPaymentMode('normal');
+        setSettlementDiscountValue(0);
+        setIncomingSubmitMode('save');
+        setMessage({ type: 'success', text: `تم تكييش وتصفية العقد بنجاح برقم إيصال ${created.receiptNumber}.` });
+        return;
+      }
+
+      createPayment({
+        type: 'in',
+        amount: incomingForm.amount,
+        referenceId: selectedSale.id,
+        referenceType: 'sale',
+        description:
+          incomingForm.description.trim() ||
+          `تكييش وتصفية الفاتورة ${selectedSale.invoiceNumber}${settlementDiscountAmount > 0 ? ` (خصم تسوية ${formatCurrency(settlementDiscountAmount)})` : ''}`,
+        date: incomingForm.date,
+        createdBy: user?.name || 'مدير النظام',
+        customerId: incomingForm.customerId,
+        saleId: selectedSale.id,
+        installmentId: undefined,
+        invoiceNumber: selectedSale.invoiceNumber,
+        affectsCustomerBalance: true,
+        channel: 'cash',
+        isEarlySettlement: true,
+        settlementDiscount: settlementDiscountAmount,
+      });
+
+      loadData();
+      closeModal();
+      setIncomingForm((current) => ({
+        customerId: current.customerId,
+        saleId: '',
+        installmentId: '',
+        amount: 0,
+        date: today(),
+        description: '',
+      }));
+      setPaymentMode('normal');
+      setSettlementDiscountValue(0);
+      setIncomingSubmitMode('save');
+      setMessage({ type: 'success', text: `تم تكييش وتصفية العقد ${selectedSale.invoiceNumber} بنجاح.` });
       return;
     }
 
@@ -661,11 +885,7 @@ export default function Payments() {
     setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
   };
 
-  const closingDateYYYYMMDD = toYYYYMMDD(closingDate);
-  const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD);
-  const closingTotalIn = closingDatePayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
-  const closingTotalOut = closingDatePayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
-  const closingNet = closingTotalIn - closingTotalOut;
+
 
   return (
     <div className="space-y-3">
@@ -696,6 +916,7 @@ export default function Payments() {
             <button
               onClick={() => {
                 setClosingDate(today());
+                setClosedPeriodDateFilter(today());
                 setClosingNotes('');
                 setShowClosingModal(true);
               }}
@@ -748,7 +969,7 @@ export default function Payments() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
-        <div className="overflow-x-auto max-h-[calc(100vh-230px)]">
+        <div className="overflow-x-auto h-[calc(100vh-210px)]">
           <table className="w-full min-w-[850px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -839,6 +1060,88 @@ export default function Payments() {
               <div className="overflow-y-auto">
                 {paymentType === 'in' ? (
                   <form onSubmit={handleIncomingSubmit} className="space-y-6 p-6">
+                    {/* ─── Payment Mode Toggle (Admin Only) ─────────────────── */}
+                    {isAdmin(user) && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-1 flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentMode('normal');
+                            setSettlementDiscountValue(0);
+                          }}
+                          className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-bold transition-all ${
+                            paymentMode === 'normal'
+                              ? 'bg-white text-emerald-700 shadow-sm border border-emerald-200'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          سداد قسط عادي
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentMode('early_settlement');
+                            setIncomingForm((curr) => ({ ...curr, installmentId: '', amount: 0, description: '' }));
+                          }}
+                          className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-bold transition-all ${
+                            paymentMode === 'early_settlement'
+                              ? 'bg-amber-500 text-white shadow-sm'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          ⚡ تكييش وتصفية الفاتورة/العقد
+                        </button>
+                      </div>
+                    )}
+                    {paymentMode === 'early_settlement' && (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-amber-700 font-black text-sm">⚡ وضع التكييش والتسوية المبكرة</span>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">إجمالي المتبقي</label>
+                            <div className="input-ui bg-white font-bold text-rose-700">{formatCurrency(totalRemainingUnpaid)}</div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">نوع خصم التعجيل</label>
+                            <select
+                              value={settlementDiscountType}
+                              onChange={(e) => {
+                                setSettlementDiscountType(e.target.value as 'fixed' | 'percent');
+                                setSettlementDiscountValue(0);
+                              }}
+                              className="input-ui"
+                            >
+                              <option value="fixed">مبلغ ثابت (جنيه)</option>
+                              <option value="percent">نسبة مئوية (%)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              {settlementDiscountType === 'percent' ? 'نسبة الخصم (%)' : 'مبلغ الخصم'}
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              max={settlementDiscountType === 'percent' ? 100 : totalRemainingUnpaid}
+                              step="0.01"
+                              value={settlementDiscountValue === 0 ? '' : settlementDiscountValue}
+                              onChange={(e) => setSettlementDiscountValue(Number(e.target.value) || 0)}
+                              className="input-ui"
+                              placeholder="0"
+                              onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                            />
+                          </div>
+                        </div>
+                        {settlementDiscountAmount > 0 && (
+                          <div className="flex items-center justify-between rounded-xl bg-white border border-amber-200 px-4 py-2.5">
+                            <span className="text-sm font-bold text-slate-700">صافي التسوية المطلوب</span>
+                            <span className="text-lg font-black text-emerald-700">{formatCurrency(netSettlementRequired)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
                       <section className="space-y-5">
                         <div className="grid gap-4 md:grid-cols-2">
@@ -916,6 +1219,7 @@ export default function Payments() {
                             </select>
                           </Field>
 
+                          {paymentMode === 'normal' && (
                           <Field label="الشهر / القسط">
                             <select
                               value={incomingForm.installmentId}
@@ -946,6 +1250,7 @@ export default function Payments() {
                               ))}
                             </select>
                           </Field>
+                          )}
 
                           <Field label="تاريخ السداد">
                             <DatePicker
@@ -1040,7 +1345,19 @@ export default function Payments() {
                                       key={schedule.id}
                                       className={incomingForm.installmentId === schedule.id ? 'bg-emerald-50/70' : 'bg-white'}
                                     >
-                                      <td className="px-3 py-3 font-semibold text-slate-800">{schedule.label}</td>
+                                      <td className="px-3 py-3 font-semibold text-slate-800">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span>{schedule.label}</span>
+                                          {(schedule.deferred || schedule.notes?.includes('مرحّل') || schedule.notes?.includes('مدمج')) && (
+                                            <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                              مرحّل
+                                            </span>
+                                          )}
+                                        </div>
+                                        {schedule.notes && (
+                                          <p className="text-[10px] text-slate-500 font-normal mt-0.5">{schedule.notes}</p>
+                                        )}
+                                      </td>
                                       <td className="px-3 py-3 text-slate-600">{formatDateDisplay(schedule.dueDate)}</td>
                                       <td className="px-3 py-3 text-slate-600">
                                         {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
@@ -1189,7 +1506,7 @@ export default function Payments() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
                     <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                       <p className="text-xs text-slate-500 font-bold">إجمالي الوارد (مقبوضات اليوم)</p>
                       <p className="mt-1 text-lg font-extrabold text-emerald-600">{formatCurrency(closingTotalIn)}</p>
@@ -1201,6 +1518,10 @@ export default function Payments() {
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <p className="text-xs text-slate-500 font-bold">صافي حركة اليوم</p>
                       <p className="mt-1 text-lg font-extrabold text-slate-800">{formatCurrency(closingNet)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
+                      <p className="text-xs text-sky-800 font-bold">إجمالي النقدية المتوقعة بالخزينة</p>
+                      <p className="mt-1 text-lg font-black text-sky-700">{formatCurrency(expectedTreasuryClosingBalance)}</p>
                     </div>
                   </div>
 
@@ -1231,20 +1552,34 @@ export default function Payments() {
                 </form>
 
                 <div className="border-t border-slate-100 pt-6">
-                  <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h4 className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <div className="mb-4">
+                    <h4 className="font-bold text-slate-800 flex items-center gap-1.5 mb-3">
                       <CheckCircle2 size={16} className="text-slate-600" />
                       السجلات المغلقة مؤخرًا
                     </h4>
-                    <div className="relative sm:w-72">
-                      <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        value={closedPeriodSearch}
-                        onChange={(event) => setClosedPeriodSearch(event.target.value)}
-                        className="input-ui h-10 pr-9 text-sm"
-                        placeholder="بحث في السجلات المغلقة"
-                      />
+                    <div className="flex flex-col sm:flex-row items-end gap-3">
+                      {/* Date filter */}
+                      <div className="flex-1 min-w-0 w-full">
+                        <label className="block text-xs font-bold text-slate-600 mb-1">التاريخ</label>
+                        <DatePicker
+                          value={closedPeriodDateFilter}
+                          onChange={(date) => setClosedPeriodDateFilter(date)}
+                          placeholder="يوم/شهر/سنة"
+                          className="w-full border-slate-200 px-3 py-1.5"
+                        />
+                      </div>
+                      {/* Reset filter */}
+                      {closedPeriodDateFilter && (
+                        <div className="flex items-end">
+                          <button
+                            type="button"
+                            onClick={() => setClosedPeriodDateFilter('')}
+                            className="h-10 px-4 text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors whitespace-nowrap"
+                          >
+                            عرض كل السجلات
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                   {closedPeriods.length === 0 ? (
@@ -1254,23 +1589,41 @@ export default function Payments() {
                   ) : (
                     <div className="max-h-[200px] overflow-y-auto rounded-2xl border border-slate-100">
                       <table className="w-full text-sm">
-                        <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                        <thead className="sticky top-0 bg-slate-50 text-slate-700 text-xs">
                           <tr>
-                            <th className="px-4 py-3 text-right font-bold">التاريخ</th>
-                            <th className="px-4 py-3 text-right font-bold">بواسطة</th>
-                            <th className="px-4 py-3 text-right font-bold">تاريخ الإغلاق</th>
-                            <th className="px-4 py-3 text-right font-bold">الملاحظات</th>
+                            <th className="px-3 py-2.5 text-right font-bold">التاريخ</th>
+                            <th className="px-3 py-2.5 text-center font-bold text-emerald-700">إجمالي الوارد</th>
+                            <th className="px-3 py-2.5 text-center font-bold text-rose-700">إجمالي المنصرف</th>
+                            <th className="px-3 py-2.5 text-center font-bold text-slate-800">صافي اليومية</th>
+                            <th className="px-3 py-2.5 text-center font-bold text-sky-800">رصيد الإغلاق</th>
+                            <th className="px-3 py-2.5 text-right font-bold">بواسطة</th>
+                            <th className="px-3 py-2.5 text-right font-bold">الملاحظات</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {filteredClosedPeriods.slice(0, 20).map((period) => (
-                            <tr key={period.id} className="hover:bg-slate-50/50">
-                              <td className="px-4 py-3 font-semibold text-slate-800">{formatDateDisplay(period.periodDate)}</td>
-                              <td className="px-4 py-3">{period.closedBy}</td>
-                              <td className="px-4 py-3 text-xs text-slate-500">{formatDateDisplay(period.closedAt.slice(0, 10))}</td>
-                              <td className="px-4 py-3 text-xs text-slate-500">{period.notes || '-'}</td>
-                            </tr>
-                          ))}
+                        <tbody className="divide-y divide-slate-100 text-slate-700 text-xs">
+                          {filteredClosedPeriods.slice(0, 30).map((period) => {
+                            // Compute dynamic fallback if period record did not save stored totals
+                            const pDate = toYYYYMMDD(period.periodDate);
+                            const dayPayments = payments.filter(p => toYYYYMMDD(p.date) === pDate && p.status !== 'voided');
+                            const computedIn = period.totalIn ?? dayPayments.filter(p => p.type === 'in').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                            const computedOut = period.totalOut ?? dayPayments.filter(p => p.type === 'out').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                            const computedNet = period.netMovement ?? (computedIn - computedOut);
+                            const computedBalance = period.closingBalance != null ? period.closingBalance : calculateAccumulatedCashUpToDate(pDate);
+
+                            return (
+                              <tr key={period.id} className="hover:bg-slate-50/50 transition-colors">
+                                <td className="px-3 py-2.5 font-bold text-slate-900 whitespace-nowrap">{formatDateDisplay(period.periodDate)}</td>
+                                <td className="px-3 py-2.5 text-center font-bold text-emerald-600 font-mono">{formatCurrency(computedIn)}</td>
+                                <td className="px-3 py-2.5 text-center font-bold text-rose-600 font-mono">{formatCurrency(computedOut)}</td>
+                                <td className="px-3 py-2.5 text-center font-black font-mono text-slate-800">{formatCurrency(computedNet)}</td>
+                                <td className="px-3 py-2.5 text-center font-extrabold font-mono text-sky-700">
+                                  {computedBalance !== undefined ? formatCurrency(computedBalance) : '-'}
+                                </td>
+                                <td className="px-3 py-2.5 text-slate-600 font-medium whitespace-nowrap">{period.closedBy || 'مدير النظام'}</td>
+                                <td className="px-3 py-2.5 text-xs text-slate-500 max-w-[180px] truncate">{period.notes || '-'}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>

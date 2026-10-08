@@ -11,6 +11,8 @@ import {
   Printer,
   FileSpreadsheet,
   Edit3,
+  CalendarCheck,
+  ArrowRight,
 } from 'lucide-react';
 import { Customer, Product, PurchaseItem, SaleItem, Supplier, SalesRep, Sale } from '../types';
 import {
@@ -34,6 +36,7 @@ import {
   syncSalesReps,
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { isAdmin } from '../lib/permissions';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -72,19 +75,36 @@ const sortSalesNewestFirst = (entries: Sale[]) =>
   });
 
 function addMonths(dateStr: string, months: number): string {
-  const origDate = new Date(dateStr);
-  if (isNaN(origDate.getTime())) {
-    return dateStr;
+  if (!dateStr) return dateStr;
+
+  let y: number, m: number, d: number;
+  const ymd = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(dateStr.trim());
+  if (ymd) {
+    y = parseInt(ymd[1], 10);
+    m = parseInt(ymd[2], 10) - 1;
+    d = parseInt(ymd[3], 10);
+  } else {
+    const dmy = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/.exec(dateStr.trim());
+    if (dmy) {
+      y = parseInt(dmy[3], 10);
+      m = parseInt(dmy[2], 10) - 1;
+      d = parseInt(dmy[1], 10);
+    } else {
+      const parsed = new Date(dateStr);
+      if (isNaN(parsed.getTime())) return dateStr;
+      y = parsed.getFullYear();
+      m = parsed.getMonth();
+      d = parsed.getDate();
+    }
   }
-  const originalDay = origDate.getDate();
-  const newDate = new Date(origDate);
-  newDate.setMonth(newDate.getMonth() + months);
-  const daysInTargetMonth = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 0).getDate();
-  newDate.setDate(Math.min(originalDay, daysInTargetMonth));
-  const year = newDate.getFullYear();
-  const month = newDate.getMonth() + 1;
-  const day = newDate.getDate();
-  return `${year}-${pad(month)}-${pad(day)}`;
+
+  const totalMonths = (y * 12 + m) + months;
+  const targetYear = Math.floor(totalMonths / 12);
+  const targetMonth = (totalMonths % 12) + 1;
+  const daysInMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  const finalDay = Math.min(d, daysInMonth);
+
+  return `${targetYear}-${pad(targetMonth)}-${pad(finalDay)}`;
 }
 
 const normalizeArabic = (str: string): string => {
@@ -99,6 +119,7 @@ const normalizeArabic = (str: string): string => {
 
 export default function Invoices() {
   const { settings, user } = useAuth();
+  const canDelete = isAdmin(user);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -195,17 +216,10 @@ export default function Invoices() {
   }, [suppliers, quickSupplierSearchTerm]);
 
   useEffect(() => {
-    const supplier = suppliers.find((s) => s.id === quickProduct.supplierId);
-    if (supplier) {
-      if (quickSupplierSearchTerm !== supplier.name) {
-        setQuickSupplierSearchTerm(supplier.name);
-      }
-    } else {
-      if (!showQuickSupplierSuggestions && quickSupplierSearchTerm !== '') {
-        setQuickSupplierSearchTerm('');
-      }
+    if (!quickProduct.supplierId && !showQuickSupplierSuggestions && quickSupplierSearchTerm !== '') {
+      setQuickSupplierSearchTerm('');
     }
-  }, [quickProduct.supplierId, suppliers, showQuickSupplierSuggestions]);
+  }, [quickProduct.supplierId, showQuickSupplierSuggestions, quickSupplierSearchTerm]);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [paymentDate, setPaymentDate] = useState(today());
@@ -226,6 +240,14 @@ export default function Invoices() {
   const [modalSearchQuery, setModalSearchQuery] = useState('');
   const [modalSearchLoading, setModalSearchLoading] = useState(false);
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+  const [deferModalSale, setDeferModalSale] = useState<Sale | null>(null);
+  const [deferInstallmentId, setDeferInstallmentId] = useState('');
+  const [deferNewDueDate, setDeferNewDueDate] = useState('');
+  const [deferStrategy, setDeferStrategy] = useState<'shift_subsequent' | 'merge_next'>('shift_subsequent');
+  const [deferPenaltyFee, setDeferPenaltyFee] = useState<number>(0);
+  const [deferPenaltyPaymentType, setDeferPenaltyPaymentType] = useState<'add_to_debt' | 'collect_cash'>('add_to_debt');
+  const [deferLoading, setDeferLoading] = useState(false);
+  const [deferMessage, setDeferMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const customerInputRef = useRef<HTMLInputElement>(null);
   const productSelectRef = useRef<HTMLSelectElement>(null);
   const quantityInputRef = useRef<HTMLInputElement>(null);
@@ -291,10 +313,18 @@ export default function Invoices() {
     setSelectedCustomerId(sale.customerId);
     setSelectedSalesRepId(sale.financing?.salesRepId || '');
     setInvoiceNumber(sale.invoiceNumber);
-    setInvoiceDate(sale.date.substring(0, 10));
-    setPaymentMethod((sale.financing?.paymentMethod as any) || 'cash');
+    setInvoiceDate(sale.date ? sale.date.substring(0, 10) : today());
+    const isInstallment =
+      sale.financing?.paymentMethod === 'installment' ||
+      (sale.financing?.schedules && sale.financing.schedules.length > 0) ||
+      Boolean(sale.financing?.installmentMonths && sale.financing.installmentMonths > 0);
+    setPaymentMethod(isInstallment ? 'installment' : (sale.financing?.paymentMethod as any) || 'installment');
     setPaidAmount(sale.financing?.upfrontAmount || sale.paid);
-    setInstallmentMonths(sale.financing?.installmentMonths || 12);
+    setInstallmentMonths(
+      sale.financing?.installmentMonths
+      || sale.financing?.schedules?.length
+      || 12
+    );
     setInvoiceNotes(sale.notes || '');
     
     setDraftItems(
@@ -339,6 +369,76 @@ export default function Invoices() {
     }
   };
 
+  const handleDeferInstallment = async () => {
+    if (!deferModalSale || !deferInstallmentId || !deferNewDueDate) {
+      setDeferMessage({ type: 'error', text: 'يرجى تحديد القسط وتاريخ التأجيل الجديد.' });
+      return;
+    }
+
+    const cleanPenaltyFee = Number(deferPenaltyFee) > 0 ? Number(deferPenaltyFee) : 0;
+
+    // Handle draft new contract locally without making an API call to a non-existent sale ID
+    if (deferModalSale.id === 'draft-new-contract') {
+      const targetMonthIndex = parseInt(deferInstallmentId.replace('inst-', ''), 10);
+      if (isNaN(targetMonthIndex)) {
+        setDeferMessage({ type: 'error', text: 'معرف القسط غير صالح.' });
+        return;
+      }
+
+      setDeferMessage({ type: 'success', text: 'تم تحديث خطة الأقساط المسودة بنجاح.' });
+      setTimeout(() => {
+        setDeferModalSale(null);
+        setDeferInstallmentId('');
+        setDeferNewDueDate('');
+        setDeferPenaltyFee(0);
+        setDeferMessage(null);
+      }, 1000);
+      return;
+    }
+
+    setDeferLoading(true);
+    setDeferMessage(null);
+    try {
+      const payload: {
+        installmentId: string;
+        newDueDate: string;
+        strategy: 'shift_subsequent' | 'merge_next';
+        penaltyFee?: number;
+        penaltyPaymentType?: 'add_to_debt' | 'collect_cash';
+      } = {
+        installmentId: deferInstallmentId,
+        newDueDate: deferNewDueDate,
+        strategy: deferStrategy,
+        penaltyFee: cleanPenaltyFee,
+      };
+
+      if (cleanPenaltyFee > 0) {
+        payload.penaltyPaymentType = deferPenaltyPaymentType;
+      }
+
+      const result = await api.deferInstallment(deferModalSale.id, payload);
+
+      // Refresh the sale data with updated schedules from the response
+      if (result.sale) {
+        setDeferModalSale(result.sale);
+      } else {
+        const refreshed = await api.getSale(deferModalSale.id);
+        setDeferModalSale(refreshed);
+      }
+      await refreshSalesList();
+      setDeferInstallmentId('');
+      setDeferNewDueDate('');
+      setDeferPenaltyFee(0);
+      setDeferMessage({ type: 'success', text: result.message || 'تم ترحيل القسط بنجاح.' });
+    } catch (err: any) {
+      console.error('Error deferring installment:', err);
+      const errorText = err?.message || 'حدث خطأ أثناء ترحيل القسط. يرجى مراجعة البيانات والمحاولة مجددًا.';
+      setDeferMessage({ type: 'error', text: errorText });
+    } finally {
+      setDeferLoading(false);
+    }
+  };
+
   useEffect(() => {
     const loadData = async () => {
       await Promise.all([
@@ -362,11 +462,6 @@ export default function Invoices() {
       setSales(sortSalesNewestFirst(loadedSales));
       setInvoiceNumber(getNextSaleInvoiceNumber());
 
-
-
-      if (loadedSuppliers.length > 0) {
-        setQuickProduct((current) => ({ ...current, supplierId: current.supplierId || loadedSuppliers[0].id }));
-      }
     };
     loadData();
   }, []);
@@ -481,6 +576,11 @@ export default function Invoices() {
 
   const filteredModalContracts = useMemo(() => sales.slice(0, 10), [sales]);
 
+  const editingSale = useMemo(() => {
+    if (!editingSaleId) return null;
+    return sales.find((s) => s.id === editingSaleId) || null;
+  }, [editingSaleId, sales]);
+
   const resetForm = () => {
     setEditingSaleId(null);
     setInvoiceNumber(getNextSaleInvoiceNumber());
@@ -501,8 +601,9 @@ export default function Invoices() {
       name: '',
       purchasePrice: 0,
       salePrice: 0,
-      supplierId: suppliers[0]?.id || '',
+      supplierId: '',
     });
+    setQuickSupplierSearchTerm('');
   };
 
   const addLine = () => {
@@ -590,18 +691,22 @@ export default function Invoices() {
     setProducts(refreshedProducts);
     setLineProductId(createdProduct.id);
     setLineTax(createdProduct.tax || '');
-    setProcurementSupplierId(quickProduct.supplierId || procurementSupplierId);
+    if (quickProduct.supplierId) {
+      setProcurementSupplierId(quickProduct.supplierId);
+    }
     setQuickProduct({
       name: '',
       purchasePrice: 0,
       salePrice: 0,
-      supplierId: quickProduct.supplierId || suppliers[0]?.id || '',
+      supplierId: '',
     });
+    setQuickSupplierSearchTerm('');
     setShowQuickProduct(false);
     setMessage({ type: 'success', text: `تم إنشاء الصنف ${createdProduct.name} ويمكن إضافته مباشرة للفاتورة.` });
   };
 
   const saveInvoice = async () => {
+    setMessage(null);
     if (!selectedCustomer) {
       setMessage({ type: 'error', text: 'اختر العميل قبل حفظ الفاتورة.' });
       return;
@@ -612,7 +717,15 @@ export default function Invoices() {
       return;
     }
 
+    if (items.some((item) => !item.productId || item.quantity <= 0 || item.unitPrice < 0 || item.total < 0)) {
+      setMessage({ type: 'error', text: 'راجع أصناف الفاتورة: يجب اختيار صنف وكمية صحيحة لكل بند.' });
+      return;
+    }
 
+    if (total <= 0) {
+      setMessage({ type: 'error', text: 'إجمالي الفاتورة يجب أن يكون أكبر من صفر.' });
+      return;
+    }
 
     if (editingSaleId) {
       try {
@@ -671,7 +784,8 @@ export default function Invoices() {
       return;
     }
 
-    let autoPurchaseNumber = '';
+    try {
+      let autoPurchaseNumber = '';
 
     const createdSale = await createSale({
       customerId: selectedCustomer.id,
@@ -701,8 +815,7 @@ export default function Invoices() {
     if (procurementRows.length > 0 && selectedProcurementSupplier) {
       const purchaseItems: PurchaseItem[] = procurementRows.map((item) => {
         const unitPrice = item.product?.purchasePrice || 0;
-        const discount = item.product?.discount || 0;
-        const taxPerUnit = (unitPrice - discount) * ((item.product?.tax || 0) / 100);
+        const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
 
         return {
           productId: item.productId,
@@ -710,23 +823,22 @@ export default function Invoices() {
           barcode: item.barcode,
           quantity: item.shortageQuantity,
           unitPrice,
-          discount,
+          discount: 0,
           tax: taxPerUnit,
-          total: item.shortageQuantity * unitPrice - item.shortageQuantity * discount + item.shortageQuantity * taxPerUnit,
+          total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
         };
       });
 
       const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-      const purchaseDiscount = purchaseItems.reduce((sum, item) => sum + item.quantity * item.discount, 0);
       const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
-      const purchaseTotal = purchaseSubtotal - purchaseDiscount + purchaseTax;
+      const purchaseTotal = purchaseSubtotal + purchaseTax;
 
       const createdPurchase = await createPurchase({
         supplierId: selectedProcurementSupplier.id,
         supplierName: selectedProcurementSupplier.name,
         items: purchaseItems,
         subtotal: purchaseSubtotal,
-        discount: purchaseDiscount,
+        discount: 0,
         tax: purchaseTax,
         total: purchaseTotal,
         paid: 0,
@@ -747,6 +859,19 @@ export default function Invoices() {
     }
 
     if (paid > 0) {
+      if (isApiMode()) {
+        await api.createPayment({
+          type: 'in',
+          amount: paid,
+          saleId: createdSale.id,
+          customerId: selectedCustomer.id,
+          invoiceNumber: createdSale.invoiceNumber,
+          description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
+          date: paymentDate,
+          channel: 'cash',
+          affectsCustomerBalance: false,
+        });
+      } else {
       await createPayment({
         type: 'in',
         amount: paid,
@@ -760,6 +885,7 @@ export default function Invoices() {
         invoiceNumber: createdSale.invoiceNumber,
         affectsCustomerBalance: false,
       });
+      }
     }
 
     createNotification({
@@ -787,6 +913,10 @@ export default function Invoices() {
     // Set for printing
     setSavedSaleForPrinting(createdSale);
     resetForm();
+    } catch (err: any) {
+      console.error('[Invoices] Failed to save invoice', err);
+      setMessage({ type: 'error', text: err.message || 'تعذر حفظ الفاتورة. راجع البيانات وحاول مرة أخرى.' });
+    }
   };
 
   return (
@@ -1137,9 +1267,7 @@ export default function Invoices() {
                           onChange={(e) => {
                             setQuickSupplierSearchTerm(e.target.value);
                             setShowQuickSupplierSuggestions(true);
-                            if (e.target.value.trim() === '') {
-                              setQuickProduct((current) => ({ ...current, supplierId: '' }));
-                            }
+                            setQuickProduct((current) => ({ ...current, supplierId: '' }));
                           }}
                           onFocus={() => setShowQuickSupplierSuggestions(true)}
                           onBlur={() => setTimeout(() => setShowQuickSupplierSuggestions(false), 200)}
@@ -1259,6 +1387,96 @@ export default function Invoices() {
               </div>
             </div>
           </Panel>
+
+          {/* Active Contract Installment Schedule in Edit Mode */}
+          {editingSale && editingSale.financing?.paymentMethod === 'installment' && (editingSale.financing?.schedules?.length ?? 0) > 0 && (
+            <Panel title="جدول أقساط التعاقد وإدارتها" icon={<CalendarCheck size={18} className="text-violet-600" />}>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <span>إجمالي الأقساط: {(editingSale.financing?.schedules ?? []).length}</span>
+                  <span>المدفوع: {formatCurrency(editingSale.paid)}</span>
+                  <span>المتبقي: <span className="text-rose-600 font-extrabold">{formatCurrency(editingSale.remaining)}</span></span>
+                </div>
+
+                <div className="overflow-hidden rounded-xl border border-slate-200">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                      <tr>
+                        <th className="py-2.5 px-3 text-right font-bold">القسط</th>
+                        <th className="py-2.5 px-3 text-right font-bold">تاريخ الاستحقاق</th>
+                        <th className="py-2.5 px-3 text-right font-bold">المبلغ</th>
+                        <th className="py-2.5 px-3 text-right font-bold">المسدد</th>
+                        <th className="py-2.5 px-3 text-right font-bold">المتبقي</th>
+                        <th className="py-2.5 px-3 text-center font-bold">الحالة</th>
+                        <th className="py-2.5 px-3 text-center font-bold">الإجراء</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {(editingSale.financing?.schedules ?? []).map((sch) => {
+                        const isPaid = sch.status === 'paid' || sch.status === 'settled_early';
+                        const rem = Math.max(sch.amount - sch.paidAmount, 0);
+                        const isDeferred = sch.deferred || Boolean(sch.notes?.includes('مرحّل') || sch.notes?.includes('مدمج'));
+
+                        return (
+                          <tr key={sch.id} className="hover:bg-slate-50/70">
+                            <td className="py-2.5 px-3 font-bold text-slate-800">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span>{sch.label}</span>
+                                {isDeferred && (
+                                  <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                    مرحّل
+                                  </span>
+                                )}
+                              </div>
+                              {sch.notes && (
+                                <p className="text-[10px] text-slate-500 font-normal mt-0.5">{sch.notes}</p>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-600 font-medium">{formatDateDisplay(sch.dueDate)}</td>
+                            <td className="py-2.5 px-3 font-bold text-slate-800">{formatCurrency(sch.amount)}</td>
+                            <td className="py-2.5 px-3 font-semibold text-emerald-600">{formatCurrency(sch.paidAmount)}</td>
+                            <td className="py-2.5 px-3 font-bold text-rose-600">{formatCurrency(rem)}</td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                sch.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
+                                : sch.status === 'settled_early' ? 'bg-sky-100 text-sky-700'
+                                : sch.status === 'partial' ? 'bg-amber-100 text-amber-700'
+                                : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {sch.status === 'paid' ? 'مدفوع' : sch.status === 'settled_early' ? 'تكييش' : sch.status === 'partial' ? 'جزئي' : 'معلق'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {canDelete && !isPaid ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeferModalSale(editingSale);
+                                    setDeferInstallmentId(sch.id);
+                                    setDeferNewDueDate(addMonths(sch.dueDate, 1));
+                                    setDeferPenaltyFee(0);
+                                    setDeferStrategy('shift_subsequent');
+                                    setDeferPenaltyPaymentType('add_to_debt');
+                                    setDeferMessage(null);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs"
+                                >
+                                  <CalendarCheck size={12} />
+                                  ترحيل القسط
+                                </button>
+                              ) : (
+                                <span className="text-slate-400 text-[10px]">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </Panel>
+          )}
 
           {procurementRows.length > 0 && (
             <Panel title="3. شراء تلقائي من نفس الشاشة" icon={<ShoppingCart size={18} className="text-amber-600" />}>
@@ -1385,18 +1603,102 @@ export default function Invoices() {
           {paymentMethod === 'installment' && (
             <Panel title="خطة الأقساط" icon={<CalendarDays size={18} className="text-violet-600" />}>
               <div className="space-y-3">
-                {installmentPreview.map((entry) => (
-                  <div
-                    key={entry.monthIndex}
-                    className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
-                  >
-                    <div>
-                      <p className="font-semibold text-slate-800">القسط {entry.monthIndex}</p>
-                      <p className="text-xs text-slate-500">{formatDateDisplay(entry.dueDate)}</p>
+                {installmentPreview.map((entry) => {
+                  const correspondingSchedule = editingSale?.financing?.schedules?.find(
+                    (s, idx) => s.id === `inst-${entry.monthIndex}` || s.monthIndex === entry.monthIndex || idx === entry.monthIndex - 1
+                  );
+                  const scheduleId = correspondingSchedule?.id || `inst-${entry.monthIndex}`;
+                  const isPaid = correspondingSchedule?.status === 'paid' || correspondingSchedule?.status === 'settled_early';
+                  const displayDate = correspondingSchedule?.dueDate || entry.dueDate;
+                  const displayAmount = correspondingSchedule ? correspondingSchedule.amount : entry.amount;
+                  const isDeferred = correspondingSchedule?.deferred || Boolean(correspondingSchedule?.notes?.includes('مرحّل') || correspondingSchedule?.notes?.includes('مدمج'));
+
+                  return (
+                    <div
+                      key={entry.monthIndex}
+                      className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                    >
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-semibold text-slate-800">القسط {entry.monthIndex}</p>
+                          {isDeferred && (
+                            <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              مرحّل
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500">{formatDateDisplay(displayDate)}</p>
+                        {correspondingSchedule?.notes && (
+                          <p className="text-[10px] text-amber-700 font-medium mt-0.5">{correspondingSchedule.notes}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold text-violet-700">{formatCurrency(displayAmount)}</span>
+                        {(!correspondingSchedule || !isPaid) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (editingSale) {
+                                setDeferModalSale(editingSale);
+                                setDeferInstallmentId(scheduleId);
+                                setDeferNewDueDate(addMonths(displayDate, 1));
+                                setDeferPenaltyFee(0);
+                                setDeferStrategy('shift_subsequent');
+                                setDeferPenaltyPaymentType('add_to_debt');
+                                setDeferMessage(null);
+                              } else {
+                                // In new contract mode, launch defer modal with draft sale representation
+                                const draftSaleObj: Sale = {
+                                  id: 'draft-new-contract',
+                                  invoiceNumber: 'فاتورة جديدة',
+                                  customerId: selectedCustomerId,
+                                  customerName: customers.find((c) => c.id === selectedCustomerId)?.name || 'العميل الحالي',
+                                  date: invoiceDate,
+                                  items: [],
+                                  subtotal,
+                                  discount: discountAmount,
+                                  tax: taxAmount,
+                                  total,
+                                  paid,
+                                  remaining,
+                                  status: 'pending',
+                                  createdAt: new Date().toISOString(),
+                                  financing: {
+                                    paymentMethod: 'installment',
+                                    installmentMonths: effectiveMonths,
+                                    installmentStartDate: firstInstallmentDate,
+                                    monthlyInstallmentAmount: monthlyInstallment,
+                                    schedules: installmentPreview.map((ip) => ({
+                                      id: `inst-${ip.monthIndex}`,
+                                      monthIndex: ip.monthIndex,
+                                      label: `القسط ${ip.monthIndex}`,
+                                      dueDate: ip.dueDate,
+                                      amount: ip.amount,
+                                      paidAmount: 0,
+                                      status: 'unpaid' as const,
+                                    })),
+                                  },
+                                };
+                                setDeferModalSale(draftSaleObj);
+                                setDeferInstallmentId(scheduleId);
+                                setDeferNewDueDate(addMonths(entry.dueDate, 1));
+                                setDeferPenaltyFee(0);
+                                setDeferStrategy('shift_subsequent');
+                                setDeferPenaltyPaymentType('add_to_debt');
+                                setDeferMessage(null);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-violet-700 hover:text-white bg-violet-50 hover:bg-violet-600 border border-violet-200 hover:border-violet-600 rounded-xl transition-all shadow-xs cursor-pointer"
+                            title="ترحيل القسط وتعديل تاريخ الاستحقاق"
+                          >
+                            <CalendarCheck size={13} />
+                            ترحيل
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <span className="font-bold text-violet-700">{formatCurrency(entry.amount)}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Panel>
           )}
@@ -1497,6 +1799,7 @@ export default function Invoices() {
                           <Edit3 size={13} />
                           تعديل البيانات
                         </button>
+                        {canDelete && (
                         <button
                           type="button"
                           onClick={() => handleDeleteContract(sale)}
@@ -1505,6 +1808,26 @@ export default function Invoices() {
                           <Trash2 size={13} />
                           حذف التعاقد
                         </button>
+                        )}
+                        {canDelete && sale.financing?.paymentMethod === 'installment' && (sale.financing?.schedules?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeferModalSale(sale);
+                              setDeferInstallmentId('');
+                              setDeferNewDueDate('');
+                              setDeferPenaltyFee(0);
+                              setDeferStrategy('shift_subsequent');
+                              setDeferPenaltyPaymentType('add_to_debt');
+                              setDeferMessage(null);
+                              setShowSearchModal(false);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          >
+                            <CalendarCheck size={13} />
+                            ترحيل قسط
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -1545,6 +1868,244 @@ export default function Invoices() {
           }}
           sale={savedSaleForPrinting}
         />
+      )}
+
+      {/* ─── Defer Installment Modal (Admin Only) ────────────────── */}
+      {deferModalSale && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-violet-600 to-violet-700 p-6 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <CalendarCheck size={22} />
+                  ترحيل قسط تعاقد - {deferModalSale.invoiceNumber}
+                </h3>
+                <p className="text-xs text-violet-100 mt-1">اختر القسط المراد ترحيله وحدد التاريخ الجديد واستراتيجية الترحيل.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setDeferModalSale(null); setDeferMessage(null); }}
+                className="text-white/80 hover:text-white text-3xl font-light p-1 leading-none"
+              >&times;</button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-5">
+              {/* Contract Summary */}
+              <div className="flex items-center gap-4 flex-wrap text-sm">
+                <span className="font-bold text-slate-700">عميل: <span className="text-sky-700">{deferModalSale.customerName}</span></span>
+                <span className="font-bold text-slate-700">إجمالي: <span className="text-emerald-700">{formatCurrency(deferModalSale.total)}</span></span>
+                <span className="font-bold text-slate-700">المتبقي: <span className="text-rose-700">{formatCurrency(deferModalSale.remaining)}</span></span>
+              </div>
+
+              {/* Schedule Table */}
+              <div className="overflow-hidden rounded-2xl border border-slate-200">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-4 py-3 text-right font-bold">القسط</th>
+                        <th className="px-4 py-3 text-right font-bold">تاريخ الاستحقاق</th>
+                        <th className="px-4 py-3 text-right font-bold">المبلغ</th>
+                        <th className="px-4 py-3 text-right font-bold">مدفوع</th>
+                        <th className="px-4 py-3 text-right font-bold">المتبقي</th>
+                        <th className="px-4 py-3 text-right font-bold">الحالة</th>
+                        <th className="px-4 py-3 text-center font-bold">إجراء</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {(deferModalSale.financing?.schedules ?? []).map((sch) => {
+                        const isPaid = sch.status === 'paid' || sch.status === 'settled_early';
+                        const remaining = Math.max(sch.amount - sch.paidAmount, 0);
+                        const isDeferred = sch.deferred || Boolean(sch.notes?.includes('مرحّل') || sch.notes?.includes('مدمج'));
+                        return (
+                          <tr
+                            key={sch.id}
+                            className={`transition-colors ${
+                              deferInstallmentId === sch.id ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'
+                            } ${isPaid ? 'opacity-50' : ''}`}
+                          >
+                            <td className="px-4 py-3 font-semibold text-slate-800">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span>{sch.label}</span>
+                                {isDeferred && (
+                                  <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                    مرحّل
+                                  </span>
+                                )}
+                              </div>
+                              {sch.notes && (
+                                <p className="text-[10px] text-slate-500 font-normal mt-0.5">{sch.notes}</p>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">{formatDateDisplay(sch.dueDate)}</td>
+                            <td className="px-4 py-3 text-slate-700">{formatCurrency(sch.amount)}</td>
+                            <td className="px-4 py-3 text-emerald-700">{formatCurrency(sch.paidAmount)}</td>
+                            <td className="px-4 py-3 text-rose-600 font-bold">{formatCurrency(remaining)}</td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                                sch.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
+                                : sch.status === 'settled_early' ? 'bg-sky-100 text-sky-700'
+                                : sch.status === 'partial' ? 'bg-amber-100 text-amber-700'
+                                : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {sch.status === 'paid' ? 'مدفوع' : sch.status === 'settled_early' ? 'تكييش' : sch.status === 'partial' ? 'جزئي' : 'معلق'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {!isPaid && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeferInstallmentId(sch.id);
+                                    const suggestedDate = addMonths(sch.dueDate, 1);
+                                    setDeferNewDueDate(suggestedDate);
+                                    setDeferMessage(null);
+                                  }}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    deferInstallmentId === sch.id
+                                      ? 'bg-violet-600 text-white'
+                                      : 'bg-violet-50 text-violet-700 hover:bg-violet-100'
+                                  }`}
+                                >
+                                  <ArrowRight size={12} />
+                                  ترحيل
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Defer Settings - shown when installment is selected */}
+              {deferInstallmentId && (
+                <>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="font-bold text-violet-800 text-sm">إعدادات الترحيل</h4>
+                    {(() => {
+                      const selSch = deferModalSale?.financing?.schedules?.find((s) => s.id === deferInstallmentId);
+                      return selSch ? (
+                        <span className="text-xs font-bold text-violet-800 bg-violet-100 border border-violet-200 px-3 py-1 rounded-xl">
+                          {selSch.label} | {formatCurrency(selSch.amount)} (الاستحقاق: {formatDateDisplay(selSch.dueDate)})
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">تاريخ الاستحقاق الجديد</label>
+                      <DatePicker
+                        value={deferNewDueDate}
+                        onChange={setDeferNewDueDate}
+                        className="w-full border-slate-200 px-4 py-2"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">استراتيجية الترحيل</label>
+                      <select
+                        value={deferStrategy}
+                        onChange={(e) => setDeferStrategy(e.target.value as 'shift_subsequent' | 'merge_next')}
+                        className="input-ui"
+                      >
+                        <option value="shift_subsequent">إزاحة الأقساط التالية شهرًا للأمام</option>
+                        <option value="merge_next">دمج مع القسط التالي</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">غرامة الترحيل (اختياري)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={deferPenaltyFee === 0 ? '' : deferPenaltyFee}
+                        onChange={(e) => setDeferPenaltyFee(Number(e.target.value) || 0)}
+                        className="input-ui"
+                        placeholder="0"
+                        onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                      />
+                    </div>
+
+                    {deferPenaltyFee > 0 && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">طريقة تحصيل الغرامة</label>
+                        <select
+                          value={deferPenaltyPaymentType}
+                          onChange={(e) => setDeferPenaltyPaymentType(e.target.value as 'add_to_debt' | 'collect_cash')}
+                          className="input-ui"
+                        >
+                          <option value="add_to_debt">إضافة للرصيد المستحق</option>
+                          <option value="collect_cash">تحصيل نقدًا الآن</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {deferMessage && (
+                    <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${
+                      deferMessage.type === 'success'
+                        ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                        : 'bg-rose-50 border border-rose-200 text-rose-700'
+                    }`}>
+                      {deferMessage.text}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => { setDeferInstallmentId(''); setDeferNewDueDate(''); setDeferPenaltyFee(0); setDeferMessage(null); }}
+                      className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deferLoading || !deferNewDueDate}
+                      onClick={handleDeferInstallment}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white font-bold text-sm transition-all"
+                    >
+                      {deferLoading ? (
+                        <span className="animate-spin">&#8987;</span>
+                      ) : (
+                        <CalendarCheck size={16} />
+                      )}
+                      تأكيد ترحيل القسط
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {!deferInstallmentId && deferMessage && (
+                <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${
+                  deferMessage.type === 'success'
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                    : 'bg-rose-50 border border-rose-200 text-rose-700'
+                }`}>
+                  {deferMessage.text}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => { setDeferModalSale(null); setDeferMessage(null); }}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-sm transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

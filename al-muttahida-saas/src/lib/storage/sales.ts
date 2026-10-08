@@ -103,14 +103,39 @@ function buildFinancing(sale: SaleDraft) {
       }
     : undefined;
 }
-
+function buildSaleApiPayload(sale: SaleDraft, invoiceNumber: string, financing: ReturnType<typeof buildFinancing>) {
+  return {
+    customerId: sale.customerId,
+    customerName: sale.customerName,
+    invoiceNumber,
+    items: sale.items.map((item) => ({
+      productId: item.productId,
+      productName: item.productName,
+      barcode: item.barcode || null,
+      quantity: Number(item.quantity),
+      unitPrice: Number(item.unitPrice),
+      unitCost: Number(item.unitCost || 0),
+      discount: Number(item.discount || 0),
+      tax: Number(item.tax || 0),
+      total: Number(item.total),
+    })),
+    subtotal: Number(sale.subtotal),
+    discount: Number(sale.discount || 0),
+    tax: Number(sale.tax || 0),
+    total: Number(sale.total),
+    paid: Number(sale.paid || 0),
+    date: sale.date,
+    notes: sale.notes || '',
+    financing: financing || null,
+  };
+}
 export async function createSale(sale: SaleDraft): Promise<Sale> {
   const sales = getStorage<Sale>(DB_KEYS.SALES);
   const invoiceNumber = nextSaleInvoiceNumber();
   const financing = buildFinancing(sale);
 
   if (isApiMode()) {
-    const res = await api.createSale({ ...sale, invoiceNumber, financing });
+    const res = await api.createSale(buildSaleApiPayload(sale, invoiceNumber, financing));
     const newSale: Sale = {
       ...sale,
       id: res.id,
@@ -217,7 +242,7 @@ export async function updateSale(saleId: string, updatedSaleData: SaleDraft): Pr
   const syncedSale = syncSalePaymentStatus(newSale);
 
   if (isApiMode()) {
-    await api.updateSale(saleId, { ...updatedSaleData, invoiceNumber: oldSale.invoiceNumber, financing });
+    await api.updateSale(saleId, buildSaleApiPayload(updatedSaleData, oldSale.invoiceNumber, financing));
   }
 
   sales[saleIndex] = syncedSale;
@@ -292,7 +317,7 @@ export async function deleteSale(saleId: string, deletedBy = 'system'): Promise<
   const purchases = getStorage<Purchase>(DB_KEYS.PURCHASES);
   const linkedPurchases = purchases.filter((purchase) => {
     const notes = purchase.notes || '';
-    const isAutoPurchase = notes.includes('���� ������') || notes.includes('?�?�?�?? ??U�U�?�?�U?');
+    const isAutoPurchase = notes.includes('���� ������') || notes.includes('?�?�?�?? ??U�U�?�?�U?');
     const linkedByInvoice = notes.includes(sale.invoiceNumber);
     const likelySameContract =
       purchase.date === sale.date &&
@@ -377,4 +402,88 @@ export async function deleteSale(saleId: string, deletedBy = 'system'): Promise<
   });
 
   return true;
+}
+
+export async function deferInstallment(saleId: string, payload: {
+  installmentId: string;
+  newDueDate: string;
+  strategy: 'shift_subsequent' | 'merge_next';
+  penaltyFee?: number;
+  penaltyPaymentType?: 'add_to_debt' | 'collect_cash';
+}): Promise<{ message: string; schedules: any[]; sale?: Sale }> {
+  if (isApiMode()) {
+    return api.deferInstallment(saleId, payload);
+  }
+
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const saleIndex = sales.findIndex((s) => s.id === saleId);
+  if (saleIndex === -1) throw new Error('Contract not found');
+
+  const sale = sales[saleIndex];
+  const schedules = sale.financing?.schedules || [];
+  const targetIndex = schedules.findIndex((s) => s.id === payload.installmentId);
+  if (targetIndex === -1) throw new Error('Installment not found');
+
+  const target = schedules[targetIndex];
+  if (target.status === 'paid' || target.status === 'settled_early') {
+    throw new Error('لا يمكن ترحيل قسط مسدد بالفعل أو مسوى');
+  }
+
+  const penalty = Number(payload.penaltyFee || 0);
+
+  if (payload.strategy === 'shift_subsequent') {
+    target.dueDate = payload.newDueDate;
+    target.deferred = true;
+    target.deferredAt = new Date().toISOString();
+    target.notes = 'تم ترحيل القسط وتعديل تاريخ الاستحقاق';
+    if (penalty > 0 && payload.penaltyPaymentType === 'add_to_debt') {
+      target.amount = Number((target.amount + penalty).toFixed(2));
+    }
+    for (let i = targetIndex + 1; i < schedules.length; i++) {
+      if (schedules[i].status !== 'paid' && schedules[i].status !== 'settled_early') {
+        schedules[i].dueDate = addMonths(schedules[i].dueDate, 1);
+      }
+    }
+  } else if (payload.strategy === 'merge_next') {
+    const nextIndex = schedules.findIndex(
+      (s, idx) => idx > targetIndex && s.status !== 'paid' && s.status !== 'settled_early',
+    );
+    if (nextIndex === -1) {
+      throw new Error('لا يوجد قسط قادم لدمج هذا القسط معه. يرجى استخدام استراتيجية إزاحة الأقساط شهراً للأمام.');
+    }
+    const nextSch = schedules[nextIndex];
+    const unpaidTarget = Number((target.amount - target.paidAmount).toFixed(2));
+    const extraPenalty = payload.penaltyPaymentType === 'add_to_debt' && penalty > 0 ? penalty : 0;
+    nextSch.amount = Number((nextSch.amount + unpaidTarget + extraPenalty).toFixed(2));
+    nextSch.deferred = true;
+    nextSch.deferredAt = new Date().toISOString();
+    nextSch.notes = `مدمج مع القسط ${target.monthIndex}`;
+
+    target.amount = target.paidAmount;
+    target.status = target.paidAmount > 0 ? 'paid' : 'settled_early';
+    target.deferred = true;
+    target.deferredAt = new Date().toISOString();
+    target.notes = `تم ترحيله ودمجه مع القسط ${nextSch.monthIndex}`;
+  }
+
+  if (penalty > 0) {
+    if (payload.penaltyPaymentType === 'add_to_debt') {
+      sale.total = Number((sale.total + penalty).toFixed(2));
+      sale.remaining = Number((sale.remaining + penalty).toFixed(2));
+      const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+      const custIndex = customers.findIndex((c) => c.id === sale.customerId);
+      if (custIndex !== -1) {
+        customers[custIndex].balance = Number((customers[custIndex].balance + penalty).toFixed(2));
+        setStorage(DB_KEYS.CUSTOMERS, customers);
+      }
+    }
+  }
+
+  if (sale.financing) {
+    sale.financing.schedules = schedules;
+  }
+  sales[saleIndex] = sale;
+  setStorage(DB_KEYS.SALES, sales);
+
+  return { message: 'تم ترحيل القسط بنجاح', schedules, sale };
 }

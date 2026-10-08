@@ -51,6 +51,8 @@ const paymentSchema = z.object({
   channel: z.enum(['cash', 'card', 'transfer', 'wallet', 'other']).default('cash'),
   invoiceNumber: z.string().optional().nullable(),
   affectsCustomerBalance: z.boolean().default(true),
+  isEarlySettlement: z.boolean().optional().default(false),
+  settlementDiscount: z.number().nonnegative().optional().default(0),
 });
 
 // GET /payments
@@ -152,18 +154,41 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       return res.status(400).json({ message: 'لا يمكن تسجيل عملية دفع في تاريخ مغلق مالياً' });
     }
 
+    if (data.isEarlySettlement) {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ message: 'خاصية تكييش وتصفية العقد مخصصة للمدير فقط' });
+      }
+      if (!data.saleId) {
+        return res.status(400).json({ message: 'يجب اختيار الفاتورة/العقد المراد تكييشه' });
+      }
+    }
+
     // Validate sale exists and amount before transaction
     let finalCustomerId = data.customerId || null;
     let finalSupplierId = data.supplierId || null;
+    let saleRemainingBeforeSettlement = 0;
 
     if (data.type === 'in' && data.saleId) {
-      const sale = await db.get<{ id: string; customer_id: string; paid: number; remaining: number; total: number }>(
-        'SELECT id, customer_id, paid, remaining, total FROM sales WHERE id = ?',
+      const sale = await db.get<{ id: string; customer_id: string; paid: number; remaining: number; total: number; invoice_number: string }>(
+        'SELECT id, customer_id, paid, remaining, total, invoice_number FROM sales WHERE id = ?',
         data.saleId,
       );
       if (!sale) return res.status(404).json({ message: 'Sale invoice not found' });
-      if (roundMoney(data.amount) > roundMoney(sale.remaining)) {
-        return res.status(400).json({ message: 'Payment amount cannot exceed the remaining sale balance' });
+      saleRemainingBeforeSettlement = Number(sale.remaining || 0);
+
+      if (data.isEarlySettlement) {
+        const discount = Number(data.settlementDiscount || 0);
+        if (discount > saleRemainingBeforeSettlement) {
+          return res.status(400).json({ message: 'قيمة خصم التعجيل لا يمكن أن تتجاوز المبلغ المتبقي' });
+        }
+        const expectedNet = Math.max(0, Number((saleRemainingBeforeSettlement - discount).toFixed(2)));
+        if (roundMoney(data.amount) > roundMoney(expectedNet)) {
+          return res.status(400).json({ message: 'مبلغ السداد لا يمكن أن يتجاوز صافي التسوية المطلوب' });
+        }
+      } else {
+        if (roundMoney(data.amount) > roundMoney(sale.remaining)) {
+          return res.status(400).json({ message: 'Payment amount cannot exceed the remaining sale balance' });
+        }
       }
       finalCustomerId = sale.customer_id;
     }
@@ -172,62 +197,92 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     await db.withTransaction(async (tx) => {
       // 1. If paying for a sale, update sales + installments
       if (data.type === 'in' && data.saleId) {
-        await tx.run(
-          `UPDATE sales
-           SET paid = paid + ?,
-               remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
-               locked = 1,
-               status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
-           WHERE id = ?`,
-          data.amount, data.amount, data.amount, data.amount, data.saleId,
-        );
-
-        if (data.installmentId) {
-          const schedule = await tx.get(
-            'SELECT id, amount, paid_amount FROM installment_schedules WHERE id = ?',
-            data.installmentId,
-          );
-          if (schedule) {
-            const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
-            await tx.run(
-              `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
-              nextPaid,
-              nextPaid >= schedule.amount ? 'paid' : 'partial',
-              data.date,
-              data.installmentId,
-            );
-          }
-        } else {
-          const schedules = await tx.all(
-            `SELECT id, amount, paid_amount FROM installment_schedules
-             WHERE sale_id = ? AND status <> 'paid' ORDER BY month_index ASC`,
+        if (data.isEarlySettlement) {
+          const discount = Number(data.settlementDiscount || 0);
+          await tx.run(
+            `UPDATE sales
+             SET paid = paid + ?,
+                 remaining = 0,
+                 locked = 1,
+                 status = 'settled_early',
+                 discount = discount + ?,
+                 last_edited_by = ?,
+                 last_edited_at = ?
+             WHERE id = ?`,
+            data.amount,
+            discount,
+            req.user?.name || 'system',
+            now,
             data.saleId,
           );
-          let remainingPayment = data.amount;
-          for (const sch of schedules) {
-            if (remainingPayment <= 0) break;
-            const schRemaining = Number((sch.amount - sch.paid_amount).toFixed(2));
-            const applied = Math.min(schRemaining, remainingPayment);
-            const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
-            remainingPayment = Number((remainingPayment - applied).toFixed(2));
-            await tx.run(
-              `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
-              nextPaidAmount,
-              nextPaidAmount >= sch.amount ? 'paid' : 'partial',
-              data.date,
-              sch.id,
+
+          await tx.run(
+            `UPDATE installment_schedules
+             SET status = 'settled_early',
+                 paid_at = ?
+             WHERE sale_id = ? AND status <> 'paid'`,
+            data.date,
+            data.saleId,
+          );
+        } else {
+          await tx.run(
+            `UPDATE sales
+             SET paid = paid + ?,
+                 remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
+                 locked = 1,
+                 status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
+             WHERE id = ?`,
+            data.amount, data.amount, data.amount, data.amount, data.saleId,
+          );
+
+          if (data.installmentId) {
+            const schedule = await tx.get(
+              'SELECT id, amount, paid_amount FROM installment_schedules WHERE id = ?',
+              data.installmentId,
             );
+            if (schedule) {
+              const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
+              await tx.run(
+                `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+                nextPaid,
+                nextPaid >= schedule.amount ? 'paid' : 'partial',
+                data.date,
+                data.installmentId,
+              );
+            }
+          } else {
+            const schedules = await tx.all(
+              `SELECT id, amount, paid_amount FROM installment_schedules
+               WHERE sale_id = ? AND status <> 'paid' ORDER BY month_index ASC`,
+              data.saleId,
+            );
+            let remainingPayment = data.amount;
+            for (const sch of schedules) {
+              if (remainingPayment <= 0) break;
+              const schRemaining = Number((sch.amount - sch.paid_amount).toFixed(2));
+              const applied = Math.min(schRemaining, remainingPayment);
+              const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
+              remainingPayment = Number((remainingPayment - applied).toFixed(2));
+              await tx.run(
+                `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+                nextPaidAmount,
+                nextPaidAmount >= sch.amount ? 'paid' : 'partial',
+                data.date,
+                sch.id,
+              );
+            }
           }
         }
       }
 
       // 2. Update Customer Balance
       if (data.type === 'in' && finalCustomerId && data.affectsCustomerBalance) {
+        const customerDeduction = data.isEarlySettlement ? saleRemainingBeforeSettlement : data.amount;
         await tx.run(
           `UPDATE customers
            SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ?
            WHERE id = ?`,
-          data.amount, data.amount, now, finalCustomerId,
+          customerDeduction, customerDeduction, now, finalCustomerId,
         );
       }
 
@@ -268,27 +323,45 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       );
     });
 
-    await audit('payment.create', 'payment', id, req.user?.name || 'system', {
-      id,
-      receiptNumber,
-      amount: data.amount,
-      type: data.type,
-    });
-
-    // Build detailed notification with client and installment info
+    // Build client info
     let clientName = '';
     if (finalCustomerId) {
       const custRow = await db.get<any>(`SELECT name FROM customers WHERE id = ?`, finalCustomerId);
       if (custRow) clientName = custRow.name;
     }
-    const installmentMatch = data.description?.match(/قسط\s+(\d+)/);
-    const installmentNo = installmentMatch ? installmentMatch[1] : (data.installmentId ?? '');
-    const detailedMessage = `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - سداد القسط ${installmentNo} من الفاتورة ${data.invoiceNumber || ''} - إيصال ${receiptNumber} - عميل ${clientName}`;
-    await createSystemNotification(
-      data.type === 'in' ? 'success' : 'warning',
-      `حركة خزينة ${financialMovementLabel(data.type)}`,
-      detailedMessage,
-    );
+
+    if (data.isEarlySettlement) {
+      await audit('payment.early_settlement', 'payment', id, req.user?.name || 'system', {
+        id,
+        receiptNumber,
+        amount: data.amount,
+        discount: data.settlementDiscount,
+        saleId: data.saleId,
+      });
+
+      const detailedMessage = `تكييش وتصفية عقد: استلام ${formatMoney(data.amount)} (خصم تسوية ${formatMoney(data.settlementDiscount)}) - إيصال ${receiptNumber} - عميل ${clientName} - فاتورة ${data.invoiceNumber || ''}`;
+      await createSystemNotification(
+        'success',
+        'تكييش وتصفية عقد',
+        detailedMessage,
+      );
+    } else {
+      await audit('payment.create', 'payment', id, req.user?.name || 'system', {
+        id,
+        receiptNumber,
+        amount: data.amount,
+        type: data.type,
+      });
+
+      const installmentMatch = data.description?.match(/قسط\s+(\d+)/);
+      const installmentNo = installmentMatch ? installmentMatch[1] : (data.installmentId ?? '');
+      const detailedMessage = `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - سداد القسط ${installmentNo} من الفاتورة ${data.invoiceNumber || ''} - إيصال ${receiptNumber} - عميل ${clientName}`;
+      await createSystemNotification(
+        data.type === 'in' ? 'success' : 'warning',
+        `حركة خزينة ${financialMovementLabel(data.type)}`,
+        detailedMessage,
+      );
+    }
 
     return res.status(201).json({ id, receiptNumber });
   } catch (error: any) {

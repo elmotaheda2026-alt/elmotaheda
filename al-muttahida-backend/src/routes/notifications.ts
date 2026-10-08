@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { uid, formatDate } from '../utils.js';
 
 const router = Router();
@@ -88,7 +88,7 @@ router.put('/:id/read', requirePermission('notifications:read'), async (req, res
 });
 
 // DELETE /notifications/:id
-router.delete('/:id', requirePermission('notifications:read'), async (req, res) => {
+router.delete('/:id', requirePermission('notifications:read'), requireAdmin, async (req, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM notifications WHERE id = ?', req.params.id);

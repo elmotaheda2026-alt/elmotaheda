@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { hasPermission } from '../permissions.js';
 import type { Permission } from '../types.js';
 import { audit } from '../audit.js';
@@ -123,7 +123,7 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
 });
 
 // DELETE /suppliers/:id
-router.delete('/:id', requireAnyPermission('users:manage', 'purchases:manage'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requireAnyPermission('users:manage', 'purchases:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   const now = new Date().toISOString();
 
   try {

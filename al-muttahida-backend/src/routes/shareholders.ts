@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { formatDate, parseDateInput } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid } from '../utils.js';
 import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
@@ -128,7 +128,7 @@ router.put('/:id', async (req: AuthedRequest, res) => {
 });
 
 // DELETE /shareholders/:id
-router.delete('/:id', async (req: AuthedRequest, res) => {
+router.delete('/:id', requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM shareholders WHERE id = ?', req.params.id);

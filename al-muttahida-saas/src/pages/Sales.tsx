@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Printer } from 'lucide-react';
 import { Product, Sale } from '../types';
 import { getProducts, getSales } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
+import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 
@@ -86,6 +88,8 @@ export default function Sales() {
     [sales, dateFrom, dateTo],
   );
 
+  const [saleForPrinting, setSaleForPrinting] = useState<Sale | null>(null);
+
   const saleLineRows = useMemo(
     () =>
       filteredSales.flatMap((sale) =>
@@ -115,6 +119,8 @@ export default function Sales() {
 
           return {
             id: `${sale.id}-${item.productId}`,
+            sale,
+            invoiceNumber: sale.invoiceNumber,
             customerName: sale.customerName,
             date: sale.date,
             productName: item.productName,
@@ -181,7 +187,7 @@ export default function Sales() {
         <div className="border-b border-slate-100 px-4 py-3">
           <h3 className="font-bold text-slate-900">تفاصيل الأصناف</h3>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[calc(100vh-280px)]">
           <table className="w-full min-w-[860px]">
             <thead className="bg-slate-100">
               <tr>

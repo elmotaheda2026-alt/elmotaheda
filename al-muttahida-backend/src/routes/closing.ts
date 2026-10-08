@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { uid } from '../utils.js';
 import { audit } from '../audit.js';
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, requireAdmin);
 
 router.post('/close', requirePermission('closing:write'), async (req: AuthedRequest, res) => {
   const schema = z.object({

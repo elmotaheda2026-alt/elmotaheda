@@ -49,12 +49,14 @@ const rolePermissions: Record<User['role'], Permission[]> = {
     'notifications:read',
   ],
   manager: ['dashboard:view', 'sales:read', 'sales:write', 'payments:read', 'reports:read', 'notifications:read'],
-  accountant: ['dashboard:view', 'sales:read', 'payments:read', 'payments:write', 'reports:read', 'notifications:read'],
+  accountant: ['dashboard:view', 'sales:read', 'payments:read', 'payments:write', 'notifications:read'],
   user: ['dashboard:view', 'sales:read', 'payments:read', 'notifications:read'],
   collector: ['dashboard:view', 'payments:read', 'payments:write', 'notifications:read'],
   reviewer: ['dashboard:view', 'sales:read', 'payments:read', 'reports:read', 'sales:reschedule', 'notifications:read'],
   finance_manager: ['dashboard:view', 'sales:read', 'payments:read', 'payments:reverse', 'reports:read', 'closing:write', 'notifications:read'],
 };
+
+export const isAdmin = (user: User | null): boolean => user?.role === 'admin';
 
 /**
  * Checks if the current authenticated user has the given permission.

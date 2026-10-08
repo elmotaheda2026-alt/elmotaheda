@@ -25,13 +25,23 @@ export default function Notifications() {
   }, []);
 
   const handleMarkRead = async (id: string) => {
-    await markNotificationRead(id);
-    setNotifications(getNotifications());
+    setNotifications((current) =>
+      current.map((notification) => (notification.id === id ? { ...notification, isRead: true } : notification)),
+    );
+    try {
+      await markNotificationRead(id);
+    } finally {
+      setNotifications(getNotifications());
+    }
   };
 
   const handleMarkAllRead = async () => {
-    await markAllNotificationsRead();
-    setNotifications(getNotifications());
+    setNotifications((current) => current.map((notification) => ({ ...notification, isRead: true })));
+    try {
+      await markAllNotificationsRead();
+    } finally {
+      setNotifications(getNotifications());
+    }
   };
 
   const getIcon = (type: string) => {

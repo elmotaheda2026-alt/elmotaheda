@@ -3,8 +3,12 @@ import { Plus, Edit, Trash2, Search, UserCheck } from 'lucide-react';
 import { SalesRep } from '../types';
 import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSalesReps } from '../lib/storage';
 import { isApiMode } from '../lib/apiClient';
+import { useAuth } from '../context/AuthContext';
+import { isAdmin } from '../lib/permissions';
 
 export default function SalesReps() {
+  const { user } = useAuth();
+  const canDelete = isAdmin(user);
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingRep, setEditingRep] = useState<SalesRep | null>(null);
@@ -103,37 +107,35 @@ export default function SalesReps() {
 
   return (
     <div className="space-y-2">
-      {/* Header */}
+      {/* Header with Search and Actions */}
       <div className="erp-action-bar">
-        <h2 className="text-xl font-black text-slate-900">المناديب</h2>
+        <div className="flex items-center gap-4 flex-1">
+          <h2 className="text-xl font-black text-slate-900 shrink-0">المناديب</h2>
+          <div className="relative flex-1 max-w-sm">
+            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              ref={searchInputRef}
+              autoFocus
+              placeholder="بحث عن مندوب بالاسم أو المنطقة..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="input-ui pr-10 pl-4 py-2 text-sm w-full"
+            />
+          </div>
+        </div>
         <button
           onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm"
+          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm shrink-0"
         >
           <Plus size={16} />
           <span>إضافة مندوب</span>
         </button>
       </div>
 
-      {/* Toolbar / Search */}
-      <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-2">
-        <div className="relative max-w-sm">
-          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            ref={searchInputRef}
-            autoFocus
-            placeholder="بحث عن مندوب..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="input-ui pr-10 pl-4 py-2 text-sm w-full"
-          />
-        </div>
-      </div>
-
       {/* Reps Table */}
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
+        <div className="overflow-auto h-[calc(100vh-210px)]">
           <table className="w-full min-w-[800px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -182,9 +184,11 @@ export default function SalesReps() {
                           <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
                             <Edit size={15} />
                           </button>
-                          <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="حذف">
-                            <Trash2 size={15} />
-                          </button>
+                          {canDelete && (
+                            <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="حذف">
+                              <Trash2 size={15} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

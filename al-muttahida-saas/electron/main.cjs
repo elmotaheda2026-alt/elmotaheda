@@ -1,13 +1,27 @@
 const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { startBackend, stopBackend, checkHealth } = require('./backend-loader.cjs');
+const { exec } = require('child_process');
+const { startBackend, stopBackend, checkHealth, getAppDataDir } = require('./backend-loader.cjs');
 
-const CONFIG_FILE = path.join(app.getPath('userData'), 'app-config.json');
+const CONFIG_FILE = path.join(getAppDataDir(), 'config.json');
 
 let setupWindow = null;
 let mainWindow = null;
 let appConfig = null;
+let currentApiUrl = 'http://127.0.0.1:4000';
+
+function ensureFirewallRules() {
+  if (process.platform !== 'win32') return;
+  const cmd = 'netsh advfirewall firewall add rule name="AlMuttahida ERP Ports" dir=in action=allow protocol=TCP localport=1433,5000,4000,5173';
+  exec(cmd, (error, stdout, stderr) => {
+    if (error) {
+      console.warn('Firewall rule notice (requires admin if not previously granted):', error.message);
+    } else {
+      console.log('AlMuttahida ERP firewall rules configured successfully.');
+    }
+  });
+}
 
 // ── Config helpers ──────────────────────────────────────────────
 
@@ -26,7 +40,9 @@ function saveConfig(config) {
   try {
     const dir = path.dirname(CONFIG_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    const existing = loadConfig() || {};
+    const merged = { ...existing, ...config };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
   } catch (e) {
     console.error('Could not save config:', e.message);
   }
@@ -35,9 +51,14 @@ function saveConfig(config) {
 // ── Setup Window ────────────────────────────────────────────────
 
 function showSetupWindow() {
+  if (setupWindow) {
+    setupWindow.focus();
+    return;
+  }
+
   setupWindow = new BrowserWindow({
     width: 560,
-    height: 500,
+    height: 520,
     resizable: false,
     frame: false,
     transparent: false,
@@ -53,12 +74,11 @@ function showSetupWindow() {
 
   setupWindow.on('closed', () => {
     setupWindow = null;
-    // If no main window was opened, quit the app
     if (!mainWindow) app.quit();
   });
 }
 
-let currentApiUrl = '';
+// ── Main Window ─────────────────────────────────────────────────
 
 ipcMain.on('get-api-url', (event) => {
   event.returnValue = currentApiUrl;
@@ -68,14 +88,24 @@ function createMainWindow(apiBaseUrl) {
   currentApiUrl = apiBaseUrl;
 
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: 1366,
+    height: 850,
+    minWidth: 1024,
+    minHeight: 700,
+    show: false,
+    backgroundColor: '#f8fafc',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload-main.cjs'),
     },
-    title: 'Al Muttahida ERP',
+    title: 'Al-Muttahida ERP',
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow) {
+      mainWindow.show();
+    }
   });
 
   const isDev = process.env.NODE_ENV === 'development';
@@ -84,18 +114,16 @@ function createMainWindow(apiBaseUrl) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Load the built frontend (dist/index.html) directly from its source
     const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
 
     if (fs.existsSync(indexPath)) {
       mainWindow.loadFile(indexPath);
     } else {
-      // Fallback: try loading the URL directly
       mainWindow.loadURL(apiBaseUrl.replace(':4000', ':5173'));
     }
   }
 
-  // Enable DevTools shortcut (Ctrl+Shift+I / F12) and reload shortcut (F5 / Ctrl+R)
+  // DevTools shortcut (Ctrl+Shift+I / F12) and reload shortcut (F5 / Ctrl+R)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown') {
       if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
@@ -120,30 +148,25 @@ ipcMain.on('start-app', async (event, config) => {
 
   try {
     if (mode === 'server') {
-      // Server mode: start the backend, then open the main window
+      ensureFirewallRules();
       if (event.sender && setupWindow) {
         event.sender.send('setup-status', 'جاري تشغيل السيرفر...');
       }
 
       const port = await startBackend();
       const apiUrl = `http://127.0.0.1:${port}`;
-
-      // Save config so next time it auto-starts as server
       saveConfig({ mode: 'server', port });
 
-      // Close setup and open main window
       if (setupWindow) setupWindow.close();
       createMainWindow(apiUrl);
 
     } else if (mode === 'client') {
-      // Client mode: verify the server is reachable, then open the main window
       const apiUrl = `http://${serverIp}:4000`;
 
       if (event.sender && setupWindow) {
         event.sender.send('setup-status', 'جاري الاتصال بالسيرفر...');
       }
 
-      // Check if server is reachable
       try {
         await checkHealth(`${apiUrl}/health`);
       } catch (err) {
@@ -153,10 +176,8 @@ ipcMain.on('start-app', async (event, config) => {
         return;
       }
 
-      // Save config so next time it auto-connects
-      saveConfig({ mode: 'client', serverIp });
+      saveConfig({ mode: 'client', serverIp, host: serverIp });
 
-      // Close setup and open main window
       if (setupWindow) setupWindow.close();
       createMainWindow(apiUrl);
     }
@@ -168,47 +189,49 @@ ipcMain.on('start-app', async (event, config) => {
   }
 });
 
-// ── App lifecycle ───────────────────────────────────────────────
+// ── App lifecycle: Automatic Backend Auto-Spawn ─────────────────
+
+async function initAndLaunch() {
+  appConfig = loadConfig();
+
+  // If explicitly configured as client mode with a remote server IP
+  if (appConfig && appConfig.mode === 'client' && (appConfig.serverIp || appConfig.host)) {
+    const remoteIp = appConfig.serverIp || appConfig.host;
+    const apiUrl = `http://${remoteIp}:4000`;
+
+    try {
+      await checkHealth(`${apiUrl}/health`);
+      createMainWindow(apiUrl);
+      return;
+    } catch (err) {
+      console.warn(`Remote server ${remoteIp} unreachable, showing setup window:`, err.message);
+      showSetupWindow();
+      return;
+    }
+  }
+
+  // Default: Server / Standalone mode
+  // Automatically spawn and launch local Express backend
+  try {
+    ensureFirewallRules();
+    console.log('Auto-launching local Express backend...');
+    const port = await startBackend();
+    const apiUrl = `http://127.0.0.1:${port}`;
+    createMainWindow(apiUrl);
+  } catch (err) {
+    console.error('Failed to auto-start backend server:', err);
+    // Show setup window with error so user can diagnose or switch to client mode
+    showSetupWindow();
+  }
+}
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
-
-  // Try to load saved config
-  appConfig = loadConfig();
-
-  if (appConfig) {
-    // Auto-start with saved config
-    if (appConfig.mode === 'server') {
-      startBackend()
-        .then((port) => {
-          createMainWindow(`http://127.0.0.1:${port}`);
-        })
-        .catch((err) => {
-          console.error('Failed to auto-start server:', err);
-          // Show setup screen as fallback
-          showSetupWindow();
-        });
-    } else if (appConfig.mode === 'client' && appConfig.serverIp) {
-      const apiUrl = `http://${appConfig.serverIp}:4000`;
-      checkHealth(`${apiUrl}/health`)
-        .then(() => {
-          createMainWindow(apiUrl);
-        })
-        .catch(() => {
-          // Server not reachable, show setup to re-enter IP
-          showSetupWindow();
-        });
-    } else {
-      showSetupWindow();
-    }
-  } else {
-    // First time: show setup
-    showSetupWindow();
-  }
+  initAndLaunch();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      showSetupWindow();
+      if (!mainWindow) initAndLaunch();
     }
   });
 });

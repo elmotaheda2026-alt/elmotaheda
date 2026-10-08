@@ -13,7 +13,7 @@ const rolePermissions: Record<UserRole, Permission[]> = {
     'users:manage',
   ],
   manager: ['sales:read', 'sales:write', 'payments:read', 'reports:read'],
-  accountant: ['sales:read', 'payments:read', 'payments:write', 'reports:read'],
+  accountant: ['sales:read', 'payments:read', 'payments:write'],
   user: ['sales:read', 'payments:read'],
   collector: ['payments:read', 'payments:write'],
   reviewer: ['sales:read', 'payments:read', 'reports:read', 'sales:reschedule'],

@@ -8,6 +8,7 @@ import {
 import { Customer, Guarantor } from '../types';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { isAdmin } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
@@ -99,7 +100,8 @@ export default function Customers() {
   };
 
   const [formData, setFormData] = useState(emptyForm);
-  const { settings } = useAuth();
+  const { settings, user } = useAuth();
+  const canDelete = isAdmin(user);
 
   useEffect(() => {
     if (didLoadRef.current) return;
@@ -343,17 +345,16 @@ export default function Customers() {
       (stats, customer) => {
         const balance = Number(customer.balance || 0);
         stats.totalCustomersCount += 1;
-        stats.totalDebtsAmount += balance;
         if (customer.isSued) stats.suedCustomersCount += 1;
         if (Math.round(balance) > 0 && !customer.isSued) stats.activeCustomersCount += 1;
         return stats;
       },
-      { totalCustomersCount: 0, suedCustomersCount: 0, activeCustomersCount: 0, totalDebtsAmount: 0 },
+      { totalCustomersCount: 0, suedCustomersCount: 0, activeCustomersCount: 0 },
     ),
     [customers],
   );
 
-  const { totalCustomersCount, suedCustomersCount, activeCustomersCount, totalDebtsAmount } = customerStats;
+  const { totalCustomersCount, suedCustomersCount, activeCustomersCount } = customerStats;
 
   return (
     <div className="space-y-2">
@@ -458,7 +459,7 @@ export default function Customers() {
       {/* Customers List / Grid */}
       {viewMode === 'table' ? (
         <div className="bg-white rounded-lg shadow-2xs border border-slate-200 overflow-hidden">
-          <div className="overflow-x-auto max-h-[calc(100vh-190px)]">
+          <div className="overflow-auto h-[calc(100vh-210px)]">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
@@ -518,6 +519,7 @@ export default function Customers() {
                           >
                             <Edit size={15} />
                           </button>
+                          {canDelete && (
                           <button
                             onClick={() => handleDelete(customer.id)}
                             className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
@@ -525,6 +527,7 @@ export default function Customers() {
                           >
                             <Trash2 size={15} />
                           </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -533,97 +536,110 @@ export default function Customers() {
               </tbody>
             </table>
           </div>
+          {filteredCustomers.length > visibleCustomers.length && (
+            <div className="border-t border-slate-100 bg-slate-50 px-4 py-2 text-center">
+              <button
+                type="button"
+                onClick={() => setVisibleLimit((limit) => limit + CUSTOMER_RENDER_LIMIT)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
+              >
+                عرض المزيد ({filteredCustomers.length - visibleCustomers.length})
+              </button>
+            </div>
+          )}
           {/* Sticky Summary Footer Bar */}
           <div className="erp-status-bar">
             <span className="font-bold text-slate-700">إجمالي السجلات: <span className="text-blue-700 font-extrabold">{filteredCustomers.length}</span> (المعروض: {visibleCustomers.length})</span>
-            <span className="font-bold text-slate-700">إجمالي المديونية الحالية: <span className="text-rose-700 font-extrabold">{formatCurrency(totalDebtsAmount)}</span></span>
           </div>
         </div>
       ) : (
         /* Grid View of Cards */
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredCustomers.length === 0 ? (
-            <div className="col-span-full bg-white rounded-2xl border border-slate-100 p-12 text-center text-slate-400 shadow-sm">
-              <Users size={40} className="mx-auto mb-3 text-slate-300" />
-              <p className="text-sm font-bold">لا يوجد عملاء مطابِقين للبحث الحالي</p>
-            </div>
-          ) : (
-            visibleCustomers.map(customer => (
-              <div key={customer.id} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between gap-4 group ${customer.isSued ? 'border-red-100 hover:border-red-200' : 'border-slate-100 hover:border-slate-200'}`}>
-                {/* Card Header */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-sm border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
-                      {customer.isSued ? <Gavel size={18} /> : <User size={18} />}
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="inline-flex w-fit px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-100/30 font-mono mb-1">
-                        {customer.customerNumber}
-                      </span>
-                      <h4 className={`font-bold text-sm leading-tight text-slate-800 ${customer.isSued ? 'line-through text-slate-400' : ''}`}>
-                        {customer.name}
-                      </h4>
-                      {customer.isSued && (
-                        <span className="text-[10px] text-red-500 font-bold flex items-center gap-1 mt-0.5">
-                          <AlertTriangle size={10} /> محال للقضاء
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredCustomers.length === 0 ? (
+              <div className="col-span-full bg-white rounded-2xl border border-slate-100 p-12 text-center text-slate-400 shadow-sm">
+                <Users size={40} className="mx-auto mb-3 text-slate-300" />
+                <p className="text-sm font-bold">لا يوجد عملاء مطابِقين للبحث الحالي</p>
+              </div>
+            ) : (
+              visibleCustomers.map(customer => (
+                <div key={customer.id} className={`bg-white rounded-2xl border p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between gap-4 group ${customer.isSued ? 'border-red-100 hover:border-red-200' : 'border-slate-100 hover:border-slate-200'}`}>
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-sm border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
+                        {customer.isSued ? <Gavel size={18} /> : <User size={18} />}
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="inline-flex w-fit px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-100/30 font-mono mb-1">
+                          {customer.customerNumber}
                         </span>
+                        <h4 className={`font-bold text-sm leading-tight text-slate-800 ${customer.isSued ? 'line-through text-slate-400' : ''}`}>
+                          {customer.name}
+                        </h4>
+                        {customer.isSued && (
+                          <span className="text-[10px] text-red-500 font-bold flex items-center gap-1 mt-0.5">
+                            <AlertTriangle size={10} /> محال للقضاء
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions Dropdown / Icons */}
+                    <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => handleEdit(customer)}
+                        className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                        title="تعديل"
+                      >
+                        <Edit size={14} />
+                      </button>
+                      {canDelete && (
+                      <button
+                        onClick={() => handleDelete(customer.id)}
+                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
+                        title="حذف"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Actions Dropdown / Icons */}
-                  <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => handleEdit(customer)}
-                      className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
-                      title="تعديل"
-                    >
-                      <Edit size={14} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(customer.id)}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
-                      title="حذف"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                  {/* Card Content info */}
+                  <div className="space-y-2 text-xs text-slate-500 border-t border-b border-slate-50 py-3 my-1">
+                    <div className="flex items-center gap-2">
+                      <Phone size={13} className="text-slate-400 shrink-0" />
+                      <span className="font-mono">{customer.phone}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <MapPin size={13} className="text-slate-400 shrink-0" />
+                      <span className="truncate">{customer.address || 'غير محدد'}</span>
+                    </div>
                   </div>
-                </div>
 
-                {/* Card Content info */}
-                <div className="space-y-2 text-xs text-slate-500 border-t border-b border-slate-50 py-3 my-1">
-                  <div className="flex items-center gap-2">
-                    <Phone size={13} className="text-slate-400 shrink-0" />
-                    <span className="font-mono">{customer.phone}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <MapPin size={13} className="text-slate-400 shrink-0" />
-                    <span className="truncate">{customer.address || 'غير محدد'}</span>
+                  {/* Card Balance Badge */}
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[10px] font-bold text-slate-400">الرصيد المالي:</span>
+                    <span className={`px-3 py-1 rounded-full text-xs font-black border ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/5' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                      {formatCurrency(customer.balance)} {Math.round(Number(customer.balance)) > 0 ? 'مدين' : ''}
+                    </span>
                   </div>
                 </div>
-
-                {/* Card Balance Badge */}
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-[10px] font-bold text-slate-400">الرصيد المالي:</span>
-                  <span className={`px-3 py-1 rounded-full text-xs font-black border ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border-rose-100/5' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
-                    {formatCurrency(customer.balance)} {Math.round(Number(customer.balance)) > 0 ? 'مدين' : ''}
-                  </span>
-                </div>
-              </div>
-            ))
+              ))
+            )}
+          </div>
+          {filteredCustomers.length > visibleCustomers.length && (
+            <div className="text-center pt-2">
+              <button
+                type="button"
+                onClick={() => setVisibleLimit((limit) => limit + CUSTOMER_RENDER_LIMIT)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                عرض المزيد ({filteredCustomers.length - visibleCustomers.length})
+              </button>
+            </div>
           )}
-        </div>
-      )}
-
-      {filteredCustomers.length > visibleCustomers.length && (
-        <div className="text-center">
-          <button
-            type="button"
-            onClick={() => setVisibleLimit((limit) => limit + CUSTOMER_RENDER_LIMIT)}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            عرض المزيد ({filteredCustomers.length - visibleCustomers.length})
-          </button>
         </div>
       )}
 
@@ -642,7 +658,7 @@ export default function Customers() {
                 </h2>
               </div>
               <div className="flex items-center gap-2">
-                {isEditing && (
+                {isEditing && canDelete && (
                   <button
                     type="button"
                     onClick={() => handleDelete(selectedCustomer!.id)}

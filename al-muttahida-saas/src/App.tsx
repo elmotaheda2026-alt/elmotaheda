@@ -26,8 +26,20 @@ import ProtectedRoute from './components/ProtectedRoute';
 import WhatsappReminderRunner from './components/WhatsappReminderRunner';
 
 function AppRoutes() {
-  const { isAuthenticated, settings } = useAuth();
+  const { isAuthenticated, settings, isLoading } = useAuth();
   const isConfigured = localStorage.getItem('almuttahida_configured') === 'true' || settings.isConfigured;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center select-none" dir="rtl">
+        <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 mb-4 animate-bounce">
+          <span className="text-2xl font-black">المتحدة</span>
+        </div>
+        <h2 className="text-base font-bold text-slate-800">جاري تشغيل النظام...</h2>
+        <p className="text-xs text-slate-400 mt-1">برجاء الانتظار قليلاً</p>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -42,12 +54,12 @@ function AppRoutes() {
           <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
           <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
           <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
-          <Route path="sales" element={<ProtectedRoute permission="sales:read"><Sales /></ProtectedRoute>} />
+          <Route path="sales" element={<ProtectedRoute adminOnly><Sales /></ProtectedRoute>} />
           <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
           <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
           <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
-          <Route path="accounts" element={<ProtectedRoute permission="payments:read"><Accounts /></ProtectedRoute>} />
-          <Route path="reports" element={<ProtectedRoute permission="reports:read"><Reports /></ProtectedRoute>} />
+          <Route path="accounts" element={<ProtectedRoute adminOnly><Accounts /></ProtectedRoute>} />
+          <Route path="reports" element={<ProtectedRoute adminOnly><Reports /></ProtectedRoute>} />
 
           <Route path="settings" element={<ProtectedRoute permission="settings:manage"><Settings /></ProtectedRoute>} />
           <Route path="notifications" element={<ProtectedRoute permission="notifications:read"><Notifications /></ProtectedRoute>} />

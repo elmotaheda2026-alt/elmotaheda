@@ -3,7 +3,7 @@ import { Plus, Edit, Trash2, Search, Phone, MapPin, DollarSign, Truck } from 'lu
 import { Supplier } from '../types';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier, syncSuppliers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
-import { hasPermission } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 
@@ -20,6 +20,7 @@ export default function Suppliers() {
     notes: '',
   });
   const { settings, user } = useAuth();
+  const canDelete = isAdmin(user);
 
   useEffect(() => {
     loadSuppliers();
@@ -139,7 +140,7 @@ export default function Suppliers() {
 
       {/* Suppliers High-Density Table */}
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
-        <div className="overflow-x-auto max-h-[calc(100vh-190px)]">
+        <div className="overflow-auto h-[calc(100vh-210px)]">
           <table className="w-full min-w-[700px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -178,7 +179,7 @@ export default function Suppliers() {
                             <Edit size={15} />
                           </button>
                         )}
-                        {(hasPermission(user, 'users:manage') || hasPermission(user, 'purchases:manage')) && (
+                        {canDelete && (
                           <button onClick={() => handleDelete(supplier)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors" title="حذف">
                             <Trash2 size={15} />
                           </button>

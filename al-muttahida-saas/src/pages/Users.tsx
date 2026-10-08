@@ -3,10 +3,11 @@ import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-rea
 import { User, UserPermissions } from '../types';
 import { getUsers, createUser, updateUser, deleteUser, syncUsers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
-import { hasPermission } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 
 export default function Users() {
   const { user: currentUser } = useAuth();
+  const canDelete = isAdmin(currentUser);
   const [users, setUsers] = useState<User[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -205,7 +206,7 @@ export default function Users() {
                           <Edit size={15} />
                         </button>
                       )}
-                      {hasPermission(currentUser, 'users:manage') && currentUser?.id !== user.id && (
+                      {canDelete && currentUser?.id !== user.id && (
                         <button
                           onClick={() => handleDelete(user.id)}
                           className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"

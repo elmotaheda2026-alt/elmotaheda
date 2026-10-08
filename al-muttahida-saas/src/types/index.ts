@@ -1,4 +1,4 @@
-﻿export type Permission =
+export type Permission =
   | 'dashboard:view'
   | 'sales:read'
   | 'sales:write'
@@ -116,7 +116,10 @@ export interface InstallmentSchedule {
   amount: number;
   paidAmount: number;
   paidAt?: string;
-  status: 'paid' | 'partial' | 'unpaid';
+  status: 'paid' | 'partial' | 'unpaid' | 'settled_early';
+  deferred?: boolean;
+  deferredAt?: string;
+  notes?: string;
 }
 
 export interface SaleFinancing {
@@ -145,7 +148,7 @@ export interface Sale {
   total: number;
   paid: number;
   remaining: number;
-  status: 'pending' | 'completed' | 'cancelled';
+  status: 'pending' | 'completed' | 'cancelled' | 'settled_early';
   date: string;
   notes?: string;
   createdBy: string;
@@ -208,6 +211,8 @@ export interface Payment {
   approvedBy?: string;
   channel?: 'cash' | 'card' | 'transfer' | 'wallet' | 'other';
   status?: 'posted' | 'voided';
+  isEarlySettlement?: boolean;
+  settlementDiscount?: number;
 }
 
 export interface InstallmentCollectionTask {
@@ -259,6 +264,10 @@ export interface ClosingPeriod {
   closedBy?: string;
   closedAt?: string;
   notes?: string;
+  totalIn?: number;
+  totalOut?: number;
+  netMovement?: number;
+  closingBalance?: number;
 }
 
 export interface Expense {

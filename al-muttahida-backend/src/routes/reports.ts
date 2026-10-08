@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAdmin, requireAuth } from '../middleware/auth.js';
 
 const router = Router();
-router.use(requireAuth, requirePermission('reports:read'));
+router.use(requireAuth, requireAdmin);
 
 const dayMs = 86400000;
 

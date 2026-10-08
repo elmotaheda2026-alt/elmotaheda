@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Receipt,
@@ -10,16 +10,36 @@ import {
   Plus,
   Calendar,
   CheckCircle2,
-  Keyboard,
+  AlertCircle,
+  Wifi,
+  WifiOff,
   ArrowLeft,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { isAdmin } from '../lib/permissions';
+import { checkBackendHealth } from '../lib/apiClient';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user, settings } = useAuth();
   const todayStr = new Date().toISOString().split('T')[0];
+
+  const [isConnected, setIsConnected] = useState<boolean | null>(true);
+
+  useEffect(() => {
+    let active = true;
+    const testConnection = async () => {
+      const ok = await checkBackendHealth();
+      if (active) setIsConnected(ok);
+    };
+    void testConnection();
+    const interval = window.setInterval(testConnection, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const roleLabel =
     user?.role === 'admin'
@@ -69,11 +89,12 @@ export default function Dashboard() {
     {
       title: 'التقارير الشاملة',
       description: 'عرض تقارير الحركة اليومية',
-      path: '/accounts',
+      path: '/reports',
       icon: PieChart,
       iconBg: 'bg-indigo-50 text-indigo-600 border-indigo-100',
+      adminOnly: true,
     },
-  ];
+  ].filter((card) => !card.adminOnly || isAdmin(user));
 
   return (
     <div className="space-y-6 pb-6 animate-fadeIn">
@@ -141,24 +162,19 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* 3. Desktop Power-User Info Footer Strip */}
-      <section className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white px-5 py-3 text-xs font-bold text-slate-600 shadow-none">
-        <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50/80 px-3 py-1.5 rounded-lg border border-emerald-100">
-          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-          <span>النظام يعمل بنجاح — التزامن نشط</span>
-        </div>
-
-        <div className="flex items-center gap-3 text-slate-500 font-mono">
-          <div className="flex items-center gap-1.5">
-            <Keyboard size={15} className="text-slate-400 shrink-0" />
-            <span>اختصارات لوحة التحكم:</span>
+      {/* 3. Connection Status Footer */}
+      <section className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white px-5 py-3 text-xs font-bold shadow-none">
+        {isConnected ? (
+          <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50/80 px-3 py-1.5 rounded-lg border border-emerald-100">
+            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+            <span>النظام متصل — التزامن وقاعدة البيانات نشطة</span>
           </div>
-          <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-bold border border-slate-200/60">F2: فاتورة جديدة</span>
-          <span className="text-slate-300">|</span>
-          <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-bold border border-slate-200/60">F5: تحديث</span>
-          <span className="text-slate-300">|</span>
-          <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-bold border border-slate-200/60">Esc: إغلاق</span>
-        </div>
+        ) : (
+          <div className="flex items-center gap-2 text-rose-700 bg-rose-50/80 px-3 py-1.5 rounded-lg border border-rose-100">
+            <AlertCircle size={16} className="text-rose-600 shrink-0" />
+            <span>غير متصل بالخادم — تأكد من تشغيل السيرفر</span>
+          </div>
+        )}
       </section>
     </div>
   );

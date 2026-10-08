@@ -24,15 +24,19 @@ export default function Login() {
     setError('');
     setLoading(true);
 
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    if (await login(username, password)) {
-      navigate('/');
-    } else {
-      setError('اسم المستخدم أو كلمة المرور غير صحيحة');
+    try {
+      const success = await login(username, password);
+      if (success) {
+        navigate('/');
+      } else {
+        setError('اسم المستخدم أو كلمة المرور غير صحيحة');
+      }
+    } catch (err: any) {
+      console.error('Login submit error:', err);
+      setError(err?.message || 'اسم المستخدم أو كلمة المرور غير صحيحة');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

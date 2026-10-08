@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput } from '../utils.js';
 import { createSystemNotification, formatMoney } from '../financialNotifications.js';
@@ -125,7 +125,7 @@ router.put('/:id', requirePermission('payments:write'), async (req: AuthedReques
 });
 
 // DELETE /expenses/:id
-router.delete('/:id', requirePermission('payments:write'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requirePermission('payments:write'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM expenses WHERE id = ?', req.params.id);

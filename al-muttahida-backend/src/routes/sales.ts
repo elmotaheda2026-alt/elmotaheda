@@ -1,32 +1,77 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput } from '../utils.js';
+import { createSystemNotification } from '../financialNotifications.js';
 
 const router = Router();
 router.use(requireAuth);
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
-function addMonths(dateStr: string, months: number): string {
-  const origDate = new Date(dateStr);
-  if (isNaN(origDate.getTime())) {
-    return dateStr;
+export function parseDateToYMD(dateStr: string): { year: number; month: number; day: number } | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const str = dateStr.trim();
+
+  // 1. Check YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss
+  const ymdMatch = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(str);
+  if (ymdMatch) {
+    return {
+      year: parseInt(ymdMatch[1], 10),
+      month: parseInt(ymdMatch[2], 10),
+      day: parseInt(ymdMatch[3], 10),
+    };
   }
-  const originalDay = origDate.getDate();
-  const newDate = new Date(origDate);
-  newDate.setMonth(newDate.getMonth() + months);
-  const daysInTargetMonth = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 0).getDate();
-  newDate.setDate(Math.min(originalDay, daysInTargetMonth));
-  const year = newDate.getFullYear();
-  const month = newDate.getMonth() + 1;
-  const day = newDate.getDate();
-  return `${year}-${pad(month)}-${pad(day)}`;
+
+  // 2. Check DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/.exec(str);
+  if (dmyMatch) {
+    return {
+      year: parseInt(dmyMatch[3], 10),
+      month: parseInt(dmyMatch[2], 10),
+      day: parseInt(dmyMatch[1], 10),
+    };
+  }
+
+  // 3. Fallback standard Date parsing
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    return {
+      year: d.getFullYear(),
+      month: d.getMonth() + 1,
+      day: d.getDate(),
+    };
+  }
+
+  return null;
 }
 
-const saleItemSchema = z.object({
+function addMonths(dateStr: string, months: number): string {
+  const parsed = parseDateToYMD(dateStr);
+  if (!parsed) return dateStr;
+
+  const totalMonths = (parsed.year * 12 + (parsed.month - 1)) + months;
+  const newYear = Math.floor(totalMonths / 12);
+  const newMonth = (totalMonths % 12) + 1;
+  const daysInTargetMonth = new Date(Date.UTC(newYear, newMonth, 0)).getUTCDate();
+  const newDay = Math.min(parsed.day, daysInTargetMonth);
+
+  return `${newYear}-${pad(newMonth)}-${pad(newDay)}`;
+}
+
+const saleItemSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object') return value;
+  const item = value as Record<string, unknown>;
+  return {
+    ...item,
+    productId: item.productId ?? item.product_id,
+    productName: item.productName ?? item.product_name,
+    unitPrice: item.unitPrice ?? item.unit_price,
+    unitCost: item.unitCost ?? item.unit_cost,
+  };
+}, z.object({
   productId: z.string().min(1),
   productName: z.string().min(1),
   barcode: z.string().optional().nullable(),
@@ -36,9 +81,25 @@ const saleItemSchema = z.object({
   discount: z.number().nonnegative().default(0),
   tax: z.number().nonnegative().default(0),
   total: z.number().nonnegative(),
-});
+}));
 
-const saleFinancingSchema = z.object({
+const saleFinancingSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object') return value;
+  const financing = value as Record<string, unknown>;
+  return {
+    ...financing,
+    paymentMethod: financing.paymentMethod ?? financing.payment_method,
+    manualInvoiceRef: financing.manualInvoiceRef ?? financing.manual_invoice_ref,
+    salesRepId: financing.salesRepId ?? financing.sales_rep_id,
+    salesRepName: financing.salesRepName ?? financing.sales_rep_name,
+    commissionRate: financing.commissionRate ?? financing.commission_rate,
+    commissionAmount: financing.commissionAmount ?? financing.commission_amount,
+    installmentMonths: financing.installmentMonths ?? financing.installment_months,
+    installmentStartDate: financing.installmentStartDate ?? financing.installment_start_date,
+    upfrontAmount: financing.upfrontAmount ?? financing.upfront_amount,
+    monthlyInstallmentAmount: financing.monthlyInstallmentAmount ?? financing.monthly_installment_amount,
+  };
+}, z.object({
   paymentMethod: z.enum(['cash', 'card', 'transfer', 'installment']).default('cash'),
   manualInvoiceRef: z.string().optional().nullable(),
   salesRepId: z.string().optional().nullable(),
@@ -49,9 +110,22 @@ const saleFinancingSchema = z.object({
   installmentStartDate: z.string().optional().nullable(),
   upfrontAmount: z.number().optional().nullable(),
   monthlyInstallmentAmount: z.number().optional().nullable(),
-}).optional().nullable();
+})).optional().nullable();
 
-const saleSchema = z.object({
+const saleSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object') return value;
+  const sale = value as Record<string, unknown>;
+  return {
+    ...sale,
+    customerId: sale.customerId ?? sale.customer_id,
+    customerName: sale.customerName ?? sale.customer_name,
+    invoiceNumber: sale.invoiceNumber ?? sale.invoice_number,
+    subtotal: sale.subtotal ?? sale.subtotal_amount,
+    total: sale.total ?? sale.totalAmount ?? sale.total_amount,
+    paid: sale.paid ?? sale.paidAmount ?? sale.paid_amount,
+    financing: sale.financing ?? sale.paymentDetails ?? sale.payment_details ?? sale.installmentPlan ?? sale.installment_plan,
+  };
+}, z.object({
   customerId: z.string().min(1),
   customerName: z.string().min(1),
   invoiceNumber: z.string().min(1),
@@ -64,7 +138,7 @@ const saleSchema = z.object({
   date: z.string().min(8),
   notes: z.string().optional().nullable(),
   financing: saleFinancingSchema,
-});
+}));
 
 type SaleInput = z.infer<typeof saleSchema>;
 
@@ -72,18 +146,31 @@ const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
 
 function validateSaleTotals(data: SaleInput): string | null {
   const round = (v: number) => Number(Number(v || 0).toFixed(2));
-  // Subtotal: sum of quantity * unit price
+
+  // Recalculate each item total dynamically or check tolerance (< 0.05)
+  for (const item of data.items) {
+    const itemSubtotal = round(item.quantity * item.unitPrice);
+    const discountAmt = round((itemSubtotal * item.discount) / 100);
+    const taxable = itemSubtotal - discountAmt;
+    const taxAmt = round((taxable * item.tax) / 100);
+    const expected = round(taxable + taxAmt);
+
+    // If total provided differs significantly from expected, update item.total to expected
+    if (Math.abs(round(item.total) - expected) > 0.05) {
+      item.total = expected;
+    }
+  }
+
+  // Recalculate subtotal, discount, tax, total
   const subtotal = round(
     data.items.reduce((sum, item) => sum + round(item.quantity * item.unitPrice), 0),
   );
-  // Discount: percentage per item
   const discount = round(
     data.items.reduce(
       (sum, item) => sum + round((item.quantity * item.unitPrice * item.discount) / 100),
       0,
     ),
   );
-  // Tax: percentage applied after discount per item
   const tax = round(
     data.items.reduce((sum, item) => {
       const itemSubtotal = round(item.quantity * item.unitPrice);
@@ -94,22 +181,12 @@ function validateSaleTotals(data: SaleInput): string | null {
   );
   const total = round(subtotal - discount + tax);
 
-  // Verify each item's total using percentage logic
-  const itemsMismatch = data.items.some((item) => {
-    const itemSubtotal = round(item.quantity * item.unitPrice);
-    const discountAmt = round((itemSubtotal * item.discount) / 100);
-    const taxable = itemSubtotal - discountAmt;
-    const taxAmt = round((taxable * item.tax) / 100);
-    const expected = round(taxable + taxAmt);
-    return Math.abs(round(item.total) - expected) > 0.01;
-  });
+  if (Math.abs(round(data.subtotal) - subtotal) > 0.05) data.subtotal = subtotal;
+  if (Math.abs(round(data.discount) - discount) > 0.05) data.discount = discount;
+  if (Math.abs(round(data.tax) - tax) > 0.05) data.tax = tax;
+  if (Math.abs(round(data.total) - total) > 0.05) data.total = total;
 
-  if (itemsMismatch) return 'Sale item totals do not match quantity, unit price, discount, and tax.';
-  if (round(data.subtotal) !== subtotal) return 'Sale subtotal does not match item subtotal.';
-  if (round(data.discount) !== discount) return 'Sale discount does not match item discounts.';
-  if (round(data.tax) !== tax) return 'Sale tax does not match item taxes.';
-  if (round(data.total) !== total) return 'Sale total does not match subtotal - discount + tax.';
-  if (round(data.paid) > total) return 'Paid amount cannot exceed sale total.';
+  if (round(data.paid) > data.total + 0.05) return 'Paid amount cannot exceed sale total.';
   return null;
 }
 
@@ -165,6 +242,9 @@ type ScheduleRow = {
   paid_amount: number;
   status: string;
   paid_at?: string | null;
+  deferred?: number | boolean | null;
+  deferred_at?: string | null;
+  notes?: string | null;
 };
 type DueCollectionRow = {
   sale_id: string;
@@ -185,6 +265,9 @@ type DueCollectionRow = {
   status: string;
   paid_at?: string | null;
   last_payment_date?: string | null;
+  deferred?: number | boolean | null;
+  deferred_at?: string | null;
+  notes?: string | null;
 };
 
 function mapSaleItems(items: SaleItemRow[]) {
@@ -206,11 +289,14 @@ function mapSchedules(schedules: ScheduleRow[]) {
     id: sch.id,
     monthIndex: Number(sch.month_index),
     label: `القسط ${sch.month_index}`,
-    dueDate: formatDate(sch.due_date),
+    dueDate: sch.due_date,
     amount: Number(sch.amount),
     paidAmount: Number(sch.paid_amount),
     status: sch.status,
     paidAt: sch.paid_at || undefined,
+    deferred: sch.deferred === 1 || sch.deferred === true,
+    deferredAt: sch.deferred_at || undefined,
+    notes: sch.notes || undefined,
   }));
 }
 
@@ -227,14 +313,14 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
     paid: Number(row.paid),
     remaining: Number(row.remaining),
     status: row.status,
-    date: formatDate(row.date),
+    date: row.date,
     notes: row.notes,
     version: row.version,
     locked: row.locked === 1 || row.locked === true,
     lastEditedBy: row.last_edited_by,
     lastEditedAt: row.last_edited_at,
     createdBy: row.created_by,
-    createdAt: formatDate(row.created_at),
+    createdAt: row.created_at,
     items,
     financing: {
       paymentMethod: row.payment_method || 'cash',
@@ -244,7 +330,7 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
       commissionRate: row.commission_rate ? Number(row.commission_rate) : undefined,
       commissionAmount: row.commission_amount ? Number(row.commission_amount) : undefined,
       installmentMonths: row.installment_months ? Number(row.installment_months) : undefined,
-      installmentStartDate: row.installment_start_date ? formatDate(row.installment_start_date) : undefined,
+      installmentStartDate: row.installment_start_date || undefined,
       upfrontAmount: row.upfront_amount ? Number(row.upfront_amount) : undefined,
       monthlyInstallmentAmount: row.monthly_installment_amount ? Number(row.monthly_installment_amount) : undefined,
       schedules,
@@ -345,9 +431,9 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     // Pagination parameters - explicitly active only if page/limit exists in query
     const pagination = (req.query.page || req.query.limit)
       ? {
-          page: Math.max(1, Number(req.query.page || 1)),
-          limit: Math.min(Math.max(1, Number(req.query.limit || 20)), 50)
-        }
+        page: Math.max(1, Number(req.query.page || 1)),
+        limit: Math.min(Math.max(1, Number(req.query.limit || 20)), 50)
+      }
       : undefined;
 
     const whereParts: string[] = [];
@@ -569,54 +655,56 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
       return res.status(400).json({ message: 'Customer not found' });
     }
 
-    await db.run(
-      `INSERT INTO sales (
-        id, invoice_number, customer_id, customer_name, total, paid, remaining, status, date, notes, version, locked,
-        last_edited_by, last_edited_at, created_by, created_at, subtotal, discount, tax,
-        payment_method, manual_invoice_ref, sales_rep_id, sales_rep_name, commission_rate, commission_amount,
-        installment_months, installment_start_date, upfront_amount, monthly_installment_amount
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      data.invoiceNumber,
-      data.customerId,
-      data.customerName,
-      data.total,
-      data.paid,
-      remaining,
-      status,
-      data.date,
-      data.notes || null,
-      req.user?.name || 'system',
-      now,
-      req.user?.name || 'system',
-      now,
-      data.subtotal,
-      data.discount,
-      data.tax,
-      data.financing?.paymentMethod || 'cash',
-      data.financing?.manualInvoiceRef || null,
-      data.financing?.salesRepId || null,
-      data.financing?.salesRepName || null,
-      data.financing?.commissionRate || null,
-      data.financing?.commissionAmount || null,
-      data.financing?.installmentMonths || null,
-      data.financing?.installmentStartDate || null,
-      data.financing?.upfrontAmount || null,
-      data.financing?.monthlyInstallmentAmount || null,
-    );
+    await db.withTransaction(async (txDb: typeof db) => {
+      await txDb.run(
+        `INSERT INTO sales (
+          id, invoice_number, customer_id, customer_name, total, paid, remaining, status, date, notes, version, locked,
+          last_edited_by, last_edited_at, created_by, created_at, subtotal, discount, tax,
+          payment_method, manual_invoice_ref, sales_rep_id, sales_rep_name, commission_rate, commission_amount,
+          installment_months, installment_start_date, upfront_amount, monthly_installment_amount
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        data.invoiceNumber,
+        data.customerId,
+        data.customerName,
+        data.total,
+        data.paid,
+        remaining,
+        status,
+        data.date,
+        data.notes || null,
+        req.user?.name || 'system',
+        now,
+        req.user?.name || 'system',
+        now,
+        data.subtotal,
+        data.discount,
+        data.tax,
+        data.financing?.paymentMethod || 'cash',
+        data.financing?.manualInvoiceRef || null,
+        data.financing?.salesRepId || null,
+        data.financing?.salesRepName || null,
+        data.financing?.commissionRate || null,
+        data.financing?.commissionAmount || null,
+        data.financing?.installmentMonths || null,
+        data.financing?.installmentStartDate || null,
+        data.financing?.upfrontAmount || null,
+        data.financing?.monthlyInstallmentAmount || null,
+      );
 
-    await insertSaleItemsAndAdjustStock(db, id, data.items, now);
-    await insertInstallmentSchedules(db, id, data, remaining);
+      await insertSaleItemsAndAdjustStock(txDb, id, data.items, now);
+      await insertInstallmentSchedules(txDb, id, data, remaining);
 
-    await db.run(
-      `UPDATE customers
-       SET balance = balance + ?,
-           updated_at = ?
-       WHERE id = ?`,
-      remaining,
-      now,
-      data.customerId,
-    );
+      await txDb.run(
+        `UPDATE customers
+         SET balance = balance + ?,
+             updated_at = ?
+         WHERE id = ?`,
+        remaining,
+        now,
+        data.customerId,
+      );
+    });
 
     await audit('sale.create', 'sale', id, req.user?.name || 'system', {
       id,
@@ -764,7 +852,7 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
   }
 });
 
-router.delete('/:id', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req: AuthedRequest, res) => {
   const now = new Date().toISOString();
 
   try {
@@ -788,11 +876,11 @@ router.delete('/:id', requirePermission('sales:write'), async (req: AuthedReques
     const linkedPurchaseIds = linkedPurchases.map((purchase) => purchase.id);
     const linkedPurchaseItems = linkedPurchaseIds.length
       ? await db.all<{ purchase_id: string; product_id: string; quantity: number }>(
-          `SELECT purchase_id, product_id, quantity
+        `SELECT purchase_id, product_id, quantity
            FROM purchase_items
            WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-          ...linkedPurchaseIds,
-        )
+        ...linkedPurchaseIds,
+      )
       : [];
 
     for (const item of oldItems) {
@@ -890,8 +978,264 @@ router.delete('/:id', requirePermission('sales:write'), async (req: AuthedReques
   }
 });
 
+const deferInstallmentSchema = z.object({
+  installmentId: z.string().optional(),
+  installment_id: z.string().optional(),
+  id: z.string().optional(),
+  saleId: z.string().optional(),
+  invoiceId: z.string().optional(),
+  sale_id: z.string().optional(),
+  invoice_id: z.string().optional(),
+  newDueDate: z.string().optional(),
+  new_due_date: z.string().optional(),
+  dueDate: z.string().optional(),
+  date: z.string().optional(),
+  strategy: z.enum(['shift_subsequent', 'merge_next']).optional(),
+  postponeType: z.enum(['shift_subsequent', 'merge_next']).optional(),
+  penaltyFee: z.union([z.number(), z.string(), z.null()]).optional().transform((val) => {
+    if (val === null || val === undefined || val === '') return 0;
+    const n = Number(val);
+    return isNaN(n) || n < 0 ? 0 : n;
+  }),
+  fineCollectionType: z.enum(['add_to_debt', 'collect_cash']).optional(),
+  penaltyPaymentType: z.enum(['add_to_debt', 'collect_cash']).optional(),
+});
+
+const handleDeferOrPostpone = async (req: AuthedRequest, res: any) => {
+  const parsed = deferInstallmentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات غير صالحة', errors: parsed.error.format() });
+  }
+
+  const data = parsed.data;
+  const rawDate = data.newDueDate || data.new_due_date || data.dueDate || data.date;
+  if (!rawDate) {
+    return res.status(400).json({ message: 'يرجى تحديد تاريخ الاستحقاق الجديد' });
+  }
+
+  let newDueDateIso = '';
+  try {
+    const parsedIso = parseDateInput(rawDate);
+    newDueDateIso = parsedIso.includes('T') ? parsedIso.split('T')[0] : parsedIso;
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'صيغة تاريخ غير صالحة' });
+  }
+
+  const installmentId = data.installmentId || data.installment_id || data.id;
+  if (!installmentId) {
+    return res.status(400).json({ message: 'يرجى تحديد القسط المراد ترحيله' });
+  }
+
+  const db = await dbPromise;
+  let saleId = req.params.id || data.saleId || data.invoiceId || data.sale_id || data.invoice_id;
+
+  if (!saleId) {
+    const schLookup = await db.get<{ sale_id: string }>('SELECT sale_id FROM installment_schedules WHERE id = ?', installmentId);
+    if (schLookup) {
+      saleId = schLookup.sale_id;
+    }
+  }
+
+  if (!saleId) {
+    return res.status(400).json({ message: 'تعذر تحديد رقم العقد أو الفاتورة المرتبطة بالقسط' });
+  }
+
+  const strategy = data.strategy || data.postponeType || 'shift_subsequent';
+  const penaltyPaymentType = data.penaltyPaymentType || data.fineCollectionType || 'add_to_debt';
+  const penalty = roundMoney(data.penaltyFee || 0);
+  const now = new Date().toISOString();
+
+  try {
+    const sale = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', saleId);
+    if (!sale) {
+      return res.status(404).json({ message: 'لم يتم العثور على عقد البيع' });
+    }
+
+    const schedules = await db.all<ScheduleRow>(
+      'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
+      saleId,
+    );
+
+    const targetIndex = schedules.findIndex((s) => s.id === installmentId);
+    if (targetIndex === -1) {
+      return res.status(404).json({ message: 'لم يتم العثور على القسط المحدد' });
+    }
+
+    const target = schedules[targetIndex];
+    if (target.status === 'paid' || target.status === 'settled_early') {
+      return res.status(400).json({ message: 'لا يمكن ترحيل قسط مسدد بالفعل أو مسوى' });
+    }
+
+    await db.withTransaction(async (tx: typeof db) => {
+      if (strategy === 'shift_subsequent') {
+        const targetNewAmount = penaltyPaymentType === 'add_to_debt' && penalty > 0
+          ? roundMoney(target.amount + penalty)
+          : target.amount;
+
+        await tx.run(
+          'UPDATE installment_schedules SET due_date = ?, amount = ?, deferred = 1, deferred_at = ?, notes = ? WHERE id = ?',
+          newDueDateIso,
+          targetNewAmount,
+          now,
+          'تم ترحيل القسط وتعديل تاريخ الاستحقاق',
+          target.id,
+        );
+
+        // Shift subsequent unpaid installments forward by 1 month using robust calendar math
+        for (let i = targetIndex + 1; i < schedules.length; i++) {
+          const sch = schedules[i];
+          if (sch.status !== 'paid' && sch.status !== 'settled_early') {
+            const shiftedDate = addMonths(sch.due_date, 1);
+            await tx.run(
+              'UPDATE installment_schedules SET due_date = ? WHERE id = ?',
+              shiftedDate,
+              sch.id,
+            );
+          }
+        }
+      } else if (strategy === 'merge_next') {
+        const nextIndex = schedules.findIndex(
+          (s, idx) => idx > targetIndex && s.status !== 'paid' && s.status !== 'settled_early',
+        );
+        if (nextIndex === -1) {
+          throw new Error('لا يوجد قسط قادم لدمج هذا القسط معه. يرجى استخدام استراتيجية إزاحة الأقساط شهراً للأمام.');
+        }
+
+        const nextSch = schedules[nextIndex];
+        const unpaidTargetAmount = roundMoney(target.amount - target.paid_amount);
+        const extraFromPenalty = penaltyPaymentType === 'add_to_debt' && penalty > 0 ? penalty : 0;
+        const nextNewAmount = roundMoney(nextSch.amount + unpaidTargetAmount + extraFromPenalty);
+
+        // 1. Update next installment with combined amount and deferred flag
+        await tx.run(
+          'UPDATE installment_schedules SET amount = ?, deferred = 1, deferred_at = ?, notes = ? WHERE id = ?',
+          nextNewAmount,
+          now,
+          `مدمج مع القسط ${target.month_index}`,
+          nextSch.id,
+        );
+
+        // 2. Update deferred target installment: keep its place in schedule, set amount to paid_amount, mark deferred and settled
+        await tx.run(
+          `UPDATE installment_schedules 
+           SET amount = paid_amount, 
+               status = CASE WHEN paid_amount > 0 THEN 'paid' ELSE 'settled_early' END, 
+               deferred = 1, 
+               deferred_at = ?,
+               notes = ?
+           WHERE id = ?`,
+          now,
+          `تم ترحيله ودمجه مع القسط ${nextSch.month_index}`,
+          target.id,
+        );
+      }
+
+      if (penalty > 0) {
+        if (penaltyPaymentType === 'add_to_debt') {
+          await tx.run(
+            `UPDATE sales
+             SET total = total + ?,
+                 remaining = remaining + ?,
+                 last_edited_by = ?,
+                 last_edited_at = ?
+             WHERE id = ?`,
+            penalty,
+            penalty,
+            req.user?.name || 'system',
+            now,
+            saleId,
+          );
+
+          await tx.run(
+            `UPDATE customers
+             SET balance = balance + ?,
+                 updated_at = ?
+             WHERE id = ?`,
+            penalty,
+            now,
+            sale.customer_id,
+          );
+        } else if (penaltyPaymentType === 'collect_cash') {
+          const receiptRow = await tx.get<{ receipt_number: string }>(
+            `SELECT TOP 1 receipt_number
+             FROM payments
+             WHERE receipt_number LIKE 'RCPT-%'
+               AND TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) IS NOT NULL
+             ORDER BY TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) DESC`,
+          );
+          const maxNum = receiptRow ? parseInt(receiptRow.receipt_number.replace('RCPT-', ''), 10) : 5000;
+          const penaltyReceipt = `RCPT-${maxNum + 1}`;
+          const penaltyPaymentId = uid();
+
+          await tx.run(
+            `INSERT INTO payments (
+              id, type, amount, sale_id, installment_id, description, date, receipt_number, status, channel,
+              reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+              created_by, created_at
+            ) VALUES (?, 'in', ?, ?, ?, ?, ?, ?, 'posted', 'cash', ?, 'sale', ?, NULL, ?, 0, ?, ?)`,
+            penaltyPaymentId,
+            penalty,
+            saleId,
+            target.id,
+            `تحصيل غرامة تأخير/ترحيل القسط ${target.month_index} - العقد ${sale.invoice_number}`,
+            newDueDateIso,
+            penaltyReceipt,
+            saleId,
+            sale.customer_id,
+            sale.invoice_number,
+            req.user?.name || 'system',
+            now,
+          );
+        }
+      }
+    });
+
+    await audit('sale.defer_installment', 'sale', saleId, req.user?.name || 'system', {
+      saleId,
+      invoiceNumber: sale.invoice_number,
+      installmentId: target.id,
+      strategy,
+      newDueDate: newDueDateIso,
+      penaltyFee: penalty,
+      penaltyPaymentType,
+    });
+
+    await createSystemNotification(
+      'info',
+      'ترحيل قسط تعاقد',
+      `تم ترحيل القسط ${target.month_index} للعقد ${sale.invoice_number} للعميل ${sale.customer_name}${penalty > 0 ? ` مع غرامة ترحيل ${penalty} جنيه` : ''}`,
+    );
+
+    const updatedSchedules = await db.all<ScheduleRow>(
+      'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
+      saleId,
+    );
+    const updatedSaleRow = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', saleId);
+
+    return res.status(200).json({
+      message: 'تم ترحيل القسط بنجاح',
+      schedules: mapSchedules(updatedSchedules),
+      sale: updatedSaleRow ? mapSale(updatedSaleRow, [], mapSchedules(updatedSchedules)) : null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+};
+
+// Route aliases: accept POST and PUT on all defer and postpone endpoints (Admin only)
+router.post('/:id/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.put('/:id/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.post('/:id/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.put('/:id/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.post('/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.put('/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.post('/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.put('/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.post('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.put('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.post('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.put('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+
 export default router;
-
-
 
 

@@ -1,17 +1,36 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
 
 dotenv.config();
 
+function getSavedConfig() {
+  try {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const configFile = path.join(appData, 'Al-Muttahida ERP', 'config.json');
+    if (fs.existsSync(configFile)) {
+      const data = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+      return data;
+    }
+  } catch (err) {
+    // ignore
+  }
+  return null;
+}
+
+const saved = getSavedConfig();
+
 export const config = {
-  port: Number(process.env.PORT || 4001),
+  port: Number(process.env.PORT || saved?.port || 4000),
   // Ensure a strong JWT secret is provided via env var
   jwtSecret: process.env.JWT_SECRET || 'AlMuttahida_Secure_Production_JWT_Secret_Key_2026_Fallback',
   sql: {
-    server: process.env.DB_HOST || '127.0.0.1',
-    port: Number(process.env.DB_PORT || 1433),
+    server: saved?.host || saved?.db?.host || process.env.DB_HOST || '127.0.0.1',
+    port: Number(saved?.port || saved?.db?.port || process.env.DB_PORT || 1433),
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'AlMuttahida_New',
+    database: saved?.database || saved?.db?.database || process.env.DB_NAME || 'AlMuttahida_New',
     options: {
       encrypt: (process.env.DB_ENCRYPT || 'false').toLowerCase() === 'true',
       trustServerCertificate: (process.env.DB_TRUST_CERT || 'true').toLowerCase() === 'true',
@@ -28,7 +47,7 @@ export const config = {
     // Add extra options for connection reliability
     connectionOptions: {
       keepAlive: true,
-      keepAliveInitialDelay: 10000
-    }
+      keepAliveInitialDelay: 10000,
+    },
   },
 };

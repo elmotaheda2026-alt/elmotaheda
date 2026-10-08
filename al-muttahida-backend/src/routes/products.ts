@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
 import { hasPermission } from '../permissions.js';
@@ -212,7 +212,7 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
 });
 
 // DELETE /products/:id
-router.delete('/:id', requirePermission('inventory:manage'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requirePermission('inventory:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM products WHERE id = ?', req.params.id);

@@ -140,7 +140,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Al-Muttahida ERP",
       "allowElevation": true,
-      "differentialPackage": false
+      "differentialPackage": false,
+      "include": "installer.nsh"
     }
   }
 }

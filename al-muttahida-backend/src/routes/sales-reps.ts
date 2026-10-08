@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
 
@@ -45,7 +45,7 @@ router.get('/', async (_req, res) => {
 });
 
 // POST /sales-reps
-router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
+router.post('/', async (req: AuthedRequest, res) => {
   const parsed = salesRepSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid sales rep payload', errors: parsed.error.format() });
@@ -82,7 +82,7 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
 });
 
 // PUT /sales-reps/:id
-router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
+router.put('/:id', async (req: AuthedRequest, res) => {
   const parsed = salesRepSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid sales rep payload', errors: parsed.error.format() });
@@ -121,7 +121,7 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
 });
 
 // DELETE /sales-reps/:id
-router.delete('/:id', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
+router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM sales_reps WHERE id = ?', req.params.id);

@@ -104,6 +104,7 @@ export default function CollectionStatement() {
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('all');
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
+  const [printingLegalReport, setPrintingLegalReport] = useState(false);
   // Collapsible cards & pagination states for "due" tab
   const [expandedCustomerSaleId, setExpandedCustomerSaleId] = useState<string | null>(null);
   const [dueCurrentPage, setDueCurrentPage] = useState(1);
@@ -903,66 +904,7 @@ export default function CollectionStatement() {
         {/* TAB CONTENT: INVOICES */}
         {activeTab === 'invoices' && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
-            {/* Toolbar for Invoices */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
-              <div className="relative w-full md:w-80">
-                <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={invoiceSearchTerm}
-                  onChange={(e) => {
-                    setInvoiceSearchTerm(e.target.value);
-                    setShowSuggestions(true);
-                    if (e.target.value.trim() === '') {
-                      setSelectedCustomerId('all');
-                    }
-                  }}
-                  onFocus={() => setShowSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  className="input-ui pr-10 h-10 text-sm w-full"
-                  placeholder="ابحث عن العميل بالاسم أو رقم الفاتورة..."
-                />
-                {showSuggestions && suggestions.length > 0 && (
-                  <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
-                    {suggestions.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedCustomerId(c.id);
-                          setInvoiceSearchTerm(c.name);
-                          setShowSuggestions(false);
-                        }}
-                        className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
-                      >
-                        <span>{c.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-3 w-full md:w-auto justify-center mr-auto">
-                <label className="flex items-center gap-2 cursor-pointer bg-red-50/50 hover:bg-red-50 text-red-800 px-4 py-2 rounded-xl border border-red-100/60 transition-all select-none shadow-sm">
-                  <input
-                    type="checkbox"
-                    checked={hideSuedCustomers}
-                    onChange={(e) => setHideSuedCustomers(e.target.checked)}
-                    className="h-4 w-4 rounded text-red-600 accent-red-600 cursor-pointer"
-                  />
-                  <span className="text-sm font-bold whitespace-nowrap">إخفاء القضايا</span>
-                </label>
-
-                <label className="flex items-center gap-2 cursor-pointer bg-sky-50/50 hover:bg-sky-50 text-sky-800 px-4 py-2 rounded-xl border border-sky-100/60 transition-all select-none shadow-sm">
-                  <input
-                    type="checkbox"
-                    checked={showOnlyDue}
-                    onChange={(e) => setShowOnlyDue(e.target.checked)}
-                    className="h-4 w-4 rounded text-sky-600 accent-sky-600 cursor-pointer"
-                  />
-                  <span className="text-sm font-bold whitespace-nowrap">إظهار المتبقي فقط</span>
-                </label>
-              </div>
-            </div>
+            
 
             {/* Invoice Cards */}
             <div className="space-y-4">
@@ -1132,7 +1074,7 @@ export default function CollectionStatement() {
                 <h3 className="text-red-800 font-bold text-lg flex items-center gap-2"><Gavel size={20} /> سجل القضايا والنزاعات القانونية</h3>
                 <p className="text-red-600 text-sm mt-1">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
               </div>
-              <button onClick={() => window.print()} className="h-10 px-6 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
+              <button onClick={() => { setPrintingInvoice(null); setPrintingLegalReport(true); setTimeout(() => { window.print(); setPrintingLegalReport(false); }, 300); }} className="h-10 px-6 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
                 <Printer size={16} />
                 طباعة كشف المحامي
               </button>
@@ -1213,6 +1155,68 @@ export default function CollectionStatement() {
       {printingInvoice ? (
         <div className="invoice-page">
           <PrintableView invoice={printingInvoice} settings={settings} />
+        </div>
+      ) : printingLegalReport || activeTab === 'legal' ? (
+        /* PRINTABLE LEGAL AFFAIRS / LAWYER REPORT */
+        <div className="hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
+          <div className="flex justify-between items-start border-b-2 border-slate-900 pb-3 mb-4">
+            <div>
+              <h1 className="text-2xl font-black text-slate-900 mb-0.5">{settings.companyName}</h1>
+              <p className="text-slate-600 text-xs">{settings.companyAddress} | {settings.companyPhone}</p>
+            </div>
+            <div className="text-left">
+              <h2 className="text-xl font-bold text-red-800 border-b-2 border-red-700 pb-0.5 mb-1 inline-block">كشف قضايا العملاء المحالين للشئون القانونية (كشف المحامي)</h2>
+              <p className="text-slate-500 font-semibold text-[10px]">تاريخ الاستخراج والطباعة: {formatDateDisplay(new Date())}</p>
+            </div>
+          </div>
+
+          <table className="w-full text-right border-collapse text-xs">
+            <thead>
+              <tr className="border-b-2 border-slate-800 bg-slate-100 text-slate-900 font-bold">
+                <th className="p-2 w-8 text-center">#</th>
+                <th className="p-2 text-right">اسم العميل</th>
+                <th className="p-2 text-right">رقم الهاتف</th>
+                <th className="p-2 text-right">العنوان</th>
+                <th className="p-2 text-center w-20">عدد الفواتير</th>
+                <th className="p-2 text-center w-28">تاريخ الإحالة</th>
+                <th className="p-2 text-center w-36">إجمالي المديونية المعلقة</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-300">
+              {suedCustomersList.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-6 text-center text-slate-500 font-bold">
+                    لا يوجد أي عملاء محالين للشئون القانونية حالياً.
+                  </td>
+                </tr>
+              ) : (
+                suedCustomersList.map((customer, idx) => (
+                  <tr key={customer.id} className="border-b border-slate-200">
+                    <td className="p-2 text-center font-bold text-slate-700">{idx + 1}</td>
+                    <td className="p-2 font-bold text-slate-900">{customer.name}</td>
+                    <td className="p-2 text-slate-700 font-mono text-xs">{customer.phone}</td>
+                    <td className="p-2 text-slate-600 text-xs">{customer.address || '-'}</td>
+                    <td className="p-2 text-center font-bold text-slate-800">{customer.invoicesCount}</td>
+                    <td className="p-2 text-center text-xs text-slate-600">{customer.suedDate ? formatDateDisplay(customer.suedDate) : '-'}</td>
+                    <td className="p-2 text-center font-black text-red-700">{formatCurrency(customer.totalDebt)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-900 bg-slate-50 font-bold">
+                <td colSpan={4} className="p-2 text-right">إجمالي عدد العملاء المحالين للقضاء: {suedCustomersList.length} عميل</td>
+                <td colSpan={3} className="p-2 text-center text-sm font-black text-red-800">
+                  إجمالي المديونية المعلقة: {formatCurrency(suedCustomersList.reduce((s, c) => s + c.totalDebt, 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+
+          <div className="mt-8 pt-4 border-t border-slate-300 flex justify-between items-center text-xs text-slate-600">
+            <div>توقيع واستلام المحامي: ................................................</div>
+            <div>اعتماد الإدارة: ................................................</div>
+          </div>
         </div>
       ) : (
         /* PRINTABLE ALL DUE CUSTOMERS (MULTIPLE PAGES) */

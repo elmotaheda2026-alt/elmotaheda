@@ -1,7 +1,21 @@
-const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+export const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
 const API_USER_KEY = 'api_user';
 const FORCE_LOCAL_RESTORE_KEY = 'almuttahida_force_local_restore';
+
+export async function checkBackendHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    try {
+      const res2 = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(3000) });
+      return res2.ok;
+    } catch {
+      return false;
+    }
+  }
+}
 
 export function isApiMode() {
   return DATA_MODE === 'api';
@@ -92,7 +106,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         window.location.replace('/login');
       }
     }
-    throw new Error(payload.message || 'Request failed');
+    let errorMsg = payload.message || payload.error;
+    if (!errorMsg && payload.errors && typeof payload.errors === 'object') {
+      const firstField = Object.keys(payload.errors)[0];
+      const fieldErrors = payload.errors[firstField];
+      if (Array.isArray(fieldErrors?._errors) && fieldErrors._errors.length > 0) {
+        errorMsg = `${firstField}: ${fieldErrors._errors.join(', ')}`;
+      } else if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
+        errorMsg = `${firstField}: ${fieldErrors.join(', ')}`;
+      }
+    }
+    throw new Error(errorMsg || `Request failed with status ${response.status}`);
   }
   const text = await response.text();
   if (!text.trim()) throw new Error(`Invalid API response for ${path}: empty response body`);
@@ -134,6 +158,27 @@ export const api = {
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSale: (id: string) => request<{ message: string }>(`/sales/${id}`, { method: 'DELETE' }),
+  getSale: (id: string) => request<any>(`/sales/${id}`),
+  deferInstallment: (saleId: string, payload: {
+    installmentId: string;
+    newDueDate: string;
+    strategy: 'shift_subsequent' | 'merge_next';
+    penaltyFee?: number;
+    penaltyPaymentType?: 'add_to_debt' | 'collect_cash';
+  }) => request<{ message: string; schedules: any[]; sale?: any }>(`/sales/${saleId}/defer-installment`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  postponeInstallment: (saleId: string, payload: {
+    installmentId: string;
+    newDueDate: string;
+    strategy: 'shift_subsequent' | 'merge_next';
+    penaltyFee?: number;
+    penaltyPaymentType?: 'add_to_debt' | 'collect_cash';
+  }) => request<{ message: string; schedules: any[]; sale?: any }>(`/sales/${saleId}/postpone`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   listPayments: (filters: { date?: string; search?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
     if (filters.date) params.set('date', filters.date);

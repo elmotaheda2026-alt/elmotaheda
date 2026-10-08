@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Package, Search, Plus, Edit, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { isAdmin } from '../lib/permissions';
 import { Product } from '../types';
 import { getProducts, createProduct, updateProduct, deleteProduct } from '../lib/storage';
 import { formatWholeCurrency } from '../lib/utils';
@@ -9,7 +10,8 @@ import { api, isApiMode } from '../lib/apiClient';
 const PRODUCT_RENDER_LIMIT = 100;
 
 export default function ProductsInventory() {
-  const { settings } = useAuth();
+  const { settings, user } = useAuth();
+  const canDelete = isAdmin(user);
   const [products, setProducts] = useState<Product[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -222,7 +224,7 @@ export default function ProductsInventory() {
       </section>
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
-        <div className="overflow-x-auto max-h-[calc(100vh-190px)]">
+        <div className="overflow-auto h-[calc(100vh-210px)]">
           <table className="w-full min-w-[800px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -278,6 +280,7 @@ export default function ProductsInventory() {
                         >
                           <Edit size={15} />
                         </button>
+                        {canDelete && (
                         <button
                           onClick={() => handleDelete(product.id)}
                           className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
@@ -285,6 +288,7 @@ export default function ProductsInventory() {
                         >
                           <Trash2 size={15} />
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>

@@ -42,6 +42,7 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
   setStorage(DB_KEYS.PAYMENTS, payments);
 
   if (payment.type === 'in') {
+    const saleRemainingBefore = saleIndex !== -1 ? sales[saleIndex].remaining : 0;
     if (saleIndex !== -1 && payment.affectsCustomerBalance !== false) {
       sales[saleIndex] = applyPaymentToSale(sales[saleIndex], newPayment);
       sales[saleIndex].locked = true;
@@ -58,7 +59,7 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
     const index = customerId ? customers.findIndex((customer) => customer.id === customerId) : -1;
 
     if (shouldAffectBalance && index !== -1) {
-      customers[index].balance = Number(Math.max(customers[index].balance - payment.amount, 0).toFixed(2));
+      customers[index].balance = Number(Math.max(customers[index].balance - (payment.isEarlySettlement ? saleRemainingBefore : payment.amount), 0).toFixed(2));
       setStorage(DB_KEYS.CUSTOMERS, customers);
       // Create notification showing customer name (if available)
       const customersList = getStorage<Customer>(DB_KEYS.CUSTOMERS);

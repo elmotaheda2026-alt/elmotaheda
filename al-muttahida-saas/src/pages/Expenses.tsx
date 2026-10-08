@@ -111,7 +111,7 @@ export default function Expenses() {
 
       {/* Expenses High-Density Grid Table */}
       <div className="bg-white rounded-lg shadow-xs border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto max-h-[calc(100vh-190px)]">
+        <div className="overflow-auto h-[calc(100vh-210px)]">
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>

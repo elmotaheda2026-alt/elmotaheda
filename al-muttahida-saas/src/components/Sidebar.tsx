@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Permission } from '../types';
-import { hasPermission as userHasPermission } from '../lib/permissions';
+import { hasPermission as userHasPermission, isAdmin } from '../lib/permissions';
 import {
   Banknote,
   Bell,
@@ -35,7 +35,7 @@ type PermissionKey = Permission;
 const menuGroups: {
   title: string;
   defaultOpen: boolean;
-  items: { icon: any; label: string; path: string; permission?: PermissionKey }[];
+  items: { icon: any; label: string; path: string; permission?: PermissionKey; adminOnly?: boolean }[];
 }[] = [
   {
     title: 'المبيعات والعملاء',
@@ -62,8 +62,8 @@ const menuGroups: {
     title: 'التقارير والمالية',
     defaultOpen: true,
     items: [
-      { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
-      { icon: Calculator, label: 'الحسابات والقيود', path: '/accounts', permission: 'payments:read' },
+      { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read', adminOnly: true },
+      { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'payments:read', adminOnly: true },
       { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
     ],
   },
@@ -139,9 +139,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
         <nav className={`flex-1 overflow-y-auto py-3 custom-scrollbar ${isOpen ? 'px-3' : 'px-2'}`}>
           <div className="space-y-3">
             {menuGroups.map((group) => {
-              if (group.title === 'التقارير والمالية' && !hasPermission('reports:read')) return null;
-
-              const allowedItems = group.items.filter((item) => hasPermission(item.permission));
+              const allowedItems = group.items.filter((item) => (!item.adminOnly || isAdmin(user)) && hasPermission(item.permission));
               if (allowedItems.length === 0) return null;
 
               return (
@@ -219,4 +217,3 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
     </>
   );
 }
-

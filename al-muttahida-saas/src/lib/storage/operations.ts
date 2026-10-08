@@ -57,14 +57,14 @@ export function getClosingPeriods(): ClosingPeriod[] {
   return getStorage<ClosingPeriod>(DB_KEYS.CLOSING_PERIODS);
 }
 
-export function closePeriod(periodType: 'daily' | 'monthly', periodDate: string, closedBy: string, notes?: string): ClosingPeriod {
+export function closePeriod(periodType: 'daily' | 'monthly', periodDate: string, closedBy: string, notes?: string, totals?: { totalIn?: number; totalOut?: number; netMovement?: number; closingBalance?: number }): ClosingPeriod {
   const periods = getClosingPeriods();
   const index = periods.findIndex((p) => p.periodType === periodType && p.periodDate === periodDate);
   if (index !== -1 && periods[index].status === 'closed') return periods[index];
 
   const period: ClosingPeriod = index === -1
-    ? { id: generateId(), periodType, periodDate, status: 'closed', closedBy, closedAt: new Date().toISOString(), notes }
-    : { ...periods[index], status: 'closed', closedBy, closedAt: new Date().toISOString(), notes };
+    ? { id: generateId(), periodType, periodDate, status: 'closed', closedBy, closedAt: new Date().toISOString(), notes, ...(totals || {}) }
+    : { ...periods[index], status: 'closed', closedBy, closedAt: new Date().toISOString(), notes, ...(totals || {}) };
 
   if (index === -1) periods.push(period);
   else periods[index] = period;
@@ -91,6 +91,10 @@ export async function syncClosingPeriods(): Promise<void> {
       closedBy: r.closed_by,
       closedAt: r.closed_at,
       notes: r.notes,
+      totalIn: r.total_in != null ? Number(r.total_in) : (r.totalIn != null ? Number(r.totalIn) : undefined),
+      totalOut: r.total_out != null ? Number(r.total_out) : (r.totalOut != null ? Number(r.totalOut) : undefined),
+      netMovement: r.net_movement != null ? Number(r.net_movement) : (r.netMovement != null ? Number(r.netMovement) : undefined),
+      closingBalance: r.closing_balance != null ? Number(r.closing_balance) : (r.closingBalance != null ? Number(r.closingBalance) : undefined),
     }));
     setStorage(DB_KEYS.CLOSING_PERIODS, mapped);
   } catch {
@@ -98,12 +102,12 @@ export async function syncClosingPeriods(): Promise<void> {
   }
 }
 
-export async function closePeriodApi(periodType: 'daily' | 'monthly', periodDate: string, closedBy: string, notes?: string): Promise<ClosingPeriod> {
+export async function closePeriodApi(periodType: 'daily' | 'monthly', periodDate: string, closedBy: string, notes?: string, totals?: { totalIn?: number; totalOut?: number; netMovement?: number; closingBalance?: number }): Promise<ClosingPeriod> {
   if (isApiMode()) {
     await api.closePeriod({ periodType, periodDate, notes });
     await syncClosingPeriods();
     const periods = getClosingPeriods();
-    return periods.find((p) => p.periodType === periodType && p.periodDate === periodDate) || closePeriod(periodType, periodDate, closedBy, notes);
+    return periods.find((p) => p.periodType === periodType && p.periodDate === periodDate) || closePeriod(periodType, periodDate, closedBy, notes, totals);
   }
-  return closePeriod(periodType, periodDate, closedBy, notes);
+  return closePeriod(periodType, periodDate, closedBy, notes, totals);
 }
