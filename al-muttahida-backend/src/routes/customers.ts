@@ -45,8 +45,10 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
     const db = await dbPromise;
     const queryStart = performance.now();
     const rows = await db.all(`
-      SELECT id, customer_number, name, phone, address,
-             balance, balance_type, is_sued, sued_date, created_at, updated_at
+      SELECT id, customer_number, name, phone, email, address, gender,
+             city, governorate, region, date_of_birth, national_id, age,
+             pension_date, balance, balance_type, notes, image, guarantors,
+             is_sued, sued_date, created_at, updated_at
       FROM customers
       ORDER BY created_at DESC
     `);
@@ -57,25 +59,26 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
       id: row.id,
       name: row.name,
       phone: row.phone,
-      email: row.email,
+      email: row.email || null,
       address: row.address,
       gender: row.gender,
-      city: row.city,
-      governorate: row.governorate,
-      region: row.region,
-      notes: row.notes,
-      age: Number(row.age),
-      balance: Number(row.balance),
+      city: row.city || '',
+      governorate: row.governorate || '',
+      region: row.region || '',
+      notes: row.notes || null,
+      image: row.image || null,
+      age: Number(row.age || 0),
+      balance: Number(row.balance || 0),
       isSued: row.is_sued === 1 || row.is_sued === true,
-      guarantors: [null, null, null],
+      guarantors: row.guarantors ? JSON.parse(row.guarantors) : [null, null, null],
       customerNumber: row.customer_number,
-      balanceType: row.balance_type,
+      balanceType: row.balance_type || 'debtor',
       dateOfBirth: formatDate(row.date_of_birth),
-      nationalId: row.national_id,
+      nationalId: row.national_id || '',
       pensionDate: formatDate(row.pension_date),
-      suedDate: formatDate(row.sued_date),
-      createdAt: formatDate(row.created_at),
-      updatedAt: formatDate(row.updated_at),
+      suedDate: row.sued_date || null,
+      createdAt: row.created_at || null,
+      updatedAt: row.updated_at || null,
     }));
     const payloadBytes = Buffer.byteLength(JSON.stringify(mapped), 'utf8');
     if (payloadBytes > 100 * 1024) {
@@ -115,9 +118,9 @@ router.get('/:id', requirePermission('sales:read'), async (req, res) => {
       dateOfBirth: formatDate(row.date_of_birth),
       nationalId: row.national_id,
       pensionDate: formatDate(row.pension_date),
-      suedDate: formatDate(row.sued_date),
-      createdAt: formatDate(row.created_at),
-      updatedAt: formatDate(row.updated_at),
+      suedDate: row.sued_date || null,
+      createdAt: row.created_at || null,
+      updatedAt: row.updated_at || null,
     });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -136,6 +139,7 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
   const data = parsed.data;
   const id = uid();
   const now = new Date().toISOString();
+  const finalSuedDate = data.isSued ? (data.suedDate || now) : null;
 
   try {
     const db = await dbPromise;
@@ -165,7 +169,7 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
       data.image || null,
       data.guarantors ? JSON.stringify(data.guarantors) : null,
       data.isSued ? 1 : 0,
-      data.suedDate || null,
+      finalSuedDate,
       now,
       now,
     );
@@ -192,10 +196,20 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
 
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM customers WHERE id = ?', req.params.id);
+    const existing = await db.get<any>('SELECT id, sued_date FROM customers WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Customer not found' });
     }
+
+    const isValidExistingSuedDate = (date?: string | null) => {
+      if (!date || date === '0' || date.includes('1970') || date.startsWith('0001')) return false;
+      const d = new Date(date);
+      return !isNaN(d.getTime()) && d.getFullYear() > 1970;
+    };
+
+    const finalSuedDate = data.isSued
+      ? (isValidExistingSuedDate(data.suedDate) ? data.suedDate : (isValidExistingSuedDate(existing.sued_date) ? existing.sued_date : now))
+      : null;
 
     await db.run(
       `UPDATE customers
@@ -223,13 +237,79 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       data.image || null,
       data.guarantors ? JSON.stringify(data.guarantors) : null,
       data.isSued ? 1 : 0,
-      data.suedDate || null,
+      finalSuedDate,
       now,
       req.params.id,
     );
 
     await audit('customer.update', 'customer', req.params.id, req.user?.name || 'system', data);
-    return res.json({ message: 'Customer updated successfully' });
+    return res.json({
+      message: 'Customer updated successfully',
+      customer: {
+        id: req.params.id,
+        isSued: data.isSued,
+        suedDate: finalSuedDate,
+        updatedAt: now,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// PATCH /customers/:id/toggle-sued - Quick toggle for legal referral (isSued)
+router.patch('/:id/toggle-sued', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
+  const toggleSchema = z.object({
+    isSued: z.boolean(),
+    suedDate: z.string().optional().nullable(),
+  });
+
+  const parsed = toggleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid payload', errors: parsed.error.format() });
+  }
+
+  const { isSued, suedDate } = parsed.data;
+  const now = new Date().toISOString();
+
+  try {
+    const db = await dbPromise;
+    const existing = await db.get<any>('SELECT id, sued_date FROM customers WHERE id = ?', req.params.id);
+    if (!existing) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    const isValidDate = (date?: string | null) => {
+      if (!date || date === '0' || date.includes('1970') || date.startsWith('0001')) return false;
+      const d = new Date(date);
+      return !isNaN(d.getTime()) && d.getFullYear() > 1970;
+    };
+
+    // When toggling off (إلغاء النزاع), clear sued_date = null.
+    // When isSued is true, keep existing valid sued_date; if none, record new timestamp.
+    const finalSuedDate = isSued
+      ? (isValidDate(existing.sued_date) ? existing.sued_date : (isValidDate(suedDate) ? suedDate : now))
+      : null;
+
+    await db.run(
+      `UPDATE customers
+       SET is_sued = ?, sued_date = ?, updated_at = ?
+       WHERE id = ?`,
+      isSued ? 1 : 0,
+      finalSuedDate,
+      now,
+      req.params.id
+    );
+
+    await audit('customer.toggle_sued', 'customer', req.params.id, req.user?.name || 'system', { isSued, suedDate: finalSuedDate });
+
+    return res.json({
+      message: 'Legal referral status updated successfully',
+      id: req.params.id,
+      isSued,
+      suedDate: finalSuedDate,
+      updatedAt: now,
+    });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

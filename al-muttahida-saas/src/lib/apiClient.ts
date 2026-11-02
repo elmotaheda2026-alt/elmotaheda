@@ -198,6 +198,11 @@ export const api = {
   listCustomers: () => requestArray<any>('/customers', 'customers'),
   createCustomer: (payload: any) => request<{ id: string }>('/customers', { method: 'POST', body: JSON.stringify(payload) }),
   updateCustomer: (id: string, payload: any) => request<{ message: string }>(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  toggleCustomerSued: (id: string, isSued: boolean, suedDate?: string) =>
+    request<{ message: string; id: string; isSued: boolean; suedDate: string | null }>(`/customers/${id}/toggle-sued`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isSued, suedDate }),
+    }),
   deleteCustomer: (id: string) => request<{ message: string }>(`/customers/${id}`, { method: 'DELETE' }),
   getCustomer: (id: string) => request<any>(`/customers/${id}`),
   listSuppliers: () => requestArray<any>('/suppliers', 'suppliers'),
@@ -205,6 +210,7 @@ export const api = {
   updateSupplier: (id: string, payload: any) => request<{ message: string }>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSupplier: (id: string) => request<{ message: string }>(`/suppliers/${id}`, { method: 'DELETE' }),
   listUsers: () => requestArray<any>('/users', 'users'),
+  listAdmins: () => requestArray<{ id: string; name: string; username: string }>('/users/admins', 'admins'),
   createUser: (payload: any) => request<{ id: string }>('/users', { method: 'POST', body: JSON.stringify(payload) }),
   updateUser: (id: string, payload: any) => request<{ message: string }>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteUser: (id: string) => request<{ message: string }>(`/users/${id}`, { method: 'DELETE' }),
@@ -240,6 +246,14 @@ export const api = {
   deleteShareholder: (id: string) => request<{ message: string }>(`/shareholders/${id}`, { method: 'DELETE' }),
   listShareholderTransactions: () => requestArray<any>('/shareholders/transactions', 'shareholder transactions'),
   createShareholderTransaction: (payload: any) => request<{ id: string }>('/shareholders/transactions', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteShareholderTransaction: (id: string) => request<{ message: string }>(`/shareholders/transactions/${id}`, { method: 'DELETE' }),
+  getShareholdersLiveTrading: (filters: { periodFrom?: string; periodTo?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.periodFrom) params.set('periodFrom', filters.periodFrom);
+    if (filters.periodTo) params.set('periodTo', filters.periodTo);
+    const q = params.toString();
+    return request<any>(`/shareholders/live-trading${q ? `?${q}` : ''}`);
+  },
 
   // Settings
   getSettings: () => request<any>('/settings'),

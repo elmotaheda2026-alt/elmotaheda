@@ -19,16 +19,20 @@ export function signToken(payload: { userId: string; role: string; name: string;
   return jwt.sign(payload, config.jwtSecret, { expiresIn: '12h' });
 }
 
-export function formatDate(dateStr: string): string {
+export function formatDate(dateStr?: string | null): string {
+  if (!dateStr || dateStr === 'null' || dateStr === 'undefined') return '';
   const date = new Date(dateStr);
+  if (isNaN(date.getTime()) || date.getFullYear() === 1970) return '';
   const day = date.getDate();
   const month = date.toLocaleString('en-US', { month: 'long' });
   const year = date.getFullYear();
   return `${day} ${month} ${year}`;
 }
 
-export function formatDateDisplay(dateStr: string): string {
+export function formatDateDisplay(dateStr?: string | null): string {
+  if (!dateStr || dateStr === 'null' || dateStr === 'undefined') return '';
   const date = new Date(dateStr);
+  if (isNaN(date.getTime()) || date.getFullYear() === 1970) return '';
   return date.toLocaleDateString('en-GB');
 }
 

@@ -55,6 +55,19 @@ const userSchema = z.object({
   permissions: userPermissionsSchema.optional().nullable(),
 });
 
+// GET /users/admins - List active admin users for authorization selects
+router.get('/admins', async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    const rows = await db.all<{ id: string; name: string; username: string }>(
+      "SELECT id, name, username FROM users WHERE role = 'admin' AND is_active = 1 ORDER BY name ASC"
+    );
+    return res.json(rows);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 // GET /users
 router.get('/', requirePermission('users:manage'), async (_req, res) => {
   try {
@@ -163,14 +176,14 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
       req.params.id,
     );
 
-      await audit('user.update', 'user', req.params.id, req.user?.name || 'system', {
-        name: data.name,
-        username: data.username,
-        role: data.role,
-        isActive: data.isActive,
-        phone: data.phone,
-        permissions: data.permissions,
-      });
+    await audit('user.update', 'user', req.params.id, req.user?.name || 'system', {
+      name: data.name,
+      username: data.username,
+      role: data.role,
+      isActive: data.isActive,
+      phone: data.phone,
+      permissions: data.permissions,
+    });
 
     return res.json({ message: 'User updated successfully' });
   } catch (error: any) {

@@ -151,29 +151,34 @@ export default function Sales() {
   };
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-2xl font-bold text-slate-900">تقرير ربحية المبيعات</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          متابعة ربح كل صنف حسب العميل والتاريخ، بإجمالي ربح الفترة المحددة.
-        </p>
-      </div>
-
-      <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-end gap-4">
-          <DateInput label="من تاريخ" value={dateFrom} onChange={setDateFrom} />
-          <DateInput label="إلى تاريخ" value={dateTo} onChange={setDateTo} />
+    <div className="desktop-view-container">
+      {/* Tier 1: Fixed Compact Header & Filters */}
+      <div className="erp-action-bar shrink-0">
+        <div>
+          <h2 className="text-lg font-black text-slate-900">تقرير ربحية المبيعات</h2>
+          <p className="text-xs text-slate-500">
+            متابعة ربح كل صنف حسب العميل والتاريخ، بإجمالي ربح الفترة المحددة.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-bold text-slate-500">من:</span>
+            <DatePicker value={dateFrom} onChange={setDateFrom} className="h-9 w-[125px] rounded-xl border-slate-200 text-xs font-bold" />
+            <span className="text-xs font-bold text-slate-500">إلى:</span>
+            <DatePicker value={dateTo} onChange={setDateTo} className="h-9 w-[125px] rounded-xl border-slate-200 text-xs font-bold" />
+          </div>
           <button
             type="button"
             onClick={resetFilters}
-            className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            className="h-9 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
           >
             مسح الفلاتر
           </button>
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      {/* Tier 2: Fixed Height KPI Metrics Bar */}
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 shrink-0">
         <SalesMetric label="إجمالي المبيعات" value={formatCurrency(salesSummary.revenue)} tone="emerald" />
         <SalesMetric label="إجمالي التكلفة" value={formatCurrency(salesSummary.cost)} tone="slate" />
         <SalesMetric
@@ -183,13 +188,11 @@ export default function Sales() {
         />
       </div>
 
-      <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-4 py-3">
-          <h3 className="font-bold text-slate-900">تفاصيل الأصناف</h3>
-        </div>
-        <div className="overflow-auto max-h-[calc(100vh-280px)]">
-          <table className="w-full min-w-[860px]">
-            <thead className="bg-slate-100">
+      {/* Tier 3: Flexible & Scrollable Table Card */}
+      <div className="desktop-table-card">
+        <div className="desktop-table-scroll">
+          <table className="w-full min-w-[860px] border-collapse">
+            <thead className="desktop-sticky-header">
               <tr>
                 <TableHead>التاريخ</TableHead>
                 <TableHead>العميل</TableHead>
@@ -202,28 +205,34 @@ export default function Sales() {
             <tbody className="divide-y divide-slate-100">
               {saleLineRows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-4 text-slate-600">{formatDateDisplay(row.date)}</td>
-                  <td className="px-4 py-4 font-medium text-slate-800">{row.customerName}</td>
-                  <td className="px-4 py-4 text-slate-800">
+                  <td className="px-4 py-3 text-xs text-slate-600 font-mono">{formatDateDisplay(row.date)}</td>
+                  <td className="px-4 py-3 text-xs md:text-sm font-bold text-slate-800">{row.customerName}</td>
+                  <td className="px-4 py-3 text-xs md:text-sm text-slate-800">
                     <div className="font-bold">{row.productName}</div>
-                    <div className="mt-1 text-xs text-slate-500">الكمية: {row.quantity}</div>
+                    <div className="text-[11px] text-slate-500">الكمية: {row.quantity}</div>
                   </td>
-                  <td className="px-4 py-4 text-slate-700">{formatCurrency(row.purchaseUnitPrice)}</td>
-                  <td className="px-4 py-4 font-bold text-slate-600">{formatCurrency(row.amountAfterUpfront)}</td>
-                  <td className={`px-4 py-4 font-black ${row.profit >= 0 ? 'text-sky-700' : 'text-rose-700'}`}>
+                  <td className="px-4 py-3 text-xs text-slate-700 font-mono">{formatCurrency(row.purchaseUnitPrice)}</td>
+                  <td className="px-4 py-3 text-xs font-bold text-slate-600 font-mono">{formatCurrency(row.amountAfterUpfront)}</td>
+                  <td className={`px-4 py-3 text-xs md:text-sm font-black font-mono ${row.profit >= 0 ? 'text-sky-700' : 'text-rose-700'}`}>
                     {formatCurrency(row.profit)}
                   </td>
                 </tr>
               ))}
               {saleLineRows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
-                    لا توجد مبيعات مطابقة للفلاتر الحالية.
+                  <td colSpan={6} className="px-4 py-16 text-center text-xs font-bold text-slate-400">
+                    <div className="flex flex-col items-center justify-center min-h-[220px]">
+                      <p className="text-sm font-bold text-slate-700">لا توجد مبيعات مطابقة للفلاتر الحالية</p>
+                    </div>
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
+        <div className="erp-status-bar shrink-0">
+          <span className="font-bold text-slate-700">عدد العمليات: <span className="text-blue-700 font-extrabold">{saleLineRows.length}</span></span>
+          <span className="font-bold text-slate-700">صافي الربح الإجمالي: <span className={salesSummary.profit >= 0 ? 'text-sky-700 font-extrabold' : 'text-rose-700 font-extrabold'}>{formatCurrency(salesSummary.profit)}</span></span>
         </div>
       </div>
     </div>

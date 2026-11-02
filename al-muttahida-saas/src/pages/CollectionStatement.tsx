@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
-import { getCustomers, getSales, getSalesReps } from '../lib/storage';
+import { getCustomers, getSales, getSalesReps, toggleCustomerSued } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -181,6 +181,45 @@ export default function CollectionStatement() {
       window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
+
+  const handleToggleLegalCustomer = async (customerId: string, nextIsSued: boolean) => {
+    const customer = customers.find(c => c.id === customerId);
+    if (!customer) return;
+    const confirmMsg = nextIsSued
+      ? `هل أنت متأكد من تحويل العميل "${customer.name}" للشئون القانونية (النزاعات)؟`
+      : `هل أنت متأكد من إلغاء تحويل العميل "${customer.name}" من الشئون القانونية؟`;
+    if (!confirm(confirmMsg)) return;
+
+    // Optimistic update: reflect change in UI immediately
+    const now = new Date().toISOString();
+    setCustomers(prev => prev.map(c =>
+      c.id === customerId
+        ? { ...c, isSued: nextIsSued, suedDate: nextIsSued ? (c.suedDate || now) : undefined, updatedAt: now }
+        : c
+    ));
+
+    try {
+      if (isApiMode()) {
+        // Call the dedicated PATCH endpoint directly for speed and reliability
+        await api.toggleCustomerSued(customerId, nextIsSued, nextIsSued ? now : undefined);
+        // Re-fetch to sync with server truth
+        const apiCustomers = await api.listCustomers();
+        setCustomers(apiCustomers);
+      } else {
+        await toggleCustomerSued(customerId, nextIsSued, nextIsSued ? now : undefined);
+        // Re-read from storage after write
+        setCustomers([...getCustomers()]);
+      }
+    } catch (err: any) {
+      // Rollback optimistic update on failure
+      setCustomers(prev => prev.map(c =>
+        c.id === customerId
+          ? { ...c, isSued: customer.isSued, suedDate: customer.suedDate, updatedAt: customer.updatedAt }
+          : c
+      ));
+      alert(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.');
+    }
+  };
 
   const invoiceLookupTerm = invoiceSearchTerm.trim();
   const hasInvoiceLookup = selectedCustomerId !== 'all' || invoiceLookupTerm.length >= 2;
@@ -499,9 +538,9 @@ export default function CollectionStatement() {
         }
       }
     `}</style>
-      <div className="flex flex-col h-[calc(100vh-110px)] overflow-hidden print:h-auto print:overflow-visible">
+      <div className="desktop-view-container print:h-auto print:overflow-visible">
         {/* Header/Tabs & Filters Bar */}
-        <div className="bg-white border-b border-slate-200 px-5 py-3 space-y-3 shrink-0 print:hidden">
+        <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 space-y-2.5 shrink-0 print:hidden shadow-xs">
           {/* Segmented Control Tabs */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
             <div className="flex bg-slate-100 p-1 rounded-xl w-fit">
@@ -678,7 +717,7 @@ export default function CollectionStatement() {
 
         {/* TAB CONTENT: DUE */}
         {activeTab === 'due' && (
-          <div className="flex-1 min-h-0 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
+          <div className="desktop-table-card animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
             {dueFromDate > dueToDate && (
               <div className="border-b border-red-200 bg-red-50 px-5 py-2.5 text-sm text-red-700 shrink-0">
                 تاريخ البداية يجب أن يكون قبل تاريخ النهاية.
@@ -686,9 +725,9 @@ export default function CollectionStatement() {
             )}
 
             {/* Scrollable Table Body */}
-            <div className="flex-1 min-h-0 overflow-y-auto bg-white">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-slate-50/80 text-slate-600 border-b border-slate-200 font-bold sticky top-0 z-[5]">
+            <div className="desktop-table-scroll">
+              <table className="w-full text-right text-xs border-collapse">
+                <thead className="desktop-sticky-header">
                   <tr>
                     <th className="px-5 py-2.5 text-right">العميل</th>
                     <th className="px-4 py-2.5 text-right">الهاتف</th>
@@ -903,9 +942,7 @@ export default function CollectionStatement() {
 
         {/* TAB CONTENT: INVOICES */}
         {activeTab === 'invoices' && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
-            
-
+          <div className="desktop-table-card p-4 overflow-y-auto space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
             {/* Invoice Cards */}
             <div className="space-y-4">
               {!hasInvoiceLookup ? (
@@ -962,12 +999,26 @@ export default function CollectionStatement() {
                       </div>
 
                       <div className="flex flex-col gap-4 items-end">
-                        <button
-                          onClick={() => handlePrint(row)}
-                          className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-base font-bold text-slate-700 hover:bg-slate-200 transition-colors"
-                        >
-                          <Printer size={16} /> طباعة الكشف
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleToggleLegalCustomer(row.customerId, !row.isSued)}
+                            className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-colors ${
+                              row.isSued
+                                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200'
+                            }`}
+                            title={row.isSued ? 'إلغاء النزاع والتحويل للقضاء' : 'تحويل العميل للشئون القانونية والنزاعات'}
+                          >
+                            <Gavel size={15} />
+                            {row.isSued ? 'إلغاء النزاع' : 'تحويل للقضاء'}
+                          </button>
+                          <button
+                            onClick={() => handlePrint(row)}
+                            className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-base font-bold text-slate-700 hover:bg-slate-200 transition-colors"
+                          >
+                            <Printer size={16} /> طباعة الكشف
+                          </button>
+                        </div>
                         <div className="grid gap-2 sm:grid-cols-3 min-w-[320px]">
                           <SmallStat label="الإجمالي" value={formatCurrency(row.total)} />
                           <SmallStat label="المدفوع" value={formatCurrency(row.paid)} tone="green" />
@@ -1068,85 +1119,97 @@ export default function CollectionStatement() {
 
         {/* TAB CONTENT: LEGAL */}
         {activeTab === 'legal' && (
-          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
-            <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-center justify-between print:hidden">
+          <div className="desktop-table-card animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
+            <div className="bg-red-50/80 border-b border-red-100 p-3.5 flex items-center justify-between shrink-0 print:hidden">
               <div>
-                <h3 className="text-red-800 font-bold text-lg flex items-center gap-2"><Gavel size={20} /> سجل القضايا والنزاعات القانونية</h3>
-                <p className="text-red-600 text-sm mt-1">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
+                <h3 className="text-red-800 font-bold text-base flex items-center gap-2"><Gavel size={18} /> سجل القضايا والنزاعات القانونية</h3>
+                <p className="text-red-600 text-xs mt-0.5">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
               </div>
-              <button onClick={() => { setPrintingInvoice(null); setPrintingLegalReport(true); setTimeout(() => { window.print(); setPrintingLegalReport(false); }, 300); }} className="h-10 px-6 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-sm shadow-sm transition-all whitespace-nowrap">
-                <Printer size={16} />
+              <button onClick={() => { setPrintingInvoice(null); setPrintingLegalReport(true); setTimeout(() => { window.print(); setPrintingLegalReport(false); }, 300); }} className="h-9 px-4 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all whitespace-nowrap">
+                <Printer size={15} />
                 طباعة كشف المحامي
               </button>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full bg-white">
-                  <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+            <div className="desktop-table-scroll">
+              <table className="w-full bg-white border-collapse">
+                <thead className="desktop-sticky-header">
+                  <tr>
+                    <th className="px-4 py-3 text-right">اسم العميل</th>
+                    <th className="px-4 py-3 text-right">رقم الهاتف</th>
+                    <th className="px-4 py-3 text-right">العنوان</th>
+                    <th className="px-4 py-3 text-center">الفواتير</th>
+                    <th className="px-4 py-3 text-center">تاريخ الإحالة</th>
+                    <th className="px-4 py-3 text-center">المديونية</th>
+                    <th className="px-4 py-3 text-center">الإجراءات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {suedCustomersList.length === 0 ? (
                     <tr>
-                      <th className="px-4 py-4 text-right text-base font-bold">اسم العميل</th>
-                      <th className="px-4 py-4 text-right text-base font-bold">رقم الهاتف</th>
-                      <th className="px-4 py-4 text-right text-base font-bold">العنوان</th>
-                      <th className="px-4 py-4 text-right text-base font-bold text-center">الفواتير</th>
-                      <th className="px-4 py-4 text-right text-base font-bold text-center">تاريخ الإحالة</th>
-                      <th className="px-4 py-4 text-right text-base font-bold text-center">المديونية</th>
+                      <td colSpan={7} className="px-5 py-16 text-center text-slate-400">
+                        <div className="flex flex-col items-center justify-center min-h-[220px]">
+                          <CheckCircle2 size={40} className="text-slate-300 mb-3" />
+                          <p className="font-bold text-sm text-slate-700">لا يوجد أي عملاء في الشئون القانونية حالياً</p>
+                        </div>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {suedCustomersList.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="px-5 py-12 text-center text-slate-500">
-                          <div className="flex flex-col items-center justify-center">
-                            <CheckCircle2 size={40} className="text-slate-300 mb-3" />
-                            <p>لا يوجد أي عملاء في الشئون القانونية حالياً.</p>
+                  ) : (
+                    suedCustomersList.map((customer) => (
+                      <tr key={customer.id} className="hover:bg-red-50/50 transition-colors">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+                              <Gavel size={13} />
+                            </div>
+                            <span className="font-bold text-slate-900 text-xs md:text-sm">{customer.name}</span>
                           </div>
                         </td>
+                        <td className="px-4 py-3 text-xs md:text-sm font-medium text-slate-700 font-mono">{customer.phone}</td>
+                        <td className="px-4 py-3 text-xs md:text-sm text-slate-600 truncate max-w-[200px]">{customer.address}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-0.5 rounded-lg text-xs">{customer.invoicesCount}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {(() => {
+                            const rawDate = (customer as any).suedDate || (customer as any).sued_date
+                              || (customer as any).createdAt;
+                            const formatted = formatDateDisplay(rawDate);
+                            return formatted && formatted !== '-' ? (
+                              <span className="font-bold text-slate-800 text-xs font-mono">{formatted}</span>
+                            ) : <span className="text-slate-400">-</span>;
+                          })()}
+                        </td>
+                        <td className="px-4 py-3 text-center font-black text-red-600 text-sm md:text-base font-mono">
+                          {formatCurrency(customer.totalDebt)}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => handleToggleLegalCustomer(customer.id, false)}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1"
+                            title="إلغاء التحويل من الشئون القانونية"
+                          >
+                            <CheckCircle2 size={13} />
+                            إلغاء النزاع
+                          </button>
+                        </td>
                       </tr>
-                    ) : (
-                      suedCustomersList.map((customer) => (
-                        <tr key={customer.id} className="hover:bg-red-50/50 transition-colors">
-                          <td className="px-4 py-4">
-                            <div className="flex items-center gap-2">
-                              <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
-                                <Gavel size={14} />
-                              </div>
-                              <span className="font-bold text-slate-900">{customer.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-4 text-sm font-medium text-slate-700">{customer.phone}</td>
-                          <td className="px-4 py-4 text-sm text-slate-600 truncate max-w-[200px]">{customer.address}</td>
-                          <td className="px-4 py-4 text-center">
-                            <span className="bg-slate-100 text-slate-700 font-bold px-3 py-1 rounded-lg text-sm">{customer.invoicesCount}</span>
-                          </td>
-                          <td className="px-4 py-4 text-center">
-                            {customer.suedDate ? (
-                              <div className="text-sm">
-                                <span className="font-bold text-slate-800">{formatDateDisplay(customer.suedDate)}</span>
-                              </div>
-                            ) : <span className="text-slate-400">-</span>}
-                          </td>
-                          <td className="px-4 py-4 text-center font-black text-red-600 text-lg">
-                            {formatCurrency(customer.totalDebt)}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              {suedCustomersList.length > 0 && (
-                <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between">
-                  <div className="font-bold text-slate-600">
-                    إجمالي عملاء الشئون القانونية: <span className="text-slate-900 mx-1">{suedCustomersList.length}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-slate-500">إجمالي الديون المعلقة بالنزاعات:</span>
-                    <span className="text-xl font-black text-red-700">{formatCurrency(suedCustomersList.reduce((s, c) => s + c.totalDebt, 0))}</span>
-                  </div>
-                </div>
-              )}
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
+            {suedCustomersList.length > 0 && (
+              <div className="erp-status-bar shrink-0">
+                <div className="font-bold text-slate-700">
+                  إجمالي عملاء الشئون القانونية: <span className="text-slate-900 font-black mx-1">{suedCustomersList.length}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-slate-500">إجمالي الديون المعلقة بالنزاعات:</span>
+                  <span className="text-sm md:text-base font-black text-red-700 font-mono">{formatCurrency(suedCustomersList.reduce((s, c) => s + c.totalDebt, 0))}</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1197,7 +1260,9 @@ export default function CollectionStatement() {
                     <td className="p-2 text-slate-700 font-mono text-xs">{customer.phone}</td>
                     <td className="p-2 text-slate-600 text-xs">{customer.address || '-'}</td>
                     <td className="p-2 text-center font-bold text-slate-800">{customer.invoicesCount}</td>
-                    <td className="p-2 text-center text-xs text-slate-600">{customer.suedDate ? formatDateDisplay(customer.suedDate) : '-'}</td>
+                    <td className="p-2 text-center text-xs text-slate-600">
+                      {formatDateDisplay((customer as any).suedDate || (customer as any).sued_date || (customer as any).createdAt)}
+                    </td>
                     <td className="p-2 text-center font-black text-red-700">{formatCurrency(customer.totalDebt)}</td>
                   </tr>
                 ))

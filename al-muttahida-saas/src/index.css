@@ -23,11 +23,13 @@
 
   html {
     direction: rtl;
-    min-height: 100%;
+    height: 100%;
+    overflow: hidden;
   }
 
   #root {
-    min-height: 100vh;
+    height: 100%;
+    overflow: hidden;
   }
 
   body {
@@ -37,8 +39,9 @@
     color: #0f172a;
     font-size: 14px;
     line-height: 1.45;
-    min-height: 100%;
-    overflow-y: auto;
+    height: 100%;
+    overflow: hidden;
+    user-select: none;
   }
 
   /* Custom scrollbar */
@@ -75,6 +78,23 @@
     @apply sticky bottom-0 z-20 flex min-h-11 items-center justify-between gap-4 border-t border-slate-200 bg-white/95 px-4 py-2.5 text-xs font-bold text-slate-700 backdrop-blur shadow-sm;
   }
 
+  /* Desktop-grade 3-Tier Layout System */
+  .desktop-view-container {
+    @apply flex flex-col h-full flex-1 min-h-0 overflow-hidden space-y-3;
+  }
+
+  .desktop-table-card {
+    @apply flex-1 min-h-[420px] flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden;
+  }
+
+  .desktop-table-scroll {
+    @apply flex-1 min-h-0 overflow-auto;
+  }
+
+  .desktop-sticky-header {
+    @apply sticky top-0 z-10 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700 tracking-wider shadow-sm;
+  }
+
   .erp-icon-actions {
     @apply flex items-center justify-center gap-1 opacity-80 transition-opacity group-hover:opacity-100;
   }
@@ -82,6 +102,7 @@
   .line-clamp-2 {
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
@@ -89,6 +110,7 @@
   .line-clamp-3 {
     display: -webkit-box;
     -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

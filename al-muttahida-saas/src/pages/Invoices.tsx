@@ -326,7 +326,7 @@ export default function Invoices() {
       || 12
     );
     setInvoiceNotes(sale.notes || '');
-    
+
     setDraftItems(
       sale.items.map((item) => ({
         productId: item.productId,
@@ -628,12 +628,12 @@ export default function Invoices() {
         return current.map((item, index) =>
           index === existingIndex
             ? {
-                ...item,
-                quantity: item.quantity + qty,
-                unitPrice,
-                discount: discount,
-                tax: tax,
-              }
+              ...item,
+              quantity: item.quantity + qty,
+              unitPrice,
+              discount: discount,
+              tax: tax,
+            }
             : item,
         );
       }
@@ -787,132 +787,132 @@ export default function Invoices() {
     try {
       let autoPurchaseNumber = '';
 
-    const createdSale = await createSale({
-      customerId: selectedCustomer.id,
-      customerName: selectedCustomer.name,
-      items,
-      subtotal,
-      discount: discountAmount,
-      tax: taxAmount,
-      total,
-      paid,
-      remaining,
-      status: remaining > 0 ? 'pending' : 'completed',
-      date: invoiceDate,
-      notes: invoiceNotes,
-      createdBy: user?.name || 'مدير النظام',
-      financing: {
-        paymentMethod,
-        salesRepId: selectedSalesRepId || undefined,
-        salesRepName: salesReps.find(r => r.id === selectedSalesRepId)?.name,
-        installmentMonths: paymentMethod === 'installment' ? effectiveMonths : 0,
-        installmentStartDate: paymentMethod === 'installment' ? firstInstallmentDate : undefined,
-        upfrontAmount: paid,
-        monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
-      },
-    });
-
-    if (procurementRows.length > 0 && selectedProcurementSupplier) {
-      const purchaseItems: PurchaseItem[] = procurementRows.map((item) => {
-        const unitPrice = item.product?.purchasePrice || 0;
-        const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
-
-        return {
-          productId: item.productId,
-          productName: item.productName,
-          barcode: item.barcode,
-          quantity: item.shortageQuantity,
-          unitPrice,
-          discount: 0,
-          tax: taxPerUnit,
-          total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
-        };
-      });
-
-      const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-      const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
-      const purchaseTotal = purchaseSubtotal + purchaseTax;
-
-      const createdPurchase = await createPurchase({
-        supplierId: selectedProcurementSupplier.id,
-        supplierName: selectedProcurementSupplier.name,
-        items: purchaseItems,
-        subtotal: purchaseSubtotal,
-        discount: 0,
-        tax: purchaseTax,
-        total: purchaseTotal,
-        paid: 0,
-        remaining: purchaseTotal,
-        status: 'pending',
+      const createdSale = await createSale({
+        customerId: selectedCustomer.id,
+        customerName: selectedCustomer.name,
+        items,
+        subtotal,
+        discount: discountAmount,
+        tax: taxAmount,
+        total,
+        paid,
+        remaining,
+        status: remaining > 0 ? 'pending' : 'completed',
         date: invoiceDate,
-        notes: `شراء تلقائي مرتبط بالفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
+        notes: invoiceNotes,
         createdBy: user?.name || 'مدير النظام',
+        financing: {
+          paymentMethod,
+          salesRepId: selectedSalesRepId || undefined,
+          salesRepName: salesReps.find(r => r.id === selectedSalesRepId)?.name,
+          installmentMonths: paymentMethod === 'installment' ? effectiveMonths : 0,
+          installmentStartDate: paymentMethod === 'installment' ? firstInstallmentDate : undefined,
+          upfrontAmount: paid,
+          monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
+        },
       });
 
-      autoPurchaseNumber = createdPurchase.invoiceNumber;
+      if (procurementRows.length > 0 && selectedProcurementSupplier) {
+        const purchaseItems: PurchaseItem[] = procurementRows.map((item) => {
+          const unitPrice = item.product?.purchasePrice || 0;
+          const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
+
+          return {
+            productId: item.productId,
+            productName: item.productName,
+            barcode: item.barcode,
+            quantity: item.shortageQuantity,
+            unitPrice,
+            discount: 0,
+            tax: taxPerUnit,
+            total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
+          };
+        });
+
+        const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+        const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
+        const purchaseTotal = purchaseSubtotal + purchaseTax;
+
+        const createdPurchase = await createPurchase({
+          supplierId: selectedProcurementSupplier.id,
+          supplierName: selectedProcurementSupplier.name,
+          items: purchaseItems,
+          subtotal: purchaseSubtotal,
+          discount: 0,
+          tax: purchaseTax,
+          total: purchaseTotal,
+          paid: 0,
+          remaining: purchaseTotal,
+          status: 'pending',
+          date: invoiceDate,
+          notes: `شراء تلقائي مرتبط بالفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
+          createdBy: user?.name || 'مدير النظام',
+        });
+
+        autoPurchaseNumber = createdPurchase.invoiceNumber;
+
+        createNotification({
+          type: 'info',
+          title: 'شراء تلقائي',
+          message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} تلقائيًا لتجهيز طلب العميل ${selectedCustomer.name}`,
+        });
+      }
+
+      if (paid > 0) {
+        if (isApiMode()) {
+          await api.createPayment({
+            type: 'in',
+            amount: paid,
+            saleId: createdSale.id,
+            customerId: selectedCustomer.id,
+            invoiceNumber: createdSale.invoiceNumber,
+            description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
+            date: paymentDate,
+            channel: 'cash',
+            affectsCustomerBalance: false,
+          });
+        } else {
+          await createPayment({
+            type: 'in',
+            amount: paid,
+            referenceId: createdSale.id,
+            referenceType: 'sale',
+            description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
+            date: paymentDate,
+            createdBy: user?.name || 'مدير النظام',
+            customerId: selectedCustomer.id,
+            saleId: createdSale.id,
+            invoiceNumber: createdSale.invoiceNumber,
+            affectsCustomerBalance: false,
+          });
+        }
+      }
 
       createNotification({
-        type: 'info',
-        title: 'شراء تلقائي',
-        message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} تلقائيًا لتجهيز طلب العميل ${selectedCustomer.name}`,
+        type: 'success',
+        title: 'فاتورة جديدة',
+        message:
+          procurementRows.length > 0 && autoPurchaseNumber
+            ? `تم حفظ الفاتورة ${createdSale.invoiceNumber} وإنشاء شراء تلقائي ${autoPurchaseNumber}`
+            : `تم حفظ الفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
       });
-    }
 
-    if (paid > 0) {
-      if (isApiMode()) {
-        await api.createPayment({
-          type: 'in',
-          amount: paid,
-          saleId: createdSale.id,
-          customerId: selectedCustomer.id,
-          invoiceNumber: createdSale.invoiceNumber,
-          description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
-          date: paymentDate,
-          channel: 'cash',
-          affectsCustomerBalance: false,
-        });
-      } else {
-      await createPayment({
-        type: 'in',
-        amount: paid,
-        referenceId: createdSale.id,
-        referenceType: 'sale',
-        description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
-        date: paymentDate,
-        createdBy: user?.name || 'مدير النظام',
-        customerId: selectedCustomer.id,
-        saleId: createdSale.id,
-        invoiceNumber: createdSale.invoiceNumber,
-        affectsCustomerBalance: false,
+      const refreshedProducts = getProducts();
+      setProducts(refreshedProducts);
+
+      setSales(sortSalesNewestFirst(getSales()));
+
+      setMessage({
+        type: 'success',
+        text:
+          procurementRows.length > 0 && autoPurchaseNumber
+            ? `تم حفظ الفاتورة ${createdSale.invoiceNumber} وإنشاء شراء تلقائي ${autoPurchaseNumber} من نفس الشاشة.`
+            : `تم حفظ الفاتورة ${createdSale.invoiceNumber} بنجاح.`,
       });
-      }
-    }
 
-    createNotification({
-      type: 'success',
-      title: 'فاتورة جديدة',
-      message:
-        procurementRows.length > 0 && autoPurchaseNumber
-          ? `تم حفظ الفاتورة ${createdSale.invoiceNumber} وإنشاء شراء تلقائي ${autoPurchaseNumber}`
-          : `تم حفظ الفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
-    });
-
-    const refreshedProducts = getProducts();
-    setProducts(refreshedProducts);
-
-    setSales(sortSalesNewestFirst(getSales()));
-
-    setMessage({
-      type: 'success',
-      text:
-        procurementRows.length > 0 && autoPurchaseNumber
-          ? `تم حفظ الفاتورة ${createdSale.invoiceNumber} وإنشاء شراء تلقائي ${autoPurchaseNumber} من نفس الشاشة.`
-          : `تم حفظ الفاتورة ${createdSale.invoiceNumber} بنجاح.`,
-    });
-    
-    // Set for printing
-    setSavedSaleForPrinting(createdSale);
-    resetForm();
+      // Set for printing
+      setSavedSaleForPrinting(createdSale);
+      resetForm();
     } catch (err: any) {
       console.error('[Invoices] Failed to save invoice', err);
       setMessage({ type: 'error', text: err.message || 'تعذر حفظ الفاتورة. راجع البيانات وحاول مرة أخرى.' });
@@ -920,66 +920,70 @@ export default function Invoices() {
   };
 
   return (
-    <div className="space-y-2 pb-9">
-      <section className="erp-action-bar">
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex-1">
-            <h2 className="text-2xl font-bold text-slate-900">{editingSaleId ? 'تعديل تعاقد قائم' : 'إصدار فاتورة بيع'}</h2>
-            <p className="mt-1 text-sm text-slate-500 leading-relaxed max-w-2xl">
-              {editingSaleId ? 'أنت في وضع التعديل الآن. سيتم تحديث الكميات وحسابات العملاء تلقائياً عند الحفظ.' : 'شاشة واحدة تجمع العميل والصنف والتقسيط والشراء التلقائي عند الحاجة.'}
-            </p>
-            <div className="mt-1 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={openContractsSearch}
-                className="inline-flex items-center gap-2 px-3 py-2 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-sm transition-all shadow-sm active:scale-95"
-              >
-                <Search size={16} />
-                البحث في سجل التعاقدات
-              </button>
+    <div className="flex flex-col h-full flex-1 min-h-0 overflow-hidden">
+      {/* Fixed Header */}
+      <div className="shrink-0 space-y-2 mb-2">
+        <section className="erp-action-bar">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex-1">
+              <h2 className="text-2xl font-bold text-slate-900">{editingSaleId ? 'تعديل تعاقد قائم' : 'إصدار فاتورة بيع'}</h2>
+              <p className="mt-1 text-sm text-slate-500 leading-relaxed max-w-2xl">
+                {editingSaleId ? 'أنت في وضع التعديل الآن. سيتم تحديث الكميات وحسابات العملاء تلقائياً عند الحفظ.' : 'شاشة واحدة تجمع العميل والصنف والتقسيط والشراء التلقائي عند الحاجة.'}
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openContractsSearch}
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-sm transition-all shadow-sm active:scale-95"
+                >
+                  <Search size={16} />
+                  البحث في سجل التعاقدات
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <QuickCard label="رقم الفاتورة" value={invoiceNumber || '-'} />
+              <QuickCard label="الإجمالي" value={formatCurrency(total)} tone="emerald" />
+              <QuickCard
+                label="أصناف تحتاج شراء"
+                value={String(procurementRows.length)}
+                tone={procurementRows.length > 0 ? 'amber' : 'slate'}
+              />
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-            <QuickCard label="رقم الفاتورة" value={invoiceNumber || '-'} />
-            <QuickCard label="الإجمالي" value={formatCurrency(total)} tone="emerald" />
-            <QuickCard
-              label="أصناف تحتاج شراء"
-              value={String(procurementRows.length)}
-              tone={procurementRows.length > 0 ? 'amber' : 'slate'}
-            />
-          </div>
-        </div>
-      </section>
+        </section>
 
-      {editingSaleId && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center justify-between shadow-sm animate-pulse">
-          <div className="flex items-center gap-2">
-            <span className="font-extrabold text-base">⚠️ وضع تعديل التعاقد:</span>
-            <span>أنت تقوم الآن بتعديل بيانات التعاقد رقم <b>{invoiceNumber}</b>. يمكنك تعديل العملاء أو الأصناف أو شروط الدفع والضغط على "تعديل وحفظ التغييرات" باليسار.</span>
+        {editingSaleId && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center justify-between shadow-sm animate-pulse">
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-base">⚠️ وضع تعديل التعاقد:</span>
+              <span>أنت تقوم الآن بتعديل بيانات التعاقد رقم <b>{invoiceNumber}</b>. يمكنك تعديل العملاء أو الأصناف أو شروط الدفع والضغط على "تعديل وحفظ التغييرات" باليسار.</span>
+            </div>
+            <button
+              type="button"
+              onClick={resetForm}
+              className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+            >
+              إلغاء التعديل والعودة للإنشاء
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={resetForm}
-            className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+        )}
+
+        {message && (
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm ${message.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-rose-200 bg-rose-50 text-rose-700'
+              }`}
           >
-            إلغاء التعديل والعودة للإنشاء
-          </button>
-        </div>
-      )}
+            {message.text}
+          </div>
+        )}
+      </div>
 
-      {message && (
-        <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
-            message.type === 'success'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-rose-200 bg-rose-50 text-rose-700'
-          }`}
-        >
-          {message.text}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-2 2xl:grid-cols-[minmax(0,1.7fr)_360px]">
+      {/* Scrollable Form Content */}
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1 pl-1 pb-10">
+        <div className="grid grid-cols-1 gap-2 2xl:grid-cols-[minmax(0,1.7fr)_360px]">
         <div className="space-y-2">
           <Panel title="1. بيانات العميل والفاتورة" icon={<CalendarDays size={18} className="text-sky-600" />}>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1437,12 +1441,11 @@ export default function Invoices() {
                             <td className="py-2.5 px-3 font-semibold text-emerald-600">{formatCurrency(sch.paidAmount)}</td>
                             <td className="py-2.5 px-3 font-bold text-rose-600">{formatCurrency(rem)}</td>
                             <td className="py-2.5 px-3 text-center">
-                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                                sch.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
-                                : sch.status === 'settled_early' ? 'bg-sky-100 text-sky-700'
-                                : sch.status === 'partial' ? 'bg-amber-100 text-amber-700'
-                                : 'bg-slate-100 text-slate-700'
-                              }`}>
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${sch.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
+                                  : sch.status === 'settled_early' ? 'bg-sky-100 text-sky-700'
+                                    : sch.status === 'partial' ? 'bg-amber-100 text-amber-700'
+                                      : 'bg-slate-100 text-slate-700'
+                                }`}>
                                 {sch.status === 'paid' ? 'مدفوع' : sch.status === 'settled_early' ? 'تكييش' : sch.status === 'partial' ? 'جزئي' : 'معلق'}
                               </span>
                             </td>
@@ -1573,9 +1576,8 @@ export default function Invoices() {
             <div className="mt-5 grid gap-3">
               <button
                 onClick={saveInvoice}
-                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all ${
-                  editingSaleId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
-                }`}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all ${editingSaleId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
               >
                 <Save size={18} />
                 {editingSaleId ? 'تعديل وحفظ التغييرات' : 'حفظ الفاتورة'}
@@ -1662,6 +1664,7 @@ export default function Invoices() {
                                   paid,
                                   remaining,
                                   status: 'pending',
+                                  createdBy: user?.name || 'مدير النظام',
                                   createdAt: new Date().toISOString(),
                                   financing: {
                                     paymentMethod: 'installment',
@@ -1712,6 +1715,7 @@ export default function Invoices() {
             </div>
           </Panel>
         </div>
+      </div>
       </div>
 
       {/* NEW: Gorgeous Advanced Floating Search Overlay Modal */}
@@ -1773,9 +1777,8 @@ export default function Invoices() {
                           <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
                             {formatDateDisplay(sale.date)}
                           </span>
-                          <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
-                            sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700' : 'bg-emerald-50 text-emerald-700'
-                          }`}>
+                          <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700' : 'bg-emerald-50 text-emerald-700'
+                            }`}>
                             {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
                           </span>
                         </div>
@@ -1800,14 +1803,14 @@ export default function Invoices() {
                           تعديل البيانات
                         </button>
                         {canDelete && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteContract(sale)}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
-                        >
-                          <Trash2 size={13} />
-                          حذف التعاقد
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteContract(sale)}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          >
+                            <Trash2 size={13} />
+                            حذف التعاقد
+                          </button>
                         )}
                         {canDelete && sale.financing?.paymentMethod === 'installment' && (sale.financing?.schedules?.length ?? 0) > 0 && (
                           <button
@@ -1922,9 +1925,8 @@ export default function Invoices() {
                         return (
                           <tr
                             key={sch.id}
-                            className={`transition-colors ${
-                              deferInstallmentId === sch.id ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'
-                            } ${isPaid ? 'opacity-50' : ''}`}
+                            className={`transition-colors ${deferInstallmentId === sch.id ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'
+                              } ${isPaid ? 'opacity-50' : ''}`}
                           >
                             <td className="px-4 py-3 font-semibold text-slate-800">
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -1944,12 +1946,11 @@ export default function Invoices() {
                             <td className="px-4 py-3 text-emerald-700">{formatCurrency(sch.paidAmount)}</td>
                             <td className="px-4 py-3 text-rose-600 font-bold">{formatCurrency(remaining)}</td>
                             <td className="px-4 py-3">
-                              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                                sch.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
-                                : sch.status === 'settled_early' ? 'bg-sky-100 text-sky-700'
-                                : sch.status === 'partial' ? 'bg-amber-100 text-amber-700'
-                                : 'bg-slate-100 text-slate-700'
-                              }`}>
+                              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${sch.status === 'paid' ? 'bg-emerald-100 text-emerald-700'
+                                  : sch.status === 'settled_early' ? 'bg-sky-100 text-sky-700'
+                                    : sch.status === 'partial' ? 'bg-amber-100 text-amber-700'
+                                      : 'bg-slate-100 text-slate-700'
+                                }`}>
                                 {sch.status === 'paid' ? 'مدفوع' : sch.status === 'settled_early' ? 'تكييش' : sch.status === 'partial' ? 'جزئي' : 'معلق'}
                               </span>
                             </td>
@@ -1963,11 +1964,10 @@ export default function Invoices() {
                                     setDeferNewDueDate(suggestedDate);
                                     setDeferMessage(null);
                                   }}
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                    deferInstallmentId === sch.id
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${deferInstallmentId === sch.id
                                       ? 'bg-violet-600 text-white'
                                       : 'bg-violet-50 text-violet-700 hover:bg-violet-100'
-                                  }`}
+                                    }`}
                                 >
                                   <ArrowRight size={12} />
                                   ترحيل
@@ -2049,11 +2049,10 @@ export default function Invoices() {
                   </div>
 
                   {deferMessage && (
-                    <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${
-                      deferMessage.type === 'success'
+                    <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${deferMessage.type === 'success'
                         ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
                         : 'bg-rose-50 border border-rose-200 text-rose-700'
-                    }`}>
+                      }`}>
                       {deferMessage.text}
                     </div>
                   )}
@@ -2084,11 +2083,10 @@ export default function Invoices() {
               )}
 
               {!deferInstallmentId && deferMessage && (
-                <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${
-                  deferMessage.type === 'success'
+                <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${deferMessage.type === 'success'
                     ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
                     : 'bg-rose-50 border border-rose-200 text-rose-700'
-                }`}>
+                  }`}>
                   {deferMessage.text}
                 </div>
               )}

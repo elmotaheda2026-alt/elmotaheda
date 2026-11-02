@@ -103,6 +103,22 @@ export default function Payments() {
   const [settlementDiscountType, setSettlementDiscountType] = useState<'fixed' | 'percent'>('fixed');
   const [settlementDiscountValue, setSettlementDiscountValue] = useState<number>(0);
 
+  // Admin approval states for Early Settlement
+  const [settlementAdminList, setSettlementAdminList] = useState<{ id: string; name: string; username: string }[]>([]);
+  const [settlementAdminUsername, setSettlementAdminUsername] = useState('');
+  const [settlementAdminPassword, setSettlementAdminPassword] = useState('');
+
+  useEffect(() => {
+    if (isApiMode() && paymentMode === 'early_settlement' && !isAdmin(user)) {
+      api.listAdmins().then((admins) => {
+        setSettlementAdminList(admins);
+        if (admins.length > 0 && !settlementAdminUsername) {
+          setSettlementAdminUsername(admins[0].username);
+        }
+      }).catch(() => {});
+    }
+  }, [paymentMode, user]);
+
   // Daily Closing states
   const [showClosingModal, setShowClosingModal] = useState(false);
   const [closingDate, setClosingDate] = useState(today());
@@ -651,36 +667,52 @@ export default function Payments() {
       }
 
       if (isApiMode()) {
-        const created = await api.createPayment({
-          type: 'in',
-          amount: incomingForm.amount,
-          saleId: selectedSale.id,
-          installmentId: null,
-          customerId: incomingForm.customerId,
-          description:
-            incomingForm.description.trim() ||
-            `تكييش وتصفية الفاتورة ${selectedSale.invoiceNumber}${settlementDiscountAmount > 0 ? ` (خصم تسوية ${formatCurrency(settlementDiscountAmount)})` : ''}`,
-          date: incomingForm.date,
-          channel: 'cash',
-          invoiceNumber: selectedSale.invoiceNumber,
-          isEarlySettlement: true,
-          settlementDiscount: settlementDiscountAmount,
-        });
+        if (!isAdmin(user)) {
+          if (!settlementAdminUsername || !settlementAdminPassword) {
+            setMessage({ type: 'error', text: 'يرجى اختيار الآدمن وإدخال كلمة المرور للموافقة على التسوية المبكرة.' });
+            return;
+          }
+        }
 
-        await loadData();
-        closeModal();
-        setIncomingForm((current) => ({
-          customerId: current.customerId,
-          saleId: '',
-          installmentId: '',
-          amount: 0,
-          date: today(),
-          description: '',
-        }));
-        setPaymentMode('normal');
-        setSettlementDiscountValue(0);
-        setIncomingSubmitMode('save');
-        setMessage({ type: 'success', text: `تم تكييش وتصفية العقد بنجاح برقم إيصال ${created.receiptNumber}.` });
+        try {
+          const created = await api.createPayment({
+            type: 'in',
+            amount: incomingForm.amount,
+            saleId: selectedSale.id,
+            installmentId: null,
+            customerId: incomingForm.customerId,
+            description:
+              incomingForm.description.trim() ||
+              `تكييش وتصفية الفاتورة ${selectedSale.invoiceNumber}${settlementDiscountAmount > 0 ? ` (خصم تسوية ${formatCurrency(settlementDiscountAmount)})` : ''}`,
+            date: incomingForm.date,
+            channel: 'cash',
+            invoiceNumber: selectedSale.invoiceNumber,
+            isEarlySettlement: true,
+            settlementDiscount: settlementDiscountAmount,
+            ...(!isAdmin(user) ? { adminUsername: settlementAdminUsername, adminPassword: settlementAdminPassword } : {}),
+          });
+
+          await loadData();
+          closeModal();
+          setIncomingForm((current) => ({
+            customerId: current.customerId,
+            saleId: '',
+            installmentId: '',
+            amount: 0,
+            date: today(),
+            description: '',
+          }));
+          setPaymentMode('normal');
+          setSettlementDiscountValue(0);
+          setSettlementAdminPassword('');
+          setIncomingSubmitMode('save');
+          setMessage({ type: 'success', text: `تم تكييش وتصفية العقد بنجاح برقم إيصال ${created.receiptNumber}.` });
+        } catch (err: any) {
+          setMessage({
+            type: 'error',
+            text: err.message || 'فشلت عملية تكييش العقد. يرجى التحقق من صحة كلمة مرور المدير وبيانات التسوية.',
+          });
+        }
         return;
       }
 
@@ -888,9 +920,9 @@ export default function Payments() {
 
 
   return (
-    <div className="space-y-3">
+    <div className="desktop-view-container">
       {/* Unified Compact Header Strip */}
-      <div className="erp-action-bar">
+      <div className="erp-action-bar shrink-0">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-black text-slate-900 shrink-0">الخزينة والتحصيل</h2>
           <span className="text-xs bg-slate-100 px-2.5 py-1 rounded-md font-bold text-slate-600">
@@ -931,7 +963,7 @@ export default function Payments() {
 
       {message && (
         <div
-          className={`rounded-xl border px-4 py-2.5 text-xs font-bold ${
+          className={`shrink-0 rounded-xl border px-4 py-2.5 text-xs font-bold ${
             message.type === 'success'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : 'border-rose-200 bg-rose-50 text-rose-700'
@@ -941,7 +973,8 @@ export default function Payments() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Tier 2: Fixed Height KPI Cards Bar */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 shrink-0">
         <StatCard
           icon={<Banknote size={20} className="text-indigo-600" />}
           label="إجمالي النقدية بالخزينة (الرصيد الكلي)"
@@ -968,37 +1001,45 @@ export default function Payments() {
         />
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
-        <div className="overflow-x-auto h-[calc(100vh-210px)]">
-          <table className="w-full min-w-[850px]">
-            <thead className="bg-slate-50 border-b border-slate-200">
+      {/* Tier 3: Flexible & Scrollable Data Table Card */}
+      <div className="desktop-table-card">
+        <div className="desktop-table-scroll">
+          <table className="w-full min-w-[850px] border-collapse">
+            <thead className="desktop-sticky-header">
               <tr>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">نوع الحركة</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">اسم الطرف الآخر</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الفاتورة / القسط</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">البيان / الوصف</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">التاريخ</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">المبلغ</th>
+                <th className="py-2.5 px-4 text-right">نوع الحركة</th>
+                <th className="py-2.5 px-4 text-right">اسم الطرف الآخر</th>
+                <th className="py-2.5 px-4 text-right">رقم الفاتورة / القسط</th>
+                <th className="py-2.5 px-4 text-right">البيان / الوصف</th>
+                <th className="py-2.5 px-4 text-right">التاريخ</th>
+                <th className="py-2.5 px-4 text-right">المبلغ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
-                    <div className="flex items-center justify-center gap-2">
-                      <span className="animate-spin text-blue-600">⏳</span>
-                      <span>جاري تحميل الحركات المالية...</span>
+                  <td colSpan={6} className="py-16 px-4 text-center text-slate-400">
+                    <div className="flex flex-col items-center justify-center gap-2 min-h-[220px]">
+                      <span className="animate-spin text-2xl text-blue-600">⏳</span>
+                      <span className="text-xs font-bold text-slate-600">جاري تحميل الحركات المالية...</span>
                     </div>
                   </td>
                 </tr>
               ) : todayPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
-                    لا توجد معاملات مضافة بتاريخ اليوم
+                  <td colSpan={6} className="py-16 px-4 text-center text-slate-400">
+                    <div className="flex flex-col items-center justify-center gap-2.5 min-h-[220px]">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+                        <Banknote size={24} />
+                      </div>
+                      <p className="text-sm font-bold text-slate-700">لا توجد معاملات مضافة بتاريخ اليوم</p>
+                      <p className="text-xs text-slate-400">سجل سداد عميل جديد أو دفعة مورد للبدء في حركة اليومية</p>
+                    </div>
                   </td>
                 </tr>
-              ) : todayPayments.map((payment) => {
-                const customerName =
+              ) : (
+                todayPayments.map((payment) => {
+                  const customerName =
                   customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
                 const supplierName =
                   suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '-';
@@ -1034,11 +1075,11 @@ export default function Payments() {
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>
-        <div className="erp-status-bar">
+        <div className="erp-status-bar shrink-0">
           <span className="font-bold text-slate-700">معاملات الخزينة اليوم: <span className="text-blue-700 font-extrabold">{todayPayments.length}</span></span>
           <span className="font-bold text-slate-700">صافي الحركة اليومية: <span className="text-emerald-700 font-extrabold">{formatCurrency(todayNetMovement)}</span></span>
         </div>
@@ -1138,6 +1179,40 @@ export default function Payments() {
                           <div className="flex items-center justify-between rounded-xl bg-white border border-amber-200 px-4 py-2.5">
                             <span className="text-sm font-bold text-slate-700">صافي التسوية المطلوب</span>
                             <span className="text-lg font-black text-emerald-700">{formatCurrency(netSettlementRequired)}</span>
+                          </div>
+                        )}
+                        {isApiMode() && !isAdmin(user) && (
+                          <div className="rounded-xl border border-amber-300 bg-amber-50/70 p-4 space-y-3">
+                            <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+                              <Lock size={16} />
+                              <span>الموافقة الإدارية للتسوية المبكرة</span>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div>
+                                <label className="block text-xs font-bold text-slate-700 mb-1">المدير الموافق</label>
+                                <select
+                                  value={settlementAdminUsername}
+                                  onChange={(e) => setSettlementAdminUsername(e.target.value)}
+                                  className="input-ui bg-white"
+                                >
+                                  {settlementAdminList.map((adm) => (
+                                    <option key={adm.id} value={adm.username}>
+                                      {adm.name} ({adm.username})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-slate-700 mb-1">كلمة مرور المدير</label>
+                                <input
+                                  type="password"
+                                  value={settlementAdminPassword}
+                                  onChange={(e) => setSettlementAdminPassword(e.target.value)}
+                                  placeholder="أدخل كلمة المرور للتأكيد"
+                                  className="input-ui bg-white"
+                                />
+                              </div>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1657,12 +1732,12 @@ function StatCard({
   }[tone];
 
   return (
-    <div className={`rounded-xl border p-4 ${toneClass} shadow-none`}>
-      <div className="flex items-center gap-3">
+    <div className={`rounded-xl border p-3.5 ${toneClass} shadow-xs h-20 flex items-center`}>
+      <div className="flex items-center gap-3 w-full">
         <div className="rounded-lg bg-white p-2.5 shadow-none shrink-0 border border-slate-100">{icon}</div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-bold text-slate-500 truncate">{label}</p>
-          <p className="mt-0.5 text-lg font-black text-slate-900 tabular-nums">{value}</p>
+          <p className="mt-0.5 text-lg font-black text-slate-900 tabular-nums truncate">{value}</p>
         </div>
       </div>
     </div>

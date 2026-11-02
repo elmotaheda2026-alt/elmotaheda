@@ -762,80 +762,85 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       return res.status(400).json({ message: 'Customer not found' });
     }
 
-    const oldItems = await db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', req.params.id);
-    for (const item of oldItems) {
-      await db.run(
-        `UPDATE products
-         SET quantity = quantity + ?,
+    await db.withTransaction(async (txDb) => {
+      const oldItems = (await txDb.all(
+        'SELECT * FROM sale_items WHERE sale_id = ?',
+        req.params.id,
+      )) as SaleItemRow[];
+      for (const item of oldItems) {
+        await txDb.run(
+          `UPDATE products
+           SET quantity = quantity + ?,
+               updated_at = ?
+           WHERE id = ? AND fulfillment_type = 'stocked'`,
+          item.quantity,
+          now,
+          item.product_id,
+        );
+      }
+
+      await txDb.run(
+        `UPDATE customers
+         SET balance = balance - ?,
              updated_at = ?
-         WHERE id = ? AND fulfillment_type = 'stocked'`,
-        item.quantity,
+         WHERE id = ?`,
+        existing.remaining,
         now,
-        item.product_id,
+        existing.customer_id,
       );
-    }
 
-    await db.run(
-      `UPDATE customers
-       SET balance = balance - ?,
-           updated_at = ?
-       WHERE id = ?`,
-      existing.remaining,
-      now,
-      existing.customer_id,
-    );
+      await txDb.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
+      await txDb.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
 
-    await db.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
-    await db.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
+      await txDb.run(
+        `UPDATE sales
+         SET invoice_number = ?, customer_id = ?, customer_name = ?, total = ?, paid = ?, remaining = ?,
+             status = ?, date = ?, notes = ?, version = version + 1, locked = 0,
+             last_edited_by = ?, last_edited_at = ?, subtotal = ?, discount = ?, tax = ?,
+             payment_method = ?, manual_invoice_ref = ?, sales_rep_id = ?, sales_rep_name = ?,
+             commission_rate = ?, commission_amount = ?, installment_months = ?, installment_start_date = ?,
+             upfront_amount = ?, monthly_installment_amount = ?
+         WHERE id = ?`,
+        data.invoiceNumber,
+        data.customerId,
+        data.customerName,
+        data.total,
+        data.paid,
+        remaining,
+        status,
+        data.date,
+        data.notes || null,
+        req.user?.name || 'system',
+        now,
+        data.subtotal,
+        data.discount,
+        data.tax,
+        data.financing?.paymentMethod || 'cash',
+        data.financing?.manualInvoiceRef || null,
+        data.financing?.salesRepId || null,
+        data.financing?.salesRepName || null,
+        data.financing?.commissionRate || null,
+        data.financing?.commissionAmount || null,
+        data.financing?.installmentMonths || null,
+        data.financing?.installmentStartDate || null,
+        data.financing?.upfrontAmount || null,
+        data.financing?.monthlyInstallmentAmount || null,
+        req.params.id,
+      );
 
-    await db.run(
-      `UPDATE sales
-       SET invoice_number = ?, customer_id = ?, customer_name = ?, total = ?, paid = ?, remaining = ?,
-           status = ?, date = ?, notes = ?, version = version + 1, locked = 0,
-           last_edited_by = ?, last_edited_at = ?, subtotal = ?, discount = ?, tax = ?,
-           payment_method = ?, manual_invoice_ref = ?, sales_rep_id = ?, sales_rep_name = ?,
-           commission_rate = ?, commission_amount = ?, installment_months = ?, installment_start_date = ?,
-           upfront_amount = ?, monthly_installment_amount = ?
-       WHERE id = ?`,
-      data.invoiceNumber,
-      data.customerId,
-      data.customerName,
-      data.total,
-      data.paid,
-      remaining,
-      status,
-      data.date,
-      data.notes || null,
-      req.user?.name || 'system',
-      now,
-      data.subtotal,
-      data.discount,
-      data.tax,
-      data.financing?.paymentMethod || 'cash',
-      data.financing?.manualInvoiceRef || null,
-      data.financing?.salesRepId || null,
-      data.financing?.salesRepName || null,
-      data.financing?.commissionRate || null,
-      data.financing?.commissionAmount || null,
-      data.financing?.installmentMonths || null,
-      data.financing?.installmentStartDate || null,
-      data.financing?.upfrontAmount || null,
-      data.financing?.monthlyInstallmentAmount || null,
-      req.params.id,
-    );
+      await insertSaleItemsAndAdjustStock(txDb, req.params.id, data.items, now);
+      await insertInstallmentSchedules(txDb, req.params.id, data, remaining);
 
-    await insertSaleItemsAndAdjustStock(db, req.params.id, data.items, now);
-    await insertInstallmentSchedules(db, req.params.id, data, remaining);
-
-    await db.run(
-      `UPDATE customers
-       SET balance = balance + ?,
-           updated_at = ?
-       WHERE id = ?`,
-      remaining,
-      now,
-      data.customerId,
-    );
+      await txDb.run(
+        `UPDATE customers
+         SET balance = balance + ?,
+             updated_at = ?
+         WHERE id = ?`,
+        remaining,
+        now,
+        data.customerId,
+      );
+    });
 
     await audit('sale.update', 'sale', req.params.id, req.user?.name || 'system', {
       invoiceNumber: data.invoiceNumber,
@@ -862,106 +867,110 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
       return res.status(404).json({ message: 'Sale not found' });
     }
 
-    const oldItems = await db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', req.params.id);
-    const linkedPurchases = await db.all<{
-      id: string;
-      supplier_id: string;
-      remaining: number;
-    }>(
+    const oldItems = (await db.all(
+      'SELECT * FROM sale_items WHERE sale_id = ?',
+      req.params.id,
+    )) as SaleItemRow[];
+
+    const linkedPurchases = (await db.all(
       `SELECT id, supplier_id, remaining
        FROM purchases
        WHERE notes LIKE ?`,
       `%${existing.invoice_number}%`,
-    );
+    )) as { id: string; supplier_id: string; remaining: number }[];
+
     const linkedPurchaseIds = linkedPurchases.map((purchase) => purchase.id);
-    const linkedPurchaseItems = linkedPurchaseIds.length
-      ? await db.all<{ purchase_id: string; product_id: string; quantity: number }>(
-        `SELECT purchase_id, product_id, quantity
-           FROM purchase_items
-           WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-        ...linkedPurchaseIds,
-      )
-      : [];
 
-    for (const item of oldItems) {
-      await db.run(
-        `UPDATE products
-         SET quantity = quantity + ?,
-             updated_at = ?
-         WHERE id = ? AND fulfillment_type = 'stocked'`,
-        item.quantity,
-        now,
-        item.product_id,
-      );
-    }
+    await db.withTransaction(async (txDb) => {
+      const linkedPurchaseItems = linkedPurchaseIds.length
+        ? ((await txDb.all(
+          `SELECT purchase_id, product_id, quantity
+             FROM purchase_items
+             WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+          linkedPurchaseIds,
+        )) as { purchase_id: string; product_id: string; quantity: number }[])
+        : [];
 
-    for (const item of linkedPurchaseItems) {
-      await db.run(
-        `UPDATE products
-         SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
-             updated_at = ?
-         WHERE id = ? AND fulfillment_type = 'stocked'`,
-        item.quantity,
-        item.quantity,
-        now,
-        item.product_id,
-      );
-    }
+      for (const item of oldItems) {
+        await txDb.run(
+          `UPDATE products
+           SET quantity = quantity + ?,
+               updated_at = ?
+           WHERE id = ? AND fulfillment_type = 'stocked'`,
+          item.quantity,
+          now,
+          item.product_id,
+        );
+      }
 
-    for (const purchase of linkedPurchases) {
-      await db.run(
-        `UPDATE suppliers
+      for (const item of linkedPurchaseItems) {
+        await txDb.run(
+          `UPDATE products
+           SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
+               updated_at = ?
+           WHERE id = ? AND fulfillment_type = 'stocked'`,
+          item.quantity,
+          item.quantity,
+          now,
+          item.product_id,
+        );
+      }
+
+      for (const purchase of linkedPurchases) {
+        await txDb.run(
+          `UPDATE suppliers
+           SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
+               updated_at = ?
+           WHERE id = ?`,
+          purchase.remaining,
+          purchase.remaining,
+          now,
+          purchase.supplier_id,
+        );
+      }
+
+      await txDb.run(
+        `UPDATE customers
          SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
              updated_at = ?
          WHERE id = ?`,
-        purchase.remaining,
-        purchase.remaining,
+        existing.remaining,
+        existing.remaining,
         now,
-        purchase.supplier_id,
+        existing.customer_id,
       );
-    }
 
-    await db.run(
-      `UPDATE customers
-       SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
-           updated_at = ?
-       WHERE id = ?`,
-      existing.remaining,
-      existing.remaining,
-      now,
-      existing.customer_id,
-    );
-
-    await db.run(
-      `DELETE FROM payments
-       WHERE sale_id = ?
-          OR reference_id = ?
-          OR invoice_number = ?`,
-      req.params.id,
-      req.params.id,
-      existing.invoice_number,
-    );
-    await db.run('DELETE FROM collection_tasks WHERE sale_id = ?', req.params.id);
-    await db.run('DELETE FROM reschedule_requests WHERE sale_id = ?', req.params.id);
-    await db.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
-    await db.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
-    if (linkedPurchaseIds.length) {
-      await db.run(
-        `DELETE FROM purchase_items WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-        ...linkedPurchaseIds,
-      );
-      await db.run(
+      await txDb.run(
         `DELETE FROM payments
-         WHERE reference_type = 'purchase'
-           AND reference_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-        ...linkedPurchaseIds,
+         WHERE sale_id = ?
+            OR reference_id = ?
+            OR invoice_number = ?`,
+        req.params.id,
+        req.params.id,
+        existing.invoice_number,
       );
-      await db.run(
-        `DELETE FROM purchases WHERE id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-        ...linkedPurchaseIds,
-      );
-    }
-    await db.run('DELETE FROM sales WHERE id = ?', req.params.id);
+      await txDb.run('DELETE FROM collection_tasks WHERE sale_id = ?', req.params.id);
+      await txDb.run('DELETE FROM reschedule_requests WHERE sale_id = ?', req.params.id);
+      await txDb.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
+      await txDb.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
+      if (linkedPurchaseIds.length) {
+        await txDb.run(
+          `DELETE FROM purchase_items WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+          ...linkedPurchaseIds,
+        );
+        await txDb.run(
+          `DELETE FROM payments
+           WHERE reference_type = 'purchase'
+             AND reference_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+          ...linkedPurchaseIds,
+        );
+        await txDb.run(
+          `DELETE FROM purchases WHERE id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
+          ...linkedPurchaseIds,
+        );
+      }
+      await txDb.run('DELETE FROM sales WHERE id = ?', req.params.id);
+    });
 
     await audit('sale.delete', 'sale', req.params.id, req.user?.name || 'system', {
       invoiceNumber: existing.invoice_number,

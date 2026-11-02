@@ -339,10 +339,35 @@ export async function initDb(): Promise<void> {
     image NVARCHAR(MAX),
     guarantors NVARCHAR(MAX),
     is_sued BIT NOT NULL DEFAULT 0,
-    sued_date NVARCHAR(40),
+    sued_date NVARCHAR(40) DEFAULT SYSDATETIME(),
     created_at NVARCHAR(40) NOT NULL,
     updated_at NVARCHAR(40) NOT NULL
   );
+
+  -- Migration fix for legal referral date (sued_date): set DEFAULT GETDATE() constraint & update NULLs
+  IF OBJECT_ID('customers', 'U') IS NOT NULL
+  BEGIN
+    -- Ensure DEFAULT GETDATE() constraint on sued_date in SQL Server
+    IF NOT EXISTS (
+      SELECT * FROM sys.default_constraints 
+      WHERE parent_object_id = OBJECT_ID('customers') 
+        AND col_name(parent_object_id, parent_column_id) = 'sued_date'
+    )
+    BEGIN
+      ALTER TABLE customers ADD CONSTRAINT DF_customers_sued_date DEFAULT GETDATE() FOR sued_date;
+    END
+
+    -- If any legacy legal customer has missing or bad epoch sued_date, fall back to created_at
+    UPDATE customers 
+    SET sued_date = created_at
+    WHERE is_sued = 1 AND (
+      sued_date IS NULL 
+      OR sued_date = '' 
+      OR sued_date = '0'
+      OR sued_date LIKE '%1970%'
+      OR sued_date LIKE '0001%'
+    );
+  END
 
   -- 3. Suppliers
   IF OBJECT_ID('suppliers', 'U') IS NULL

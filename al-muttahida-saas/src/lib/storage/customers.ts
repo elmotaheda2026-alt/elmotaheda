@@ -47,8 +47,29 @@ export async function createCustomer(customer: Omit<Customer, 'id' | 'createdAt'
   return newCustomer;
 }
 
+export async function toggleCustomerSued(id: string, isSued: boolean, suedDate?: string): Promise<Customer | null> {
+  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+  const index = customers.findIndex(c => c.id === id);
+  if (index === -1) return null;
+
+  const now = new Date().toISOString();
+  const finalSuedDate = isSued ? (suedDate || now) : undefined;
+
+  if (isApiMode()) {
+    await api.toggleCustomerSued(id, isSued, finalSuedDate);
+  }
+
+  customers[index] = {
+    ...customers[index],
+    isSued,
+    suedDate: finalSuedDate,
+    updatedAt: now,
+  };
+  setStorage(DB_KEYS.CUSTOMERS, customers);
+  return customers[index];
+}
+
 export async function updateCustomer(id: string, updates: Partial<Customer>): Promise<Customer | null> {
-  const requiredFields = ['name', 'phone', 'address', 'city', 'governorate', 'region', 'nationalId'];
   const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
   const index = customers.findIndex(c => c.id === id);
 
@@ -56,6 +77,13 @@ export async function updateCustomer(id: string, updates: Partial<Customer>): Pr
     return null;
   }
 
+  // If this is a legal referral toggle only, delegate to toggleCustomerSued safely
+  const updateKeys = Object.keys(updates);
+  if (updateKeys.every(k => k === 'isSued' || k === 'suedDate')) {
+    return toggleCustomerSued(id, !!updates.isSued, updates.suedDate);
+  }
+
+  const requiredFields = ['name', 'phone', 'address', 'city', 'governorate', 'region', 'nationalId'];
   const merged = { ...customers[index], ...updates } as Customer;
   const missing = requiredFields.filter((field) => !(field in merged) || !merged[field as keyof typeof merged]);
   if (missing.length > 0) {

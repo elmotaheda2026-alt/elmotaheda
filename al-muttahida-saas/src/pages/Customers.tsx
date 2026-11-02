@@ -6,7 +6,7 @@ import {
   Grid, List, TrendingUp, UserCheck, Coins, Eye
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../lib/storage';
+import { getCustomers, createCustomer, updateCustomer, toggleCustomerSued, deleteCustomer } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { isAdmin } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
@@ -236,6 +236,39 @@ export default function Customers() {
     setError(null);
   };
 
+  const handleToggleSued = async (customer: Customer) => {
+    const nextState = !customer.isSued;
+    const confirmMsg = nextState
+      ? `هل أنت متأكد من تحويل العميل "${customer.name}" للشئون القانونية (النزاعات)؟`
+      : `هل أنت متأكد من إلغاء تحويل العميل "${customer.name}" من الشئون القانونية؟`;
+    if (!confirm(confirmMsg)) return;
+
+    const now = new Date().toISOString();
+    // Optimistic update
+    setCustomers(prev => prev.map(c =>
+      c.id === customer.id
+        ? { ...c, isSued: nextState, suedDate: nextState ? (c.suedDate || now) : undefined, updatedAt: now }
+        : c
+    ));
+
+    try {
+      if (isApiMode()) {
+        await api.toggleCustomerSued(customer.id, nextState, nextState ? now : undefined);
+      } else {
+        await toggleCustomerSued(customer.id, nextState, nextState ? now : undefined);
+      }
+      await loadCustomers();
+    } catch (err: any) {
+      // Rollback on failure
+      setCustomers(prev => prev.map(c =>
+        c.id === customer.id
+          ? { ...c, isSued: customer.isSued, suedDate: customer.suedDate, updatedAt: customer.updatedAt }
+          : c
+      ));
+      alert(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.');
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (confirm('هل أنت متأكد من حذف هذا العميل؟')) {
       try {
@@ -346,20 +379,23 @@ export default function Customers() {
         const balance = Number(customer.balance || 0);
         stats.totalCustomersCount += 1;
         if (customer.isSued) stats.suedCustomersCount += 1;
-        if (Math.round(balance) > 0 && !customer.isSued) stats.activeCustomersCount += 1;
+        if (Math.round(balance) > 0 && !customer.isSued) {
+          stats.activeCustomersCount += 1;
+          stats.totalDebt += balance;
+        }
         return stats;
       },
-      { totalCustomersCount: 0, suedCustomersCount: 0, activeCustomersCount: 0 },
+      { totalCustomersCount: 0, suedCustomersCount: 0, activeCustomersCount: 0, totalDebt: 0 },
     ),
     [customers],
   );
 
-  const { totalCustomersCount, suedCustomersCount, activeCustomersCount } = customerStats;
+  const { totalCustomersCount, suedCustomersCount, activeCustomersCount, totalDebt } = customerStats;
 
   return (
-    <div className="space-y-2">
-      {/* Unified Compact Header Strip */}
-      <div className="erp-action-bar">
+    <div className="desktop-view-container">
+      {/* Tier 1: Fixed Compact Header Strip */}
+      <div className="erp-action-bar shrink-0">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-lg font-black text-slate-900 shrink-0">العملاء</h2>
           <div className="flex bg-slate-100 rounded-lg p-0.5 shrink-0">
@@ -407,7 +443,7 @@ export default function Customers() {
             />
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={handleNew}
             className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs"
@@ -418,65 +454,75 @@ export default function Customers() {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="hidden grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Customers */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-bold text-slate-500 block">إجمالي العملاء</span>
-            <span className="text-2xl font-black text-slate-900">{totalCustomersCount}</span>
+      {/* Tier 2: Fixed Height KPI Cards Bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
+        <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
+          <div className="min-w-0">
+            <span className="text-xs font-bold text-slate-500 block truncate">إجمالي العملاء</span>
+            <span className="text-xl font-black text-slate-900 tabular-nums">{totalCustomersCount}</span>
           </div>
-          <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
-            <Users size={22} />
-          </div>
-        </div>
-
-        {/* Active Customers */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-bold text-slate-500 block">العملاء النشطون</span>
-            <span className="text-2xl font-black text-slate-900">{activeCustomersCount}</span>
-          </div>
-          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600">
-            <UserCheck size={22} />
+          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shrink-0 border border-indigo-100">
+            <Users size={20} />
           </div>
         </div>
 
-
-
-        {/* Sued Customers */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs font-bold text-slate-500 block">قضايا ونزاعات</span>
-            <span className="text-2xl font-black text-rose-600">{suedCustomersCount}</span>
+        <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
+          <div className="min-w-0">
+            <span className="text-xs font-bold text-slate-500 block truncate">العملاء المدينون</span>
+            <span className="text-xl font-black text-emerald-700 tabular-nums">{activeCustomersCount}</span>
           </div>
-          <div className="w-12 h-12 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-600">
-            <Gavel size={22} />
+          <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600 shrink-0 border border-emerald-100">
+            <UserCheck size={20} />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
+          <div className="min-w-0">
+            <span className="text-xs font-bold text-slate-500 block truncate">قضايا ونزاعات</span>
+            <span className="text-xl font-black text-rose-600 tabular-nums">{suedCustomersCount}</span>
+          </div>
+          <div className="w-10 h-10 bg-rose-50 rounded-xl flex items-center justify-center text-rose-600 shrink-0 border border-rose-100">
+            <Gavel size={20} />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
+          <div className="min-w-0">
+            <span className="text-xs font-bold text-slate-500 block truncate">إجمالي المديونيات</span>
+            <span className="text-lg font-black text-rose-700 tabular-nums truncate">{formatCurrency(totalDebt)}</span>
+          </div>
+          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 shrink-0 border border-amber-100">
+            <Coins size={20} />
           </div>
         </div>
       </div>
 
-      {/* Customers List / Grid */}
+      {/* Tier 3: Flexible & Scrollable Customers Table */}
       {viewMode === 'table' ? (
-        <div className="bg-white rounded-lg shadow-2xs border border-slate-200 overflow-hidden">
-          <div className="overflow-auto h-[calc(100vh-210px)]">
+        <div className="desktop-table-card">
+          <div className="desktop-table-scroll">
             <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">كود العميل</th>
-                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">اسم العميل</th>
-                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الهاتف</th>
-                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">العنوان</th>
-                  <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الرصيد الحالي</th>
-                  <th className="py-2.5 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
+              <thead className="desktop-sticky-header">
+                <tr>
+                  <th className="py-2.5 px-4 text-right">كود العميل</th>
+                  <th className="py-2.5 px-4 text-right">اسم العميل</th>
+                  <th className="py-2.5 px-4 text-right">رقم الهاتف</th>
+                  <th className="py-2.5 px-4 text-right">العنوان</th>
+                  <th className="py-2.5 px-4 text-right">الرصيد الحالي</th>
+                  <th className="py-2.5 px-4 text-center">إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredCustomers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-12 px-4 text-center text-slate-400">
-                      <Users size={36} className="mx-auto mb-2 text-slate-300" />
-                      <p className="text-xs font-bold">لا يوجد عملاء مطابِقين للبحث الحالي</p>
+                    <td colSpan={6} className="py-16 px-4 text-center text-slate-400">
+                      <div className="flex flex-col items-center justify-center gap-2.5 min-h-[220px]">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+                          <Users size={24} />
+                        </div>
+                        <p className="text-sm font-bold text-slate-700">لا يوجد عملاء مطابِقين للبحث الحالي</p>
+                        <p className="text-xs text-slate-400">تأكد من كتابة الاسم أو رقم الهاتف بشكل صحيح، أو قم بمسح التصفية</p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
@@ -513,6 +559,13 @@ export default function Customers() {
                       <td className="py-2.5 px-4">
                         <div className="erp-icon-actions">
                           <button
+                            onClick={(e) => { e.stopPropagation(); void handleToggleSued(customer); }}
+                            className={`p-1.5 rounded-md transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
+                            title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
+                          >
+                            <Gavel size={15} />
+                          </button>
+                          <button
                             onClick={() => handleEdit(customer)}
                             className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
                             title="تعديل"
@@ -548,8 +601,9 @@ export default function Customers() {
             </div>
           )}
           {/* Sticky Summary Footer Bar */}
-          <div className="erp-status-bar">
+          <div className="erp-status-bar shrink-0">
             <span className="font-bold text-slate-700">إجمالي السجلات: <span className="text-blue-700 font-extrabold">{filteredCustomers.length}</span> (المعروض: {visibleCustomers.length})</span>
+            <span className="font-bold text-slate-700">إجمالي المديونيات: <span className="text-rose-700 font-extrabold">{formatCurrency(totalDebt)}</span></span>
           </div>
         </div>
       ) : (
@@ -587,6 +641,13 @@ export default function Customers() {
 
                     {/* Actions Dropdown / Icons */}
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => handleToggleSued(customer)}
+                        className={`p-1.5 rounded-lg transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
+                        title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
+                      >
+                        <Gavel size={14} />
+                      </button>
                       <button
                         onClick={() => handleEdit(customer)}
                         className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"

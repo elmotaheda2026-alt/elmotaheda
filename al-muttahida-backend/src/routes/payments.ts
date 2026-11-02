@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid, formatDate, parseDateInput } from '../utils.js';
+import { uid, formatDate, parseDateInput, comparePassword } from '../utils.js';
 import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
 
 const router = Router();
@@ -53,6 +53,8 @@ const paymentSchema = z.object({
   affectsCustomerBalance: z.boolean().default(true),
   isEarlySettlement: z.boolean().optional().default(false),
   settlementDiscount: z.number().nonnegative().optional().default(0),
+  adminUsername: z.string().optional(),
+  adminPassword: z.string().optional(),
 });
 
 // GET /payments
@@ -154,10 +156,34 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       return res.status(400).json({ message: 'لا يمكن تسجيل عملية دفع في تاريخ مغلق مالياً' });
     }
 
+    let authorizingAdminName: string | null = null;
+
     if (data.isEarlySettlement) {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ message: 'خاصية تكييش وتصفية العقد مخصصة للمدير فقط' });
+        const { adminUsername, adminPassword } = data;
+        if (!adminUsername || !adminPassword) {
+          return res.status(403).json({
+            message: 'تكييش وتصفية العقد تتطلب موافقة المدير. يرجى اختيار المدير وإدخال كلمة المرور.',
+          });
+        }
+
+        const adminUser = await db.get<{ id: string; name: string; username: string; role: string; password_hash: string; is_active: number | boolean }>(
+          "SELECT id, name, username, role, password_hash, is_active FROM users WHERE username = ? AND role = 'admin'",
+          adminUsername,
+        );
+
+        if (!adminUser || !(adminUser.is_active === 1 || adminUser.is_active === true)) {
+          return res.status(403).json({ message: 'حساب المدير المحدد غير موجود أو غير نشط' });
+        }
+
+        const passwordMatch = await comparePassword(adminPassword, adminUser.password_hash);
+        if (!passwordMatch) {
+          return res.status(401).json({ message: 'كلمة مرور المدير غير صحيحة، تم رفض الموافقة' });
+        }
+
+        authorizingAdminName = adminUser.name || adminUser.username;
       }
+
       if (!data.saleId) {
         return res.status(400).json({ message: 'يجب اختيار الفاتورة/العقد المراد تكييشه' });
       }
@@ -337,9 +363,11 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
         amount: data.amount,
         discount: data.settlementDiscount,
         saleId: data.saleId,
+        authorizedBy: authorizingAdminName || (req.user?.role === 'admin' ? req.user?.name : null),
       });
 
-      const detailedMessage = `تكييش وتصفية عقد: استلام ${formatMoney(data.amount)} (خصم تسوية ${formatMoney(data.settlementDiscount)}) - إيصال ${receiptNumber} - عميل ${clientName} - فاتورة ${data.invoiceNumber || ''}`;
+      const adminNote = authorizingAdminName ? ` بموافقة المدير: ${authorizingAdminName}` : '';
+      const detailedMessage = `تكييش وتصفية عقد: استلام ${formatMoney(data.amount)} (خصم تسوية ${formatMoney(data.settlementDiscount)}) - إيصال ${receiptNumber} - عميل ${clientName} - فاتورة ${data.invoiceNumber || ''}${adminNote}`;
       await createSystemNotification(
         'success',
         'تكييش وتصفية عقد',
@@ -388,143 +416,145 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
     if (req.user?.role !== 'admin' && (await isPeriodClosed(db, original.date) || await isPeriodClosed(db, now.slice(0, 10)))) {
       return res.status(400).json({ message: 'لا يمكن عكس حركة مالية في تاريخ مغلق مالياً' });
     }
-    // 1. If reversing a sale payment, deduct from paid and add back to remaining
-    if (original.sale_id && original.type === 'in') {
-      await db.run(
-        `UPDATE sales
-         SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
-             remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
-             status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
-         WHERE id = ?`,
-        original.amount,
-        original.amount,
-        original.amount,
-        original.amount,
-        original.amount,
-        original.sale_id,
-      );
-
-      // Revert schedules
-      if (original.installment_id) {
-        const schedule = await db.get<{ id: string; paid_amount: number; sale_id: string }>(
-          'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE id = ?',
-          original.installment_id,
-        );
-        if (schedule) {
-          const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - original.amount).toFixed(2)));
-          const scheduleStatus = nextPaidAmount <= 0 ? 'unpaid' : 'partial';
-          const latestPayment = nextPaidAmount > 0 ? await db.get<{ date: string }>(
-            'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
-            schedule.sale_id,
-            original.id,
-          ) : null;
-          await db.run(
-            `UPDATE installment_schedules
-             SET paid_amount = ?,
-                 status = ?,
-                 paid_at = ?
-             WHERE id = ?`,
-            nextPaidAmount,
-            scheduleStatus,
-            latestPayment ? latestPayment.date : null,
-            original.installment_id,
-          );
-        }
-      } else {
-        // Auto-revert schedules in reverse order (month_index DESC)
-        const schedules = await db.all<{ id: string; paid_amount: number; sale_id: string }>(
-          'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
+    await db.withTransaction(async (tx) => {
+      // 1. If reversing a sale payment, deduct from paid and add back to remaining
+      if (original.sale_id && original.type === 'in') {
+        await tx.run(
+          `UPDATE sales
+           SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
+               remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
+               status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
+           WHERE id = ?`,
+          original.amount,
+          original.amount,
+          original.amount,
+          original.amount,
+          original.amount,
           original.sale_id,
         );
-        let remainingRevert = original.amount;
-        for (const sch of schedules) {
-          if (remainingRevert <= 0) break;
-          const applied = Math.min(sch.paid_amount, remainingRevert);
-          const nextPaidAmount = Number((sch.paid_amount - applied).toFixed(2));
-          remainingRevert = Number((remainingRevert - applied).toFixed(2));
 
-          const latestPayment = nextPaidAmount > 0 ? await db.get<{ date: string }>(
-            'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
-            sch.sale_id,
-            original.id,
-          ) : null;
+        // Revert schedules
+        if (original.installment_id) {
+          const schedule = (await tx.get(
+            'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE id = ?',
+            original.installment_id,
+          )) as { id: string; paid_amount: number; sale_id: string } | undefined;
+          if (schedule) {
+            const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - original.amount).toFixed(2)));
+            const scheduleStatus = nextPaidAmount <= 0 ? 'unpaid' : 'partial';
+            const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
+              'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+              schedule.sale_id,
+              original.id,
+            )) as { date: string } | undefined) : null;
+            await tx.run(
+              `UPDATE installment_schedules
+               SET paid_amount = ?,
+                   status = ?,
+                   paid_at = ?
+               WHERE id = ?`,
+              nextPaidAmount,
+              scheduleStatus,
+              latestPayment ? latestPayment.date : null,
+              original.installment_id,
+            );
+          }
+        } else {
+          // Auto-revert schedules in reverse order (month_index DESC)
+          const schedules = (await tx.all(
+            'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
+            original.sale_id,
+          )) as { id: string; paid_amount: number; sale_id: string }[];
+          let remainingRevert = original.amount;
+          for (const sch of schedules) {
+            if (remainingRevert <= 0) break;
+            const applied = Math.min(sch.paid_amount, remainingRevert);
+            const nextPaidAmount = Number((sch.paid_amount - applied).toFixed(2));
+            remainingRevert = Number((remainingRevert - applied).toFixed(2));
 
-          await db.run(
-            `UPDATE installment_schedules
-             SET paid_amount = ?,
-                 status = ?,
-                 paid_at = ?
-             WHERE id = ?`,
-            nextPaidAmount,
-            nextPaidAmount <= 0 ? 'unpaid' : 'partial',
-            latestPayment ? latestPayment.date : null,
-            sch.id,
-          );
+            const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
+              'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+              sch.sale_id,
+              original.id,
+            )) as { date: string } | undefined) : null;
+
+            await tx.run(
+              `UPDATE installment_schedules
+               SET paid_amount = ?,
+                   status = ?,
+                   paid_at = ?
+               WHERE id = ?`,
+              nextPaidAmount,
+              nextPaidAmount <= 0 ? 'unpaid' : 'partial',
+              latestPayment ? latestPayment.date : null,
+              sch.id,
+            );
+          }
         }
       }
-    }
 
-    // 2. Revert Customer Balance (outgoing reverse payment increases debtor balance)
-    if (original.type === 'in' && original.customer_id && original.affects_customer_balance) {
-      await db.run(
-        `UPDATE customers
-         SET balance = balance + ?,
-             updated_at = ?
-         WHERE id = ?`,
+      // 2. Revert Customer Balance (outgoing reverse payment increases debtor balance)
+      if (original.type === 'in' && original.customer_id && original.affects_customer_balance) {
+        await tx.run(
+          `UPDATE customers
+           SET balance = balance + ?,
+               updated_at = ?
+           WHERE id = ?`,
+          original.amount,
+          now,
+          original.customer_id,
+        );
+      }
+
+      // 3. Revert Supplier Balance (incoming reverse payment increases creditor balance we owe them)
+      if (original.type === 'out' && original.supplier_id) {
+        await tx.run(
+          `UPDATE suppliers
+           SET balance = balance + ?,
+               updated_at = ?
+           WHERE id = ?`,
+          original.amount,
+          now,
+          original.supplier_id,
+        );
+      }
+
+      // 4. Create void payment transaction
+      await tx.run(
+        `INSERT INTO payments (
+          id, type, amount, sale_id, installment_id, description, date, receipt_number, status, void_ref, approved_by, channel,
+          reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+          created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        reverseId,
+        reverseType,
         original.amount,
+        original.sale_id || null,
+        original.installment_id || null,
+        `Reverse of ${original.description}`,
+        now.slice(0, 10),
+        receiptNumber,
+        original.id,
+        req.user?.name || 'system',
+        original.channel || 'other',
+        original.reference_id || null,
+        original.reference_type || 'other',
+        original.customer_id || null,
+        original.supplier_id || null,
+        original.invoice_number || null,
+        original.affects_customer_balance === 1 ? 1 : 0,
+        req.user?.name || 'system',
         now,
-        original.customer_id,
       );
-    }
 
-    // 3. Revert Supplier Balance (incoming reverse payment increases creditor balance we owe them)
-    if (original.type === 'out' && original.supplier_id) {
-      await db.run(
-        `UPDATE suppliers
-         SET balance = balance + ?,
-             updated_at = ?
-         WHERE id = ?`,
-        original.amount,
-        now,
-        original.supplier_id,
+      // 5. Update original payment status to voided
+      await tx.run(
+        'UPDATE payments SET status = \'voided\', void_ref = ?, approved_by = ? WHERE id = ?',
+        reverseId,
+        req.user?.name || 'system',
+        original.id,
       );
-    }
-
-    // 4. Create void payment transaction
-    await db.run(
-      `INSERT INTO payments (
-        id, type, amount, sale_id, installment_id, description, date, receipt_number, status, void_ref, approved_by, channel,
-        reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
-        created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      reverseId,
-      reverseType,
-      original.amount,
-      original.sale_id || null,
-      original.installment_id || null,
-      `Reverse of ${original.description}`,
-      now.slice(0, 10),
-      receiptNumber,
-      original.id,
-      req.user?.name || 'system',
-      original.channel || 'other',
-      original.reference_id || null,
-      original.reference_type || 'other',
-      original.customer_id || null,
-      original.supplier_id || null,
-      original.invoice_number || null,
-      original.affects_customer_balance === 1 ? 1 : 0,
-      req.user?.name || 'system',
-      now,
-    );
-
-    // 5. Update original payment status to voided
-    await db.run(
-      'UPDATE payments SET status = \'voided\', void_ref = ?, approved_by = ? WHERE id = ?',
-      reverseId,
-      req.user?.name || 'system',
-      original.id,
-    );
+    });
 
     await audit('payment.reverse', 'payment', original.id, req.user?.name || 'system', { reverseId });
     await createSystemNotification(

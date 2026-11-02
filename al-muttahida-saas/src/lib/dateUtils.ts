@@ -1,14 +1,21 @@
 export function formatDateDisplay(dateStr?: string | Date | null): string {
-  if (!dateStr) return '-';
+  if (!dateStr || dateStr === 'null' || dateStr === 'undefined' || dateStr === '0') return '-';
+
+  if (typeof dateStr === 'string') {
+    const trimmed = dateStr.trim();
+    if (trimmed.includes('1970') || trimmed.startsWith('0001')) return '-';
+    // Already in DD/MM/YYYY format
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) return trimmed;
+  }
 
   const date =
     dateStr instanceof Date
       ? dateStr
-      : /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
-        ? new Date(`${dateStr}T00:00:00`)
+      : typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())
+        ? new Date(`${dateStr.trim()}T00:00:00`)
         : new Date(dateStr);
 
-  if (Number.isNaN(date.getTime())) return String(dateStr);
+  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1970) return '-';
 
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');

@@ -269,7 +269,7 @@ export async function initSqliteTables(db: SqliteDbWrapper): Promise<void> {
       image TEXT,
       guarantors TEXT,
       is_sued INTEGER NOT NULL DEFAULT 0,
-      sued_date TEXT,
+      sued_date TEXT DEFAULT (datetime('now')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -635,6 +635,15 @@ export async function initSqliteTables(db: SqliteDbWrapper): Promise<void> {
     try { await db.run('ALTER TABLE installment_schedules ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
     try { await db.run('ALTER TABLE installment_schedules ADD COLUMN deferred_at TEXT'); } catch (_) {}
     try { await db.run('ALTER TABLE installment_schedules ADD COLUMN notes TEXT'); } catch (_) {}
+
+    // Backfill NULL or invalid 1970 sued_date records in SQLite
+    try {
+      await db.run(
+        `UPDATE customers 
+         SET sued_date = COALESCE(created_at, datetime('now')) 
+         WHERE is_sued = 1 AND (sued_date IS NULL OR sued_date LIKE '1970%' OR sued_date = '' OR sued_date = 'null')`
+      );
+    } catch (_) {}
 
   // Seed default admin user if none exists
   try {

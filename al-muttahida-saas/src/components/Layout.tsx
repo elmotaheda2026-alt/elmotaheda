@@ -18,21 +18,20 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 print:block print:h-auto print:overflow-visible print:bg-white">
-      <div className="print:hidden">
+    <div className="h-screen w-screen overflow-hidden flex bg-slate-100 text-slate-900 print:block print:h-auto print:overflow-visible print:bg-white select-none">
+      <div className="print:hidden shrink-0">
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} onToggle={toggleSidebar} />
       </div>
 
-      <div className={`min-h-screen min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-64 xl:mr-72' : 'lg:mr-16'} print:m-0`}>
-        <div className={`print:hidden fixed top-0 left-0 right-0 z-30 transition-all duration-300 ${sidebarOpen ? 'lg:right-64 xl:right-72' : 'lg:right-16'}`}>
+      <div className={`h-screen flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-64 xl:mr-72' : 'lg:mr-16'} print:m-0 overflow-hidden`}>
+        <div className="print:hidden shrink-0 z-30">
           <Header onMenuClick={toggleSidebar} />
         </div>
 
-        <main className="min-h-screen min-w-0 overflow-y-auto px-3 pb-8 pt-[58px] sm:px-4 md:pt-[60px] print:h-auto print:overflow-visible print:p-0">
+        <main className="flex-1 min-h-0 flex flex-col overflow-hidden p-2.5 sm:p-3 md:p-3.5 print:h-auto print:overflow-visible print:p-0">
           <Outlet />
         </main>
       </div>
     </div>
   );
 }
-

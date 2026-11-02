@@ -112,11 +112,15 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
   const shareholder = shareholders[index];
   
   if (isApiMode()) {
-    const res = await api.createShareholderTransaction(data);
+    const txDate = (data as any).date || new Date().toISOString().split('T')[0];
+    const res = await api.createShareholderTransaction({
+      ...data,
+      date: txDate,
+    });
     const newTx: ShareholderTransaction = {
       ...data,
       id: res.id,
-      date: new Date().toISOString(),
+      date: txDate,
       createdAt: new Date().toISOString()
     };
     
@@ -234,8 +238,12 @@ export async function deleteShareholderTransaction(txId: string): Promise<Shareh
   const shIndex = shareholders.findIndex(s => s.id === tx.shareholderId);
 
   if (isApiMode()) {
-    // API will handle reversal, we just remove locally
-    // Note: Backend should have a DELETE endpoint for shareholder transactions
+    try {
+      await api.deleteShareholderTransaction(txId);
+    } catch (err) {
+      console.error('Failed to delete shareholder transaction on API:', err);
+      throw err;
+    }
   }
 
   // Reverse the transaction effects on the shareholder
