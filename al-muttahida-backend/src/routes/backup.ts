@@ -4,6 +4,7 @@ import { dbPromise, poolPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { hashPassword, uid } from '../utils.js';
+import { getAutoBackupConfig, updateAutoBackupConfig, performAutoBackup } from '../autoBackupService.js';
 
 const router = Router();
 router.use(requireAuth, requirePermission('settings:manage'));
@@ -134,7 +135,7 @@ function normalizeBackupRow(row: any) {
   return normalized;
 }
 
-async function exportBackup(): Promise<BackupFile> {
+export async function exportBackup(): Promise<BackupFile> {
   const db = await dbPromise;
   const data = {} as Record<string, string | null>;
 
@@ -181,6 +182,105 @@ async function replaceTable(trx: any, table: string, rows: any[]) {
   }
 }
 
+
+export function generateSqlBackup(backup: BackupFile): string {
+  const lines: string[] = [
+    '-- ============================================================',
+    '-- Al-Muttahida ERP Database Backup (SQL Dump)',
+    '-- شركة المتحدة للتجارة والتوزيع - نسخة احتياطية لقاعدة البيانات',
+    '-- Exported At (ISO): ' + backup.exportedAt,
+    '-- App: ' + backup.app,
+    '-- Version: ' + backup.version,
+    '-- ============================================================',
+    '',
+    'SET NOCOUNT ON;',
+    'SET XACT_ABORT ON;',
+    'BEGIN TRANSACTION;',
+    '',
+  ];
+
+  const tableMap: Record<string, string> = {
+    USERS: 'users',
+    CUSTOMERS: 'customers',
+    SUPPLIERS: 'suppliers',
+    PRODUCTS: 'products',
+    SALES: 'sales',
+    PURCHASES: 'purchases',
+    PAYMENTS: 'payments',
+    EXPENSES: 'expenses',
+    SETTINGS: 'settings',
+    NOTIFICATIONS: 'notifications',
+    SALES_REPS: 'sales_reps',
+    SHAREHOLDERS: 'shareholders',
+    SHAREHOLDER_TRANSACTIONS: 'shareholder_transactions',
+    AUDIT_LOGS: 'audit_log',
+    COLLECTION_TASKS: 'collection_tasks',
+    RESCHEDULE_REQUESTS: 'reschedule_requests',
+    CLOSING_PERIODS: 'closing_periods',
+  };
+
+  for (const [key, rawRows] of Object.entries(backup.data || {})) {
+    const tableName = tableMap[key] || key.toLowerCase();
+    lines.push('-- ------------------------------------------------------------');
+    lines.push('-- Table: ' + tableName + ' (' + key + ')');
+    lines.push('-- ------------------------------------------------------------');
+
+    if (!rawRows) {
+      lines.push('-- No data recorded for ' + tableName);
+      lines.push('');
+      continue;
+    }
+
+    let rows: any[] = [];
+    try {
+      rows = JSON.parse(rawRows);
+      if (!Array.isArray(rows)) rows = [rows];
+    } catch (_) {
+      rows = [];
+    }
+
+    if (rows.length === 0) {
+      lines.push('-- 0 rows recorded for ' + tableName);
+      lines.push('');
+      continue;
+    }
+
+    lines.push('-- ' + rows.length + ' rows recorded');
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const cols = Object.keys(row);
+      if (cols.length === 0) continue;
+
+      const colNames = cols.join(', ');
+      const valStrings = cols
+        .map((col) => {
+          const val = row[col];
+          if (val === null || val === undefined) return 'NULL';
+          if (typeof val === 'number') return String(val);
+          if (typeof val === 'boolean') return val ? '1' : '0';
+          if (typeof val === 'object') {
+            return "N'" + JSON.stringify(val).replace(/'/g, "''") + "'";
+          }
+          return "N'" + String(val).replace(/'/g, "''") + "'";
+        })
+        .join(', ');
+
+      lines.push('INSERT INTO ' + tableName + ' (' + colNames + ') VALUES (' + valStrings + ');');
+    }
+    lines.push('');
+  }
+
+  lines.push('COMMIT TRANSACTION;');
+  lines.push('');
+  lines.push('/* AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_START');
+  lines.push(JSON.stringify(backup));
+  lines.push('AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_END */');
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+
 router.get('/backup', async (_req, res) => {
   try {
     const backup = await exportBackup();
@@ -190,8 +290,68 @@ router.get('/backup', async (_req, res) => {
   }
 });
 
+router.get('/backup.sql', async (_req, res) => {
+  try {
+    const backup = await exportBackup();
+    const sqlContent = generateSqlBackup(backup);
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/sql; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="almuttahida-backup-' + date + '.sql"');
+    return res.send(sqlContent);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+
+// Auto Backup Endpoints
+router.get('/auto-backup', async (_req, res) => {
+  try {
+    const config = getAutoBackupConfig();
+    return res.json(config);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Error fetching auto-backup config' });
+  }
+});
+
+router.put('/auto-backup', async (req: AuthedRequest, res) => {
+  try {
+    const updated = updateAutoBackupConfig(req.body);
+    await audit('settings.auto_backup.update', 'settings', 'auto-backup', req.user?.name || 'system', { config: updated });
+    return res.json({ message: 'تم حفظ إعدادات النسخ الاحتياطي التلقائي بنجاح', config: updated });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Error updating auto-backup config' });
+  }
+});
+
+router.post('/auto-backup/run', async (req: AuthedRequest, res) => {
+  try {
+    const result = await performAutoBackup('Manual user trigger');
+    if (result.success) {
+      await audit('settings.auto_backup.run', 'settings', 'auto-backup', req.user?.name || 'system', { fileName: result.fileName, filePath: result.filePath });
+      return res.json({ message: 'تم إنشاء النسخة الاحتياطية بنجاح وحفظها في المجلد المحدد', ...result });
+    } else {
+      return res.status(500).json({ message: result.error || 'فشل إنشاء النسخة الاحتياطية' });
+    }
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Error executing auto backup' });
+  }
+});
+
 router.post('/restore-backup', async (req: AuthedRequest, res) => {
-  const payload = req.body as BackupFile;
+  let payload = req.body as BackupFile;
+
+  // Handle raw SQL backup string if sent directly
+  if (typeof req.body === 'string' || (req.body && typeof req.body.sql === 'string')) {
+    const rawSql = typeof req.body === 'string' ? req.body : req.body.sql;
+    const match = rawSql.match(/\/\*\s*AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_START\s*([\s\S]*?)\s*AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_END\s*\*\//);
+    if (match && match[1]) {
+      try {
+        payload = JSON.parse(match[1].trim());
+      } catch (_) {}
+    }
+  }
+
   if (!payload || payload.app !== 'almuttahida-saas' || !payload.data) {
     return res.status(400).json({ message: 'Invalid backup file' });
   }
@@ -262,12 +422,12 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
     if (settingsRows.length > 0) {
       const s = settingsRows[0];
       const request = new sql.Request(trx);
-      request.input('company_name', s.company_name || s.companyName || '���� �������');
+      request.input('company_name', s.company_name || s.companyName || '���� �������');
       request.input('company_address', s.company_address || s.companyAddress || '');
       request.input('company_phone', s.company_phone || s.companyPhone || '');
       request.input('company_email', s.company_email || s.companyEmail || '');
       request.input('tax_rate', Number(s.tax_rate ?? s.taxRate ?? 0));
-      request.input('currency', s.currency || '����');
+      request.input('currency', s.currency || '����');
       request.input('invoice_prefix', s.invoice_prefix || s.invoicePrefix || 'INV');
       request.input('invoice_footer', s.invoice_footer || s.invoiceFooter || null);
       await request.query(`INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer)

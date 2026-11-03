@@ -14,6 +14,9 @@ import {
   Monitor,
   RefreshCw,
   AlertCircle,
+  Clock,
+  Folder,
+  Play,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Setting, OpeningBalances } from '../types';
@@ -24,7 +27,7 @@ import {
   getOpeningBalances,
   saveOpeningBalances,
 } from '../lib/storage';
-import { isApiMode } from '../lib/apiClient';
+import { api, isApiMode } from '../lib/apiClient';
 
 const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 
@@ -117,6 +120,112 @@ export default function Settings() {
   const [connSaved, setConnSaved] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  interface AutoBackupSettings {
+    enabled: boolean;
+    destinationPath: string;
+    frequency: 'daily' | 'twice_daily' | 'hourly';
+    backupTime: string;
+    retentionDays: number;
+    lastBackupAt: string | null;
+    lastBackupStatus: 'success' | 'failed' | null;
+    lastBackupFileName: string | null;
+  }
+
+  const [autoBackupConfig, setAutoBackupConfig] = useState<AutoBackupSettings>({
+    enabled: true,
+    destinationPath: 'D:\\AlMuttahida_Backups',
+    frequency: 'daily',
+    backupTime: '23:00',
+    retentionDays: 30,
+    lastBackupAt: null,
+    lastBackupStatus: null,
+    lastBackupFileName: null,
+  });
+  const [autoBackupLoading, setAutoBackupLoading] = useState(false);
+  const [autoBackupSaved, setAutoBackupSaved] = useState(false);
+  const [manualBackupRunning, setManualBackupRunning] = useState(false);
+  const [manualBackupSuccessMsg, setManualBackupSuccessMsg] = useState<string | null>(null);
+
+  const loadAutoBackupConfig = async () => {
+    try {
+      setAutoBackupLoading(true);
+      const res = await api.getAutoBackupConfig();
+      if (res) {
+        setAutoBackupConfig({
+          enabled: res.enabled ?? true,
+          destinationPath: res.destinationPath || 'D:\\AlMuttahida_Backups',
+          frequency: res.frequency || 'daily',
+          backupTime: res.backupTime || '23:00',
+          retentionDays: res.retentionDays || 30,
+          lastBackupAt: res.lastBackupAt || null,
+          lastBackupStatus: res.lastBackupStatus || null,
+          lastBackupFileName: res.lastBackupFileName || null,
+        });
+      }
+    } catch (e) {
+      console.warn('Could not load auto backup config:', e);
+    } finally {
+      setAutoBackupLoading(false);
+    }
+  };
+
+  const handleSaveAutoBackup = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    try {
+      setAutoBackupLoading(true);
+      const res = await api.updateAutoBackupConfig(autoBackupConfig);
+      if (res?.config) {
+        setAutoBackupConfig(res.config);
+      }
+      setAutoBackupSaved(true);
+      setTimeout(() => setAutoBackupSaved(false), 3500);
+    } catch (err: any) {
+      alert(err.message || 'تعذر حفظ إعدادات النسخ التلقائي.');
+    } finally {
+      setAutoBackupLoading(false);
+    }
+  };
+
+  const handleBrowseFolder = async () => {
+    try {
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI?.selectDirectory) {
+        const selected = await electronAPI.selectDirectory();
+        if (selected) {
+          setAutoBackupConfig((prev) => ({ ...prev, destinationPath: selected }));
+        }
+      } else {
+        const manual = prompt('أدخل مسار مجلد حفظ النسخ الاحتياطية:', autoBackupConfig.destinationPath);
+        if (manual && manual.trim()) {
+          setAutoBackupConfig((prev) => ({ ...prev, destinationPath: manual.trim() }));
+        }
+      }
+    } catch (e: any) {
+      console.warn('Folder selection error:', e);
+    }
+  };
+
+  const handleRunAutoBackupNow = async () => {
+    try {
+      setManualBackupRunning(true);
+      setManualBackupSuccessMsg(null);
+      const res = await api.runAutoBackupNow();
+      setManualBackupSuccessMsg(`تم إنشاء وحفظ النسخة الاحتياطية بنجاح: ${res.fileName}`);
+      await loadAutoBackupConfig();
+      setTimeout(() => setManualBackupSuccessMsg(null), 6000);
+    } catch (err: any) {
+      alert(err.message || 'فشل تشغيل النسخ الاحتياطي التلقائي.');
+    } finally {
+      setManualBackupRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'backup') {
+      void loadAutoBackupConfig();
+    }
+  }, [activeTab]);
+
   const loadNetworkInfo = async () => {
     setNetworkLoading(true);
     setNetworkError(null);
@@ -198,7 +307,7 @@ export default function Settings() {
       setBackupBusy(true);
       await downloadDatabaseBackup();
     } catch (err: any) {
-      alert(err.message || 'تعذر تصدير الباك أب.');
+      alert(err.message || 'تعذر تصدير النسخة الاحتياطية.');
     } finally {
       setBackupBusy(false);
     }
@@ -208,15 +317,15 @@ export default function Settings() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (!confirm('استيراد الباك أب سيستبدل بيانات النظام الحالية. هل تريد المتابعة؟')) return;
+    if (!confirm('استيراد النسخة الاحتياطية سيستبدل بيانات النظام الحالية بالكامل. هل تريد المتابعة؟')) return;
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         await restoreDatabaseBackup(String(reader.result || ''));
-        alert('تم استيراد الباك أب بنجاح. ستتم اعادة تحميل النظام.');
+        alert('تم استيراد النسخة الاحتياطية بنجاح. ستتم إعادة تحميل النظام.');
         window.location.reload();
       } catch (err: any) {
-        alert(err.message || 'تعذر استيراد ملف الباك أب.');
+        alert(err.message || 'تعذر استيراد ملف النسخة الاحتياطية.');
       }
     };
     reader.readAsText(file);
@@ -622,12 +731,12 @@ export default function Settings() {
           <div className="p-6 space-y-5">
             <h3 className="font-bold text-slate-800 flex items-center gap-2">
               <Download size={18} className="text-indigo-600" />
-              النسخ الاحتياطي
+              النسخ الاحتياطي لقاعدة البيانات
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="border border-slate-200 rounded-xl p-5 space-y-3">
                 <p className="font-bold text-slate-700 text-sm">تصدير نسخة احتياطية</p>
-                <p className="text-slate-500 text-xs">تحميل جميع بيانات النظام في ملف واحد قابل للاستيراد لاحقا.</p>
+                <p className="text-slate-500 text-xs">تحميل جميع بيانات النظام وقاعدة البيانات في ملف SQL (.sql) شامل لجميع الجداول والعمليات.</p>
                 <button
                   type="button"
                   onClick={() => void handleExportBackup()}
@@ -635,16 +744,16 @@ export default function Settings() {
                   className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-bold disabled:opacity-50"
                 >
                   <Download size={15} />
-                  {backupBusy ? 'جاري التصدير...' : 'تصدير الباك اب'}
+                  {backupBusy ? 'جاري التصدير...' : 'تصدير نسخة احتياطية'}
                 </button>
               </div>
               <div className="border border-slate-200 rounded-xl p-5 space-y-3">
                 <p className="font-bold text-slate-700 text-sm">استيراد نسخة احتياطية</p>
-                <p className="text-slate-500 text-xs">استعادة البيانات من ملف باك اب سابق. سيستبدل البيانات الحالية.</p>
+                <p className="text-slate-500 text-xs">استعادة البيانات من ملف نسخة احتياطية (.sql). سيتم استبدال البيانات الحالية بالكامل.</p>
                 <input
                   ref={backupInputRef}
                   type="file"
-                  accept=".json"
+                  accept=".sql,.json"
                   className="hidden"
                   onChange={handleImportBackup}
                 />
@@ -654,9 +763,175 @@ export default function Settings() {
                   className="flex items-center gap-2 bg-amber-500 text-white px-5 py-2 rounded-lg hover:bg-amber-600 transition-colors text-sm font-bold"
                 >
                   <Upload size={15} />
-                  استيراد باك اب
+                  استيراد نسخة احتياطية
                 </button>
               </div>
+            </div>
+
+            {/* Automated Scheduled Backup Card */}
+            <div className="border border-slate-200 rounded-xl p-5 space-y-4 bg-slate-50/60">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                    <Clock size={19} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-sm">النسخ الاحتياطي التلقائي المجدول (Auto-Backup Scheduler)</h4>
+                    <p className="text-xs text-slate-500">حفظ نسخة احتياطية لقاعدة البيانات تلقائياً على قرص آمن (مثل D:\) دون مقاطعة العمل.</p>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 cursor-pointer select-none self-start sm:self-auto bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
+                  <input
+                    type="checkbox"
+                    checked={autoBackupConfig.enabled}
+                    onChange={(e) => setAutoBackupConfig({ ...autoBackupConfig, enabled: e.target.checked })}
+                    className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                  />
+                  <span className="text-xs font-bold text-slate-700">تفعيل النسخ التلقائي</span>
+                </label>
+              </div>
+
+              {autoBackupConfig.enabled && (
+                <div className="space-y-4 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      مسار مجلد الحفظ التلقائي (Destination Directory)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={autoBackupConfig.destinationPath}
+                        onChange={(e) => setAutoBackupConfig({ ...autoBackupConfig, destinationPath: e.target.value })}
+                        placeholder="D:\AlMuttahida_Backups"
+                        className="input-ui flex-1 font-mono text-sm"
+                        dir="ltr"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleBrowseFolder}
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 text-xs font-bold transition-colors shadow-sm"
+                        title="اختر المجلد من جهازك"
+                      >
+                        <Folder size={15} className="text-amber-500" />
+                        تصفح
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      يُفضل اختيار قرص غير قرص النظام الأساسي (مثل <span className="font-bold text-slate-600 font-mono">D:\AlMuttahida_Backups</span>) أو وسيط تخزين خارجي لحماية البيانات عند تعطل الويندوز.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">تكرار النسخ الاحتياطي</label>
+                      <select
+                        value={autoBackupConfig.frequency}
+                        onChange={(e) => setAutoBackupConfig({ ...autoBackupConfig, frequency: e.target.value as any })}
+                        className="input-ui w-full text-xs"
+                      >
+                        <option value="daily">يومياً (موصى به)</option>
+                        <option value="twice_daily">مرتين يومياً (كل 12 ساعة)</option>
+                        <option value="hourly">كل ساعة</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">وقت النسخ اليومي</label>
+                      <input
+                        type="time"
+                        value={autoBackupConfig.backupTime}
+                        onChange={(e) => setAutoBackupConfig({ ...autoBackupConfig, backupTime: e.target.value })}
+                        className="input-ui w-full text-xs font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">مدة الاحتفاظ (أقصى عدد نسخ)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="365"
+                        value={autoBackupConfig.retentionDays}
+                        onChange={(e) => setAutoBackupConfig({ ...autoBackupConfig, retentionDays: Number(e.target.value) || 30 })}
+                        className="input-ui w-full text-xs"
+                      />
+                      <span className="text-[10px] text-slate-400">حذف النسخ الأقدم تلقائياً لتوفير مساحة القرص</span>
+                    </div>
+                  </div>
+
+                  {/* Status Strip */}
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">حالة آخر عملية نسخ:</span>
+                      {autoBackupConfig.lastBackupAt ? (
+                        <span className="font-bold text-slate-800">
+                          {new Date(autoBackupConfig.lastBackupAt).toLocaleString('ar-EG')}
+                          {autoBackupConfig.lastBackupFileName && (
+                            <span className="text-indigo-600 font-mono text-[11px] mr-1.5 font-normal">
+                              ({autoBackupConfig.lastBackupFileName})
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">لم يتم إجراء نسخ تلقائي بعد</span>
+                      )}
+                    </div>
+                    <div>
+                      {autoBackupConfig.lastBackupStatus === 'success' && (
+                        <span className="inline-flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 text-[11px]">
+                          <CheckCircle2 size={13} /> ناجحة
+                        </span>
+                      )}
+                      {autoBackupConfig.lastBackupStatus === 'failed' && (
+                        <span className="inline-flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200 text-[11px]">
+                          <AlertCircle size={13} /> حدث خطأ في النسخ السابق
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {manualBackupSuccessMsg && (
+                    <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-bold flex items-center gap-2">
+                      <CheckCircle2 size={16} className="text-emerald-600" />
+                      {manualBackupSuccessMsg}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveAutoBackup()}
+                      disabled={autoBackupLoading}
+                      className="flex items-center gap-1.5 bg-indigo-600 text-white px-5 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-xs font-bold disabled:opacity-50"
+                    >
+                      <Save size={14} />
+                      {autoBackupLoading ? 'جاري الحفظ...' : 'حفظ إعدادات النسخ التلقائي'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleRunAutoBackupNow()}
+                      disabled={manualBackupRunning || autoBackupLoading}
+                      className="flex items-center gap-1.5 bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors text-xs font-bold disabled:opacity-50 shadow-sm"
+                    >
+                      {manualBackupRunning ? (
+                        <RefreshCw size={14} className="animate-spin text-indigo-600" />
+                      ) : (
+                        <Play size={14} className="text-emerald-600" />
+                      )}
+                      {manualBackupRunning ? 'جاري إنشاء النسخة...' : 'تشغيل وحفظ نسخة احتياطية الآن بالمجلد'}
+                    </button>
+
+                    {autoBackupSaved && (
+                      <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs">
+                        <CheckCircle2 size={14} />
+                        تم حفظ الإعدادات بنجاح
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

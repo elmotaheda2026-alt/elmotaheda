@@ -637,6 +637,246 @@ export default function Payments() {
     };
   };
 
+  const printSettlementReceipt = (params: {
+    payment: Payment | any;
+    sale: Sale;
+    customerName: string;
+    customerPhone?: string;
+    totalRemainingBefore: number;
+    discountType: 'fixed' | 'percent';
+    discountValue: number;
+    discountAmount: number;
+    paidAmount: number;
+    approvedBy: string;
+  }) => {
+    const {
+      payment,
+      sale,
+      customerName,
+      customerPhone,
+      totalRemainingBefore,
+      discountType,
+      discountValue,
+      discountAmount,
+      paidAmount,
+      approvedBy,
+    } = params;
+
+    const receiptNo = payment?.receiptNumber || (payment?.id ? String(payment.id).slice(-8).toUpperCase() : 'SETTLE');
+    const paymentDate = payment?.date || today();
+    const contractDate = sale.date;
+    const companyName = settings.companyName || 'شركة المتحدة للتجارة والتوزيع';
+    const companyPhone = settings.companyPhone || '';
+
+    const printWindow = window.open('', '_blank', 'width=900,height=1000');
+    if (!printWindow) {
+      setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
+      return;
+    }
+
+    const discountLabel = discountAmount > 0
+      ? (discountType === 'percent' ? `${discountValue}% (${formatCurrency(discountAmount)})` : formatCurrency(discountAmount))
+      : 'لا يوجد';
+
+    const html = `
+      <!doctype html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="utf-8" />
+        <title>إيصال مخالصة وتكييش نهائي - ${receiptNo}</title>
+        <style>
+          @page {
+            size: A4 portrait;
+            margin: 15mm 18mm;
+          }
+          * { box-sizing: border-box; }
+          html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            background: #fff;
+            color: #0f172a;
+            font-family: 'Segoe UI', Tahoma, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+            font-size: 13.5px;
+            line-height: 1.5;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          .receipt {
+            width: 100%;
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 10px 0;
+          }
+          .head {
+            border: 2px solid #0f172a;
+            border-radius: 8px;
+            padding: 18px 24px 16px;
+            margin-bottom: 22px;
+            background: #f8fafc;
+            text-align: center;
+          }
+          .company {
+            font-size: 22px;
+            font-weight: 800;
+            color: #0f172a;
+            margin-bottom: 6px;
+            letter-spacing: -0.3px;
+          }
+          .title {
+            font-size: 18px;
+            font-weight: 800;
+            color: #1e3a8a;
+            margin-bottom: 10px;
+          }
+          .badge {
+            display: inline-block;
+            font-size: 13px;
+            font-weight: 800;
+            background: #ecfdf5;
+            color: #065f46;
+            border: 1.5px solid #059669;
+            border-radius: 20px;
+            padding: 4px 18px;
+            margin-bottom: 12px;
+          }
+          .meta-grid {
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px 20px;
+            font-size: 13px;
+            color: #334155;
+            border-top: 1px dashed #cbd5e1;
+            padding-top: 12px;
+            margin-top: 4px;
+          }
+          .table-box {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 22px;
+            border: 1.5px solid #0f172a;
+            border-radius: 8px;
+            overflow: hidden;
+          }
+          .table-box tr {
+            border-bottom: 1px solid #cbd5e1;
+          }
+          .table-box tr:last-child {
+            border-bottom: none;
+          }
+          .table-box td {
+            padding: 10.5px 16px;
+            font-size: 13.5px;
+          }
+          .table-box .label {
+            width: 30%;
+            font-weight: 700;
+            background: #f1f5f9;
+            color: #1e293b;
+            border-left: 1.5px solid #cbd5e1;
+          }
+          .table-box .value {
+            width: 70%;
+            font-weight: 600;
+            color: #0f172a;
+          }
+          .amount-row .value {
+            font-size: 16px;
+            font-weight: 800;
+            color: #047857;
+          }
+          .highlight-row {
+            background: #f0fdf4 !important;
+          }
+          .zero-balance {
+            font-size: 15px;
+            font-weight: 800;
+            color: #047857;
+          }
+          .signatures {
+            margin-top: 48px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 48px;
+            font-size: 14px;
+            font-weight: 700;
+            text-align: center;
+          }
+          .sig {
+            border-top: 1.5px solid #0f172a;
+            padding-top: 10px;
+            min-height: 60px;
+            color: #0f172a;
+          }
+          @media print {
+            @page {
+              size: A4 portrait;
+              margin: 15mm 18mm;
+            }
+            html, body {
+              width: 100% !important;
+              max-width: 100% !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: #fff !important;
+            }
+            .receipt {
+              width: 100% !important;
+              max-width: 100% !important;
+              margin: 0 !important;
+              padding: 0 !important;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <main class="receipt">
+          <header class="head">
+            <div class="company">${companyName}</div>
+            <div class="title">إيصال تكييش وتسوية نهائية</div>
+            <div class="badge">مخالصة مالية نهائية</div>
+            <div class="meta-grid">
+              <div>رقم السند: <strong>${receiptNo}</strong></div>
+              <div>تاريخ السداد: <strong>${formatDate(paymentDate)}</strong></div>
+              ${companyPhone ? `<div>هاتف الشركة: <strong>${companyPhone}</strong></div>` : ''}
+            </div>
+          </header>
+
+          <table class="table-box">
+            <tbody>
+              <tr><td class="label">اسم العميل</td><td class="value">${customerName}</td></tr>
+              ${customerPhone ? `<tr><td class="label">هاتف العميل</td><td class="value">${customerPhone}</td></tr>` : ''}
+              <tr><td class="label">رقم الفاتورة / العقد</td><td class="value">${sale.invoiceNumber}</td></tr>
+              <tr><td class="label">تاريخ التعاقد</td><td class="value">${formatDate(contractDate)}</td></tr>
+              <tr><td class="label">إجمالي قيمة الفاتورة</td><td class="value">${formatCurrency(sale.total)}</td></tr>
+              <tr><td class="label">الرصيد المتبقي قبل التسوية</td><td class="value">${formatCurrency(totalRemainingBefore)}</td></tr>
+              <tr><td class="label">خصم التعجيل / التكييش الممنوح</td><td class="value">${discountLabel}</td></tr>
+              <tr class="amount-row highlight-row"><td class="label">المبلغ النقدي المسدد فعلياً</td><td class="value">${formatCurrency(paidAmount)}</td></tr>
+              <tr class="highlight-row"><td class="label">الرصيد المتبقي بعد التسوية</td><td class="value zero-balance">0.00 ج.م (خالص بالكامل)</td></tr>
+              <tr><td class="label">المسؤول المعتمد للتسوية</td><td class="value">${approvedBy}</td></tr>
+            </tbody>
+          </table>
+
+          <section class="signatures">
+            <div class="sig">توقيع المستلم / المحاسب</div>
+            <div class="sig">توقيع العميل / المستلم</div>
+          </section>
+        </main>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.onload = () => {
+      printWindow.print();
+    };
+  };
+
   const handleIncomingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
@@ -694,6 +934,22 @@ export default function Payments() {
 
           await loadData();
           closeModal();
+
+          if (incomingSubmitMode === 'save_print') {
+            printSettlementReceipt({
+              payment: created,
+              sale: selectedSale,
+              customerName: selectedCustomer?.name || selectedSale.customerName,
+              customerPhone: selectedCustomer?.phone || (selectedSale as any).customerPhone,
+              totalRemainingBefore: totalRemainingUnpaid,
+              discountType: settlementDiscountType,
+              discountValue: settlementDiscountValue,
+              discountAmount: settlementDiscountAmount,
+              paidAmount: incomingForm.amount,
+              approvedBy: settlementAdminUsername || user?.name || 'مدير النظام',
+            });
+          }
+
           setIncomingForm((current) => ({
             customerId: current.customerId,
             saleId: '',
@@ -706,7 +962,7 @@ export default function Payments() {
           setSettlementDiscountValue(0);
           setSettlementAdminPassword('');
           setIncomingSubmitMode('save');
-          setMessage({ type: 'success', text: `تم تكييش وتصفية العقد بنجاح برقم إيصال ${created.receiptNumber}.` });
+          setMessage({ type: 'success', text: `تم تكييش وتصفية العقد بنجاح برقم إيصال ${created.receiptNumber || created.id}.` });
         } catch (err: any) {
           setMessage({
             type: 'error',
@@ -716,7 +972,7 @@ export default function Payments() {
         return;
       }
 
-      createPayment({
+      const createdPayment = createPayment({
         type: 'in',
         amount: incomingForm.amount,
         referenceId: selectedSale.id,
@@ -738,6 +994,22 @@ export default function Payments() {
 
       loadData();
       closeModal();
+
+      if (incomingSubmitMode === 'save_print') {
+        printSettlementReceipt({
+          payment: createdPayment,
+          sale: selectedSale,
+          customerName: selectedCustomer?.name || selectedSale.customerName,
+          customerPhone: selectedCustomer?.phone || (selectedSale as any).customerPhone,
+          totalRemainingBefore: totalRemainingUnpaid,
+          discountType: settlementDiscountType,
+          discountValue: settlementDiscountValue,
+          discountAmount: settlementDiscountAmount,
+          paidAmount: incomingForm.amount,
+          approvedBy: user?.name || 'مدير النظام',
+        });
+      }
+
       setIncomingForm((current) => ({
         customerId: current.customerId,
         saleId: '',
@@ -1456,24 +1728,32 @@ export default function Payments() {
                       <button
                         type="button"
                         onClick={closeModal}
-                        className="rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50 sm:w-48"
+                        className="rounded-2xl border border-slate-300 px-4 py-3 text-slate-700 hover:bg-slate-50 sm:w-48 font-bold transition-colors"
                       >
                         إلغاء
                       </button>
                       <button
                         type="submit"
                         onClick={() => setIncomingSubmitMode('save')}
-                        className="rounded-2xl bg-emerald-600 px-4 py-3 font-bold text-white hover:bg-emerald-700 sm:w-56"
+                        className={`rounded-2xl px-4 py-3 font-bold text-white transition-all shadow-xs active:scale-95 sm:w-56 ${
+                          paymentMode === 'early_settlement'
+                            ? 'bg-amber-600 hover:bg-amber-700'
+                            : 'bg-emerald-600 hover:bg-emerald-700'
+                        }`}
                       >
-                        حفظ السداد
+                        {paymentMode === 'early_settlement' ? 'حفظ التكييش والتسوية' : 'حفظ السداد'}
                       </button>
                       <button
                         type="submit"
                         onClick={() => setIncomingSubmitMode('save_print')}
-                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-sky-600 px-4 py-3 font-bold text-white hover:bg-sky-700 sm:w-56"
+                        className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all shadow-xs active:scale-95 sm:w-56 ${
+                          paymentMode === 'early_settlement'
+                            ? 'bg-sky-600 hover:bg-sky-700'
+                            : 'bg-sky-600 hover:bg-sky-700'
+                        }`}
                       >
                         <Printer size={17} />
-                        حفظ وطباعة
+                        <span>{paymentMode === 'early_settlement' ? 'حفظ وطباعة المخالصة' : 'حفظ وطباعة'}</span>
                       </button>
                     </div>
                   </form>

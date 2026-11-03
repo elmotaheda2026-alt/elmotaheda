@@ -1,12 +1,43 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { PieChart as PieChartIcon, ArrowDownToLine, ArrowUpFromLine, Users, Plus, TrendingUp, Wallet, Edit, Trash2, RefreshCw } from 'lucide-react';
-import { Shareholder, ShareholderTransaction, Sale, Purchase, Expense, Product } from '../types';
-import { getShareholders, createShareholder, updateShareholder, deleteShareholder, getShareholderTransactions, addShareholderTransaction, deleteShareholderTransaction, getSales, getPurchases, getExpenses, getProducts } from '../lib/storage';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  PieChart as PieChartIcon,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Users,
+  Plus,
+  Wallet,
+  Edit,
+  Trash2,
+  RefreshCw,
+  Calendar,
+  FileText,
+  Filter,
+  Search,
+  ChevronLeft,
+  DollarSign,
+  Landmark,
+  ShieldCheck,
+  X,
+  Award,
+} from 'lucide-react';
+import { Shareholder, ShareholderTransaction, Sale, Expense, Product } from '../types';
+import {
+  getShareholders,
+  createShareholder,
+  updateShareholder,
+  deleteShareholder,
+  getShareholderTransactions,
+  addShareholderTransaction,
+  deleteShareholderTransaction,
+  getSales,
+  getExpenses,
+  getProducts,
+} from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
-import { calculateNetProfit } from '../lib/accounting';
+import { calculateNetProfit, calculateCostOfGoodsSold } from '../lib/accounting';
 import { formatWholeCurrency } from '../lib/utils';
 
 const TypedPieChart = PieChart as any;
@@ -16,7 +47,28 @@ const TypedResponsiveContainer = ResponsiveContainer as any;
 const TypedTooltip = RechartsTooltip as any;
 const TypedLegend = Legend as any;
 
-const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#3b82f6', '#14b8a6'];
+const COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#0284c7', '#14b8a6'];
+
+interface LedgerEntry {
+  id: string;
+  date: string;
+  type:
+    | 'initial_capital'
+    | 'capital_deposit'
+    | 'capital_withdrawal'
+    | 'profit_allocation'
+    | 'profit_distribution'
+    | 'profit_withdrawal';
+  description: string;
+  amount: number;
+  capitalDelta: number;
+  profitDelta: number;
+  runningCapital: number;
+  runningProfit: number;
+  runningTotalEquity: number;
+  createdBy: string;
+  isSynthetic?: boolean;
+}
 
 interface LiveTradingMetrics {
   liveNetProfit: number;
@@ -26,55 +78,76 @@ interface LiveTradingMetrics {
   totalCapital: number;
   systemLiveRoi: number;
   totalAvailableProfits: number;
+  totalWithdrawnProfits?: number;
+  totalNetEntitlement?: number;
+}
+
+function toIsoDay(dateVal?: string | null): string {
+  if (!dateVal) return new Date().toISOString().slice(0, 10);
+  const s = String(dateVal).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
 }
 
 export default function Shareholders() {
-  const AUTO_DISTRIBUTE_ENABLED = false; // feature flag
   const { settings, user } = useAuth();
-  const [shareholders, setShareholders] = useState<Shareholder[]>([]);
+  const [shareholders, setShareholders] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<ShareholderTransaction[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
-  const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
 
-  // Live database metrics from SQL Server
   const [liveMetrics, setLiveMetrics] = useState<LiveTradingMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [lastSynced, setLastSynced] = useState<Date>(new Date());
-  
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions'>('overview');
-  
+
+  const [activeTab, setActiveTab] = useState<'overview' | 'ledger'>('overview');
+
+  // Filters
+  const [ledgerPartnerFilter, setLedgerPartnerFilter] = useState<string>('all');
+  const [ledgerTypeFilter, setLedgerTypeFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
   // Modals state
   const [showShareholderModal, setShowShareholderModal] = useState(false);
-  const [editingShareholder, setEditingShareholder] = useState<Shareholder | null>(null);
-  
+  const [editingShareholder, setEditingShareholder] = useState<any | null>(null);
+
   const [showTransactionModal, setShowTransactionModal] = useState(false);
-  const [transactionType, setTransactionType] = useState<'capital_deposit' | 'capital_withdrawal' | 'profit_withdrawal'>('capital_deposit');
+  const [transactionType, setTransactionType] = useState<
+    'capital_deposit' | 'capital_withdrawal' | 'profit_withdrawal' | 'profit_distribution'
+  >('capital_deposit');
   const [selectedShareholderId, setSelectedShareholderId] = useState<string>('');
 
-  // Period filter (YYYY-MM-DD)
-  const [periodFrom, setPeriodFrom] = useState<string>('');
-  const [periodTo, setPeriodTo] = useState<string>('');
+  // Detailed Partner Statement Modal
+  const [inspectingPartnerId, setInspectingPartnerId] = useState<string | null>(null);
 
   // Forms state
   const [shareholderForm, setShareholderForm] = useState({
-    name: '', phone: '', sharePercentage: 0, managementFeePercentage: 50, capital: 0, notes: ''
+    name: '',
+    phone: '',
+    isFounder: false,
+    sharePercentage: 50,
+    managementFeePercentage: 50,
+    capital: 0,
+    joinedDate: new Date().toISOString().slice(0, 10),
+    notes: '',
   });
-  
-  const [transactionForm, setTransactionForm] = useState({
-    amount: 0, description: ''
-  });
-  const [showDebug, setShowDebug] = useState(false);
 
-  const toDayStart = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
-  const toDayEnd = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+  const [transactionForm, setTransactionForm] = useState({
+    amount: 0,
+    date: new Date().toISOString().slice(0, 10),
+    description: '',
+  });
+
+  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const loadData = async () => {
     setIsLoading(true);
     try {
       if (isApiMode()) {
-        const liveData = await api.getShareholdersLiveTrading({ periodFrom, periodTo });
+        const liveData = await api.getShareholdersLiveTrading();
         if (liveData) {
           setLiveMetrics({
             liveNetProfit: Number(liveData.liveNetProfit || 0),
@@ -84,6 +157,8 @@ export default function Shareholders() {
             totalCapital: Number(liveData.totalCapital || 0),
             systemLiveRoi: Number(liveData.systemLiveRoi || 0),
             totalAvailableProfits: Number(liveData.totalAvailableProfits || 0),
+            totalWithdrawnProfits: Number(liveData.totalWithdrawnProfits || 0),
+            totalNetEntitlement: Number(liveData.totalNetEntitlement || 0),
           });
           setShareholders(liveData.shareholders || []);
           setTransactions(liveData.transactions || []);
@@ -93,7 +168,6 @@ export default function Shareholders() {
         setShareholders(getShareholders());
         setTransactions(getShareholderTransactions());
         setSales(getSales());
-        setPurchases(getPurchases());
         setExpenses(getExpenses());
         setProducts(getProducts());
         setLastSynced(new Date());
@@ -106,799 +180,1739 @@ export default function Shareholders() {
   };
 
   useEffect(() => {
-    loadData();
-  }, [periodFrom, periodTo]);
+    void loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Periodic background synchronization and on-focus real-time refresh
   useEffect(() => {
     const handleFocus = () => {
-      loadData();
+      void loadData();
     };
     window.addEventListener('focus', handleFocus);
-    const interval = setInterval(loadData, 15000);
+    const interval = setInterval(() => {
+      void loadData();
+    }, 15000);
     return () => {
       window.removeEventListener('focus', handleFocus);
       clearInterval(interval);
     };
-  }, [periodFrom, periodTo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const computeAllocations = () => {
-    const allocations: Array<{ id: string; amount: number }> = [];
-    for (const s of shareholders) {
-      const totalCapitalForAlloc = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
-      const shareRatioForAlloc = totalCapitalForAlloc ? (Number(s.capital || 0) / totalCapitalForAlloc) : ((s.sharePercentage || 0) / 100);
-      const startDate = periodFrom ? toDayStart(new Date(periodFrom)) : (s.createdAt ? new Date(s.createdAt) : new Date(0));
-      const endDate = periodTo ? toDayEnd(new Date(periodTo)) : toDayEnd(new Date());
-      const periodSales = sales.filter(sale => {
-        const d = new Date(sale.date);
-        return d >= startDate && d <= endDate;
-      });
-      const periodExpenses = expenses.filter(exp => {
-        const d = new Date(exp.date);
-        return d >= startDate && d <= endDate;
-      });
-      const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
-      const grossProfit = netProfitSinceJoin * shareRatioForAlloc;
-      const mgmtFee = grossProfit * ((s.managementFeePercentage || 0) / 100);
-      const netEntitlement = grossProfit - mgmtFee;
-      const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
-      const totalDistributed = shareholderTxs
-        .filter(t => t.type === 'profit_distribution')
-        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-      const undistributed = Math.max(0, netEntitlement - totalDistributed);
-      if (undistributed > 0.009) allocations.push({ id: s.id, amount: Number(undistributed.toFixed(2)) });
+  // Compute time-weighted metrics locally or merge with backend metrics
+  const computedState = useMemo(() => {
+    if (isApiMode() && liveMetrics) {
+      const totalCapital = liveMetrics.totalCapital;
+      const totalAvailableProfits = liveMetrics.totalAvailableProfits;
+      return {
+        totalCapital,
+        totalAvailableProfits,
+        liveShareholders: shareholders,
+        filteredTransactions: transactions,
+      };
     }
-    return allocations;
-  };
 
-  // Auto-distribute once per session if feature enabled
-  const hasAutoDistributed = useRef(false);
+    // Local Storage fallback time-weighted engine
+    const activeSalesGlobal = sales.filter((s) => s.status !== 'cancelled');
+    const activeExpensesGlobal = expenses;
 
-  useEffect(() => {
-    if (!AUTO_DISTRIBUTE_ENABLED) return;
-    if (hasAutoDistributed.current) return;
-    if (!shareholders.length && !sales.length && !expenses.length) return;
+    const totalSalesRevenue = activeSalesGlobal.reduce((sum, s) => sum + Number(s.total || 0), 0);
+    const totalCogs = calculateCostOfGoodsSold(activeSalesGlobal, products);
+    const totalExpenses = activeExpensesGlobal.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const systemLiveNetProfit = calculateNetProfit(activeSalesGlobal, products, activeExpensesGlobal);
+    const totalCapital = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
 
-    (async () => {
-      const allocations = computeAllocations();
-      if (allocations.length > 0) {
-        for (const a of allocations) {
-          try {
-            await addShareholderTransaction({
-              shareholderId: a.id,
-              shareholderName: shareholders.find(s => s.id === a.id)?.name || '',
-              type: 'profit_distribution',
-              amount: a.amount,
-              description: 'توزيع أرباح تلقائي عند التحميل',
-              createdBy: user?.name || 'النظام'
-            });
-          } catch (err) {
-            console.error('[auto-distribute] failed to create tx for', a, err);
-          }
-        }
-        await loadData();
+    const ascTxs = [...transactions].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    const liveShareholders = shareholders.map((s: any) => {
+      const currentCapital = Number(s.capital || 0);
+      const sharePercentage = Number(s.sharePercentage || 0);
+      const managementFeePercentage =
+        s.managementFeePercentage !== undefined ? Number(s.managementFeePercentage) : 100 - sharePercentage;
+
+      const joinedDate = toIsoDay(s.joinedDate || s.createdAt);
+      const effectiveStart = joinedDate;
+      const effectiveEnd = toIsoDay(new Date().toISOString());
+
+      const windowValid = effectiveStart <= effectiveEnd;
+      const partnerWindowSales = windowValid
+        ? sales.filter(
+            (sale) => sale.status !== 'cancelled' && toIsoDay(sale.date) >= effectiveStart
+          )
+        : [];
+      const partnerWindowExpenses = windowValid
+        ? expenses.filter((exp) => toIsoDay(exp.date) >= effectiveStart)
+        : [];
+
+      const windowSalesRevenue = partnerWindowSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+      const windowCogs = calculateCostOfGoodsSold(partnerWindowSales, products);
+      const windowExpenses = partnerWindowExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
+      const windowCompanyNetProfit = windowSalesRevenue - windowCogs - windowExpenses;
+
+      const activePeersCapital = shareholders
+        .filter((peer) => toIsoDay(peer.joinedDate || peer.createdAt) <= effectiveEnd)
+        .reduce((sum, peer) => sum + Number(peer.capital || 0), 0);
+
+      const profitShareRatio = Number((sharePercentage / 100).toFixed(6));
+      const capitalWeightRatio =
+        activePeersCapital > 0
+          ? currentCapital / activePeersCapital
+          : totalCapital > 0
+            ? currentCapital / totalCapital
+            : profitShareRatio;
+
+      const netEntitlement = Number((windowCompanyNetProfit * profitShareRatio).toFixed(2));
+      const grossProfit = netEntitlement;
+      const mgmtFee = 0;
+
+      const sTxs = ascTxs.filter((t) => t.shareholderId === s.id);
+      const totalDeposited = sTxs
+        .filter((t) => t.type === 'capital_deposit')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const totalCapitalWithdrawn = sTxs
+        .filter((t) => t.type === 'capital_withdrawal')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const totalDistributed = sTxs
+        .filter((t) => t.type === 'profit_distribution')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      const totalWithdrawnProfits = sTxs
+        .filter((t) => t.type === 'profit_withdrawal')
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+      const netTxCapChange = totalDeposited - totalCapitalWithdrawn;
+      const initialBaselineCapital = Math.max(0, currentCapital - netTxCapChange);
+      const originalCapital = initialBaselineCapital > 0 ? initialBaselineCapital : currentCapital;
+
+      const earnedPool = Math.max(netEntitlement, totalDistributed);
+      const availableProfit = Math.max(0, Number((earnedPool - totalWithdrawnProfits).toFixed(2)));
+      const totalNetValue = Number((currentCapital + availableProfit).toFixed(2));
+
+      const ledger: LedgerEntry[] = [];
+      let runCap = 0;
+      let runProf = 0;
+
+      if (initialBaselineCapital > 0) {
+        runCap += initialBaselineCapital;
+        ledger.push({
+          id: `init-cap-${s.id}`,
+          date: joinedDate,
+          type: 'initial_capital',
+          description: 'رأس المال الأساسي عند انضمام الشريك',
+          amount: initialBaselineCapital,
+          capitalDelta: initialBaselineCapital,
+          profitDelta: 0,
+          runningCapital: runCap,
+          runningProfit: runProf,
+          runningTotalEquity: runCap + runProf,
+          createdBy: 'النظام',
+          isSynthetic: true,
+        });
       }
-      hasAutoDistributed.current = true;
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shareholders, sales, expenses, transactions, products, periodFrom, periodTo]);
 
-  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
+      for (const tx of sTxs) {
+        const amt = Number(tx.amount || 0);
+        let capD = 0;
+        let profD = 0;
+        if (tx.type === 'capital_deposit') {
+          capD = amt;
+          runCap += amt;
+        } else if (tx.type === 'capital_withdrawal') {
+          capD = -amt;
+          runCap = Math.max(0, runCap - amt);
+        } else if (tx.type === 'profit_distribution') {
+          profD = amt;
+          runProf += amt;
+        } else if (tx.type === 'profit_withdrawal') {
+          profD = -amt;
+          runProf -= amt;
+        }
+        ledger.push({
+          id: tx.id,
+          date: toIsoDay(tx.date),
+          type: tx.type,
+          description: tx.description,
+          amount: amt,
+          capitalDelta: capD,
+          profitDelta: profD,
+          runningCapital: runCap,
+          runningProfit: Math.max(0, runProf),
+          runningTotalEquity: runCap + Math.max(0, runProf),
+          createdBy: tx.createdBy || 'النظام',
+          isSynthetic: false,
+        });
+      }
+
+      const unallocated = Number((netEntitlement - totalDistributed).toFixed(2));
+      if (Math.abs(unallocated) >= 0.01) {
+        runProf += unallocated;
+        ledger.push({
+          id: `live-prof-${s.id}`,
+          date: effectiveEnd,
+          type: 'profit_allocation',
+          description: `صافي حصة الأرباح المحققة منذ تاريخ الانضمام (${effectiveStart} إلى اليوم) بنسبة مشاركة (${sharePercentage}%)`,
+          amount: Math.abs(unallocated),
+          capitalDelta: 0,
+          profitDelta: unallocated,
+          runningCapital: runCap,
+          runningProfit: Math.max(0, runProf),
+          runningTotalEquity: runCap + Math.max(0, runProf),
+          createdBy: 'محرك الأرباح اللحظي',
+          isSynthetic: true,
+        });
+      }
+
+      return {
+        ...s,
+        capital: currentCapital,
+        originalCapital,
+        joinedDate,
+        effectiveStartDate: effectiveStart,
+        effectiveEndDate: effectiveEnd,
+        shareRatio: Number(profitShareRatio.toFixed(4)),
+        capitalWeightRatio: Number(capitalWeightRatio.toFixed(4)),
+        windowSalesRevenue,
+        windowCogs,
+        windowExpenses,
+        windowCompanyNetProfit,
+        grossProfit,
+        mgmtFee,
+        netEntitlement,
+        totalDeposited,
+        totalCapitalWithdrawn,
+        totalDistributed,
+        totalWithdrawnProfits,
+        availableProfit,
+        retainedProfits: availableProfit,
+        totalNetValue,
+        ledger: ledger.reverse(),
+      };
+    });
+
+    const totalAvailableProfits = liveShareholders.reduce(
+      (sum, s) => sum + Number(s.availableProfit || 0),
+      0
+    );
+
+    const filteredTransactions = transactions;
+
+    return {
+      totalCapital,
+      totalAvailableProfits,
+      liveShareholders,
+      filteredTransactions,
+    };
+  }, [isLoading, liveMetrics, shareholders, transactions, sales, expenses, products]);
+
+  const {
+    totalCapital,
+    totalAvailableProfits,
+    liveShareholders,
+    filteredTransactions,
+  } = computedState;
+
+  // Calculate Founders' & Partners' Equity Summary
+  const foundersSummary = useMemo(() => {
+    const totalCount = liveShareholders.length;
+    const founders = liveShareholders.filter((s: any) => Boolean(s.isFounder));
+    const partners = liveShareholders.filter((s: any) => !s.isFounder);
+
+    const foundersCount = founders.length;
+    const partnersCount = partners.length;
+
+    const rawTotalSharePercentage = liveShareholders.reduce(
+      (sum: number, s: any) => sum + Number(s.sharePercentage || 0),
+      0
+    );
+
+    const rawFoundersShare = founders.reduce(
+      (sum: number, s: any) => sum + Number(s.sharePercentage || 0),
+      0
+    );
+
+    // Calculate normalized proportional share out of 100%
+    let foundersProportionalPct = 0;
+    let partnersProportionalPct = 0;
+
+    if (rawTotalSharePercentage > 0) {
+      foundersProportionalPct = Number(((rawFoundersShare / rawTotalSharePercentage) * 100).toFixed(1));
+      partnersProportionalPct = Number((100 - foundersProportionalPct).toFixed(1));
+      if (partnersCount === 0) {
+        foundersProportionalPct = 100;
+        partnersProportionalPct = 0;
+      } else if (foundersCount === 0) {
+        foundersProportionalPct = 0;
+        partnersProportionalPct = 100;
+      }
+    } else if (totalCount > 0) {
+      foundersProportionalPct = Number(((foundersCount / totalCount) * 100).toFixed(1));
+      partnersProportionalPct = Number((100 - foundersProportionalPct).toFixed(1));
+    }
+
+    const totalCompanySharePct = totalCount > 0 ? 100 : 0;
+
+    const totalInitialCapital = liveShareholders.reduce(
+      (sum: number, s: any) => sum + Number(s.originalCapital || s.capital || 0),
+      0
+    );
+    const totalNetEarnedProfits = liveShareholders.reduce(
+      (sum: number, s: any) => sum + Number(s.netEntitlement || 0),
+      0
+    );
+    const foundersCapital = founders.reduce(
+      (sum: number, s: any) => sum + Number(s.capital || 0),
+      0
+    );
+
+    return {
+      rawTotalSharePercentage,
+      totalCompanySharePct,
+      foundersProportionalPct,
+      partnersProportionalPct,
+      totalInitialCapital,
+      totalNetEarnedProfits,
+      foundersCount,
+      partnersCount,
+      foundersCapital,
+    };
+  }, [liveShareholders]);
+
+  // Proportional Chart Data normalized strictly to 100% total
+  const chartData = useMemo(() => {
+    if (!liveShareholders.length) return [];
+    const rawTotalShares = liveShareholders.reduce(
+      (sum: number, s: any) => sum + Number(s.sharePercentage || 0),
+      0
+    );
+
+    return liveShareholders.map((s: any) => {
+      let proportionalShare = 0;
+      if (rawTotalShares > 0) {
+        proportionalShare = Number(((Number(s.sharePercentage || 0) / rawTotalShares) * 100).toFixed(1));
+      } else {
+        proportionalShare = Number((100 / liveShareholders.length).toFixed(1));
+      }
+
+      return {
+        ...s,
+        proportionalShare,
+        displayName: `${s.name} (${s.isFounder ? 'مؤسس' : 'شريك'})`,
+      };
+    });
+  }, [liveShareholders]);
+
+  // Filtered shareholders by search
+  const visibleShareholders = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return liveShareholders;
+    return liveShareholders.filter(
+      (s: any) =>
+        s.name?.toLowerCase().includes(q) ||
+        s.phone?.toLowerCase().includes(q) ||
+        s.notes?.toLowerCase().includes(q)
+    );
+  }, [liveShareholders, searchQuery]);
+
+  // Comprehensive ledger rows across all or selected partner
+  const displayedTransactions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return filteredTransactions.filter((tx) => {
+      if (ledgerPartnerFilter !== 'all' && tx.shareholderId !== ledgerPartnerFilter) return false;
+      if (ledgerTypeFilter !== 'all' && tx.type !== ledgerTypeFilter) return false;
+      if (q) {
+        const matchesName = tx.shareholderName?.toLowerCase().includes(q);
+        const matchesDesc = tx.description?.toLowerCase().includes(q);
+        return matchesName || matchesDesc;
+      }
+      return true;
+    });
+  }, [filteredTransactions, ledgerPartnerFilter, ledgerTypeFilter, searchQuery]);
+
+  const inspectingPartner = useMemo(() => {
+    if (!inspectingPartnerId) return null;
+    return liveShareholders.find((s: any) => s.id === inspectingPartnerId) || null;
+  }, [inspectingPartnerId, liveShareholders]);
 
   const handleShareholderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingShareholder) {
-      const cap = Number(shareholderForm.capital || 0);
-      if (!cap || cap <= 0) {
-        window.alert('الرجاء إدخال الرصيد الافتتاحي للمساهم ويجب أن يكون أكبر من صفر.');
+    try {
+      const isFounder = Boolean(shareholderForm.isFounder);
+      const sharePercentage = isFounder ? 100 : Number(shareholderForm.sharePercentage || 0);
+      const managementFeePercentage = isFounder
+        ? 0
+        : Number(shareholderForm.managementFeePercentage || Math.max(0, 100 - sharePercentage));
+
+      if (!isFounder && (sharePercentage <= 0 || sharePercentage > 100)) {
+        window.alert('الرجاء إدخال نسبة مشاركة صحيحة للشريك بين 1% و 100%.');
         return;
       }
-      if (isApiMode()) {
-        await api.createShareholder(shareholderForm);
+
+      const finalForm = {
+        ...shareholderForm,
+        isFounder,
+        sharePercentage,
+        managementFeePercentage,
+      };
+
+      if (!editingShareholder) {
+        const cap = Number(shareholderForm.capital || 0);
+        if (!cap || cap <= 0) {
+          window.alert('الرجاء إدخال رأس المال الأساسي للشريك ويجب أن يكون أكبر من صفر.');
+          return;
+        }
+        if (isApiMode()) {
+          await api.createShareholder(finalForm);
+        } else {
+          await createShareholder(finalForm);
+        }
       } else {
-        await createShareholder(shareholderForm);
+        const payload = {
+          ...finalForm,
+          capital: Number(shareholderForm.capital || editingShareholder.capital || 0),
+          currentBalance: Number(editingShareholder.currentBalance || 0),
+        };
+        if (isApiMode()) {
+          await api.updateShareholder(editingShareholder.id, payload);
+        } else {
+          await updateShareholder(editingShareholder.id, payload);
+        }
       }
-    } else {
-      if (isApiMode()) {
-        await api.updateShareholder(editingShareholder.id, shareholderForm);
-      } else {
-        await updateShareholder(editingShareholder.id, shareholderForm);
-      }
+      await loadData();
+      setShowShareholderModal(false);
+    } catch (err: any) {
+      window.alert(err?.message || 'حدث خطأ أثناء حفظ بيانات الشريك.');
     }
-    await loadData();
-    setShowShareholderModal(false);
   };
 
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedShareholderId || transactionForm.amount <= 0) return;
-    const selectedShareholder: any = liveShareholders.find(s => s.id === selectedShareholderId);
-    if (!selectedShareholder) return;
+    const selectedPartner: any = liveShareholders.find((s: any) => s.id === selectedShareholderId);
+    if (!selectedPartner) return;
 
-    const availableProfit = Number(selectedShareholder.availableProfit || 0);
-    const capital = Number(selectedShareholder.capital || 0);
+    const availableProfit = Number(selectedPartner.availableProfit || 0);
+    const capital = Number(selectedPartner.capital || 0);
+    const requestedAmount = Number(transactionForm.amount || 0);
 
-    // Validation: prevent withdrawing more than available
+    // Strict separation between Profit Withdrawal and Capital Withdrawal
     if (transactionType === 'profit_withdrawal') {
       if (availableProfit <= 0) {
-        window.alert('لا توجد أرباح متاحة للسحب لهذا المساهم.');
+        window.alert('لا توجد أرباح متاحة للسحب لهذا الشريك حالياً.');
         return;
       }
-      if (Number(transactionForm.amount) > availableProfit) {
-        window.alert('المبلغ أكبر من الأرباح المتاحة. الرجاء إدخال مبلغ أقل أو مساوي.');
+      if (requestedAmount > availableProfit + 0.01) {
+        window.alert(
+          `المبلغ المطلوب (${formatCurrency(requestedAmount)}) أكبر من الأرباح المتاحة للسحب (${formatCurrency(availableProfit)}).`
+        );
+        return;
+      }
+    } else if (transactionType === 'capital_withdrawal') {
+      if (requestedAmount > capital + 0.01) {
+        window.alert(
+          `المبلغ المطلوب سحبه من رأس المال (${formatCurrency(requestedAmount)}) أكبر من رأس المال الفعلي للشريك (${formatCurrency(capital)}). لسحب الأرباح يرجى استخدام زر "سحب أرباح".`
+        );
         return;
       }
     }
 
-    if (transactionType === 'capital_withdrawal') {
-      const requested = Number(transactionForm.amount || 0);
-      const maxCap = capital;
-      const maxTotal = capital + availableProfit;
-      if (requested > maxTotal) {
-        window.alert('المبلغ أكبر من إجمالي الأموال المتاحة (رأس المال + الأرباح المتاحة). الرجاء إدخال مبلغ أقل أو مساوي.');
-        return;
-      }
-      if (requested > maxCap) {
-        const withdrawTotal = requested;
-        let remaining = withdrawTotal;
-        const profitPart = Math.min(availableProfit, remaining);
-        if (profitPart > 0) {
-          const payload = {
-            shareholderId: selectedShareholderId,
-            shareholderName: selectedShareholder.name,
-            type: 'profit_withdrawal' as const,
-            amount: Number(profitPart),
-            date: new Date().toISOString().split('T')[0],
-            description: transactionForm.description || 'سحب أرباح أثناء سحب رأس مال',
-            createdBy: user?.name || 'النظام'
-          };
-          if (isApiMode()) {
-            await api.createShareholderTransaction(payload);
-          } else {
-            await addShareholderTransaction(payload);
-          }
-          remaining = Number((remaining - profitPart).toFixed(2));
-        }
-        if (remaining > 0) {
-          const payload = {
-            shareholderId: selectedShareholderId,
-            shareholderName: selectedShareholder.name,
-            type: 'capital_withdrawal' as const,
-            amount: Number(remaining),
-            date: new Date().toISOString().split('T')[0],
-            description: transactionForm.description || 'سحب رأس مال (بجزء من سحب إجمالي)',
-            createdBy: user?.name || 'النظام'
-          };
-          if (isApiMode()) {
-            await api.createShareholderTransaction(payload);
-          } else {
-            await addShareholderTransaction(payload);
-          }
-        }
-
-        await loadData();
-        setShowTransactionModal(false);
-        setTransactionForm({ amount: 0, description: '' });
-        return;
-      }
-    }
+    const defaultDesc =
+      transactionType === 'capital_deposit'
+        ? 'إيداع زيادة رأس مال'
+        : transactionType === 'capital_withdrawal'
+          ? 'سحب وتخفيض من رأس المال'
+          : transactionType === 'profit_distribution'
+            ? 'تخصيص وتوزيع أرباح دورية'
+            : 'سحب من الأرباح المحققة المتاحة';
 
     const txPayload = {
       shareholderId: selectedShareholderId,
-      shareholderName: selectedShareholder.name,
+      shareholderName: selectedPartner.name,
       type: transactionType,
-      amount: Number(transactionForm.amount || 0),
-      date: new Date().toISOString().split('T')[0],
-      description: transactionForm.description || (
-        transactionType === 'capital_deposit' ? 'إيداع رأس مال' :
-        transactionType === 'capital_withdrawal' ? 'سحب رأس مال' : 'سحب أرباح'
-      ),
-      createdBy: user?.name || 'النظام'
+      amount: requestedAmount,
+      date: transactionForm.date || new Date().toISOString().slice(0, 10),
+      description: transactionForm.description.trim() || defaultDesc,
+      createdBy: user?.name || 'النظام',
     };
 
-    if (isApiMode()) {
-      await api.createShareholderTransaction(txPayload);
-    } else {
-      await addShareholderTransaction(txPayload);
+    try {
+      if (isApiMode()) {
+        await api.createShareholderTransaction(txPayload);
+      } else {
+        await addShareholderTransaction(txPayload);
+      }
+      await loadData();
+      setShowTransactionModal(false);
+      setTransactionForm({ amount: 0, date: new Date().toISOString().slice(0, 10), description: '' });
+    } catch (err: any) {
+      window.alert(err?.message || 'حدث خطأ أثناء تنفيذ الحركة المالية.');
     }
-
-    await loadData();
-    setShowTransactionModal(false);
-    setTransactionForm({ amount: 0, description: '' });
   };
 
   const handleDeleteTransaction = async (txId: string) => {
-    if (!window.confirm('تأكيد: حذف/تراجع عن هذه الحركة؟')) return;
+    if (!window.confirm('هل أنت متأكد من حذف هذه الحركة المالية وعكس أثرها على رأس المال/الأرباح والخزينة؟')) return;
     try {
       if (isApiMode()) {
         await api.deleteShareholderTransaction(txId);
       } else {
         await deleteShareholderTransaction(txId);
       }
-      alert('تم إزالة الحركة والتراجع عن أثرها بنجاح.');
       await loadData();
     } catch (err: any) {
-      alert('فشل حذف الحركة: ' + (err.message || 'خطأ في النظام'));
+      window.alert('فشل حذف الحركة: ' + (err.message || 'خطأ في النظام'));
     }
   };
 
   const handleDeleteShareholder = async (shareholderId: string, name: string) => {
-    if (!window.confirm(`هل أنت متأكد من حذف المساهم "${name}"؟`)) return;
+    if (!window.confirm(`هل أنت متأكد من حذف الشريك "${name}" وكافة سجلاته؟`)) return;
     try {
       if (isApiMode()) {
         await api.deleteShareholder(shareholderId);
       } else {
         await deleteShareholder(shareholderId);
       }
-      alert('تم حذف المساهم بنجاح.');
+      if (inspectingPartnerId === shareholderId) setInspectingPartnerId(null);
       await loadData();
     } catch (err: any) {
-      alert('فشل حذف المساهم: ' + (err.message || 'خطأ في النظام'));
+      window.alert('فشل حذف الشريك: ' + (err.message || 'خطأ في النظام'));
     }
   };
 
-  // Derive Live Financial Numbers:
-  // If liveMetrics is available from backend API, use them directly as ground truth!
-  const systemLiveNetProfit = liveMetrics ? liveMetrics.liveNetProfit : calculateNetProfit(sales, products, expenses);
-  const totalCapital = liveMetrics ? liveMetrics.totalCapital : shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
-  const systemLiveRoi = liveMetrics ? liveMetrics.systemLiveRoi : (totalCapital ? systemLiveNetProfit / totalCapital : 0);
-  
-  const liveShareholders = shareholders.map((s: any) => {
-    // If backend already computed metrics, preserve them
-    if (s.availableProfit !== undefined && s.grossProfit !== undefined) {
-      return s;
-    }
-
-    const shareRatio = totalCapital ? (Number(s.capital || 0) / totalCapital) : ((s.sharePercentage || 0) / 100);
-    const startDate = periodFrom ? toDayStart(new Date(periodFrom)) : (s.createdAt ? toDayStart(new Date(s.createdAt)) : new Date(0));
-    const endDate = periodTo ? toDayEnd(new Date(periodTo)) : toDayEnd(new Date());
-
-    const periodSales = sales.filter(sale => {
-      const d = new Date(sale.date);
-      return d >= startDate && d <= endDate;
+  const openTxModal = (
+    partnerId: string,
+    type: 'capital_deposit' | 'capital_withdrawal' | 'profit_withdrawal' | 'profit_distribution'
+  ) => {
+    setSelectedShareholderId(partnerId);
+    setTransactionType(type);
+    setTransactionForm({
+      amount: 0,
+      date: new Date().toISOString().slice(0, 10),
+      description: '',
     });
-    const periodExpenses = expenses.filter(exp => {
-      const d = new Date(exp.date);
-      return d >= startDate && d <= endDate;
-    });
-
-    const netProfitSinceJoin = calculateNetProfit(periodSales, products, periodExpenses);
-    const grossProfit = Number((netProfitSinceJoin * shareRatio) || 0);
-    const mgmtFee = Number((grossProfit * ((s.managementFeePercentage || 0) / 100)) || 0);
-    const netEntitlement = Number((grossProfit - mgmtFee) || 0);
-
-    const shareholderTxs = transactions.filter(t => t.shareholderId === s.id);
-    const totalDistributed = shareholderTxs
-      .filter(t => t.type === 'profit_distribution')
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-    const totalWithdrawnProfits = shareholderTxs
-      .filter(t => t.type === 'profit_withdrawal')
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-    const currentBalanceFromTx = totalDistributed - totalWithdrawnProfits;
-    const undistributedEntitlement = Math.max(0, netEntitlement - totalDistributed);
-    const availableProfit = Math.max(0, currentBalanceFromTx + undistributedEntitlement);
-    const totalNetValue = Number(s.capital || 0) + availableProfit;
-
-    return {
-      ...s,
-      grossProfit: Number(grossProfit || 0),
-      mgmtFee: Number(mgmtFee || 0),
-      netEntitlement,
-      totalDistributed,
-      totalWithdrawnProfits,
-      currentBalanceFromTx,
-      availableProfit,
-      totalNetValue,
-    };
-  });
-
-  const totalAvailableProfits = liveMetrics 
-    ? liveMetrics.totalAvailableProfits 
-    : liveShareholders.reduce((sum, s) => sum + (s.availableProfit || 0), 0);
+    setShowTransactionModal(true);
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
+    <div className="h-full max-h-screen overflow-hidden flex flex-col gap-2.5">
+      {/* TIER 1: Fixed Compact Action Header */}
+      <section className="bg-white rounded-xl px-3.5 py-2 border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-2.5 shrink-0">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
-            <h2 className="text-2xl font-bold text-gray-800">شاشة تداول المساهمين اللحظية</h2>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>مزامنة مباشرة مع دفاتر النظام</span>
-            </span>
+            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-2xs shrink-0">
+              <Landmark size={16} />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-sm md:text-base font-black text-slate-900 leading-tight">
+                  حسابات الشركاء والمؤسسين
+                </h2>
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                  حسابات الشركاء
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                متابعة رؤوس الأموال، حصص الأرباح الزمنية، والأرباح المتاحة (آخر تحديث: {lastSynced.toLocaleTimeString('ar-EG')})
+              </p>
+            </div>
           </div>
-          <p className="text-gray-500 text-sm mt-1">
-            ربط تلقائي مع سجلات المبيعات، تكلفة البضاعة المباعة والمصروفات لحساب الأرباح المحققة لحظياً.
-            <span className="text-xs text-gray-400 mr-2">(آخر تحديث: {lastSynced.toLocaleTimeString('ar-EG')})</span>
-          </p>
+
+          {/* Search Input */}
+          <div className="relative w-44 sm:w-56">
+            <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="بحث باسم الشريك..."
+              className="input-ui h-7.5 w-full pr-7 pl-2.5 text-xs bg-slate-50 border-slate-200 focus:bg-white"
+            />
+          </div>
         </div>
-        <div className="flex gap-2">
+
+        {/* Action Controls & View Switcher */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* View Switcher Tabs */}
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => setActiveTab('overview')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all ${
+                activeTab === 'overview'
+                  ? 'bg-white text-indigo-700 shadow-2xs font-extrabold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <PieChartIcon size={13} />
+              <span>حصص الشركاء والمؤسسين ({liveShareholders.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('ledger')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all ${
+                activeTab === 'ledger'
+                  ? 'bg-white text-indigo-700 shadow-2xs font-extrabold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <FileText size={13} />
+              <span>سجل المعاملات ({displayedTransactions.length})</span>
+            </button>
+          </div>
+
           <button
+            type="button"
             onClick={loadData}
             disabled={isLoading}
-            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50"
-            title="تحديث فوري من قاعدة البيانات"
+            className="flex items-center gap-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50"
+            title="تحديث لحظي من قاعدة البيانات"
           >
-            <RefreshCw size={16} className={isLoading ? 'animate-spin text-indigo-600' : ''} />
-            <span>تحديث لحظي</span>
+            <RefreshCw size={13} className={isLoading ? 'animate-spin text-indigo-600' : ''} />
+            <span className="hidden sm:inline">تحديث</span>
           </button>
 
           <button
+            type="button"
             onClick={() => {
               setEditingShareholder(null);
-              setShareholderForm({ name: '', phone: '', sharePercentage: 0, managementFeePercentage: 50, capital: 0, notes: '' });
+              setShareholderForm({
+                name: '',
+                phone: '',
+                isFounder: false,
+                sharePercentage: 50,
+                managementFeePercentage: 50,
+                capital: 0,
+                joinedDate: new Date().toISOString().slice(0, 10),
+                notes: '',
+              });
               setShowShareholderModal(true);
             }}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-medium shadow-sm"
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95"
           >
-            <Plus size={20} />
-            <span>إضافة مساهم</span>
+            <Plus size={13} />
+            <span>إضافة شريك أو مؤسس</span>
           </button>
         </div>
-      </div>
+      </section>
 
-      {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Subscribed Capital */}
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
-              <Wallet size={24} className="text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-gray-500 text-xs font-medium">إجمالي رأس المال المكتتب</p>
-              <p className="text-xl font-bold text-gray-800 mt-0.5">{formatCurrency(totalCapital)}</p>
-            </div>
+      {/* TIER 2: Streamlined 4-KPI Partner Summary Strip */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 shrink-0">
+        {/* KPI 1: Total Active Capital */}
+        <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
+          <div className="min-w-0">
+            <span className="text-[11px] font-bold text-slate-500 block truncate">إجمالي رأس المال الفعلي</span>
+            <span className="text-base md:text-lg font-black text-slate-900 tabular-nums block leading-tight mt-0.5">
+              {formatCurrency(totalCapital)}
+            </span>
+            <span className="text-[10px] text-slate-400 block truncate mt-0.5">
+              تأسيسي: {formatCurrency(foundersSummary.totalInitialCapital)}
+            </span>
+          </div>
+          <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shrink-0 border border-indigo-100">
+            <Wallet size={18} />
           </div>
         </div>
 
-        {/* Card 2: Live Net Profit */}
-        <div className="bg-gradient-to-br from-emerald-600 to-emerald-800 rounded-xl p-5 shadow-sm border border-emerald-600 text-white relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-15">
-            <TrendingUp size={70} />
+        {/* KPI 2: Founders' & Partners' Total Share */}
+        <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] font-bold text-slate-500 block truncate">حصص المؤسسين والشركاء</span>
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              <span className="inline-flex items-center gap-1 text-xs font-black text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 tabular-nums">
+                <span className="text-[10px] font-bold text-purple-600">المؤسسون:</span>
+                {foundersSummary.foundersProportionalPct.toFixed(1)}%
+              </span>
+              <span className="inline-flex items-center gap-1 text-xs font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200/60 tabular-nums">
+                <span className="text-[10px] font-bold text-indigo-600">الشركاء:</span>
+                {foundersSummary.partnersProportionalPct.toFixed(1)}%
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-400 block truncate mt-1">
+              إجمالي هيكل الملكية: 100%
+            </span>
           </div>
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="bg-white/20 px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider">Live</span>
-              <p className="text-emerald-50 text-xs font-medium">إجمالي أرباح الشركة الحية</p>
-            </div>
-            <p className="text-2xl font-black mb-1">{formatCurrency(systemLiveNetProfit)}</p>
-            <div className="text-emerald-100 text-[11px] flex items-center gap-2 font-medium">
-              <span>العائد (ROI): <strong className="text-white">{(systemLiveRoi * 100).toFixed(2)}%</strong></span>
-              {liveMetrics && (
-                <span className="border-r border-emerald-400/40 pr-2 mr-2">
-                  مطابق لقائمة الدخل
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Card 3: Available Withdrawal Profits */}
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-sky-100 rounded-xl flex items-center justify-center shrink-0">
-              <Wallet size={24} className="text-sky-600" />
-            </div>
-            <div>
-              <p className="text-gray-500 text-xs font-medium">أرباح الشركاء المتاحة للسحب</p>
-              <p className="text-xl font-bold text-emerald-600 mt-0.5">{formatCurrency(totalAvailableProfits)}</p>
-            </div>
+          <div className="w-9 h-9 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 shrink-0 border border-amber-100">
+            <Award size={18} />
           </div>
         </div>
 
-        {/* Card 4: Active Shareholders */}
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center shrink-0">
-              <Users size={24} className="text-purple-600" />
-            </div>
-            <div>
-              <p className="text-gray-500 text-xs font-medium">عدد المساهمين</p>
-              <p className="text-xl font-bold text-gray-800 mt-0.5">{shareholders.length} مساهم</p>
-            </div>
+        {/* KPI 3: Available Profits for Withdrawal */}
+        <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
+          <div className="min-w-0">
+            <span className="text-[11px] font-bold text-slate-500 block truncate">الأرباح المتاحة للسحب</span>
+            <span className="text-base md:text-lg font-black text-emerald-600 tabular-nums block leading-tight mt-0.5">
+              {formatCurrency(totalAvailableProfits)}
+            </span>
+            <span className="text-[10px] text-slate-400 block truncate mt-0.5">
+              أرباح محتجزة جاهزة للصرف
+            </span>
+          </div>
+          <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600 shrink-0 border border-emerald-100">
+            <DollarSign size={18} />
           </div>
         </div>
-      </div>
 
-      {/* Tabs & Content */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="flex border-b border-gray-100">
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`flex items-center gap-2 px-6 py-4 text-sm font-semibold transition-colors ${
-              activeTab === 'overview' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/50' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <PieChartIcon size={18} />
-            <span>نظرة عامة والشركاء</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('transactions')}
-            className={`flex items-center gap-2 px-6 py-4 text-sm font-semibold transition-colors ${
-              activeTab === 'transactions' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/50' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <ArrowDownToLine size={18} />
-            <span>سجل المعاملات ({transactions.length})</span>
-          </button>
+        {/* KPI 4: Active Partners Count */}
+        <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] font-bold text-slate-500 block truncate">عدد المؤسسين والشركاء</span>
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              <span className="inline-flex items-center gap-1 text-xs font-black text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 tabular-nums">
+                {foundersSummary.foundersCount}
+                <span className="text-[10px] font-bold text-purple-600">مؤسس</span>
+              </span>
+              <span className="inline-flex items-center gap-1 text-xs font-black text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 tabular-nums">
+                {foundersSummary.partnersCount}
+                <span className="text-[10px] font-bold text-slate-600">مساهم</span>
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-400 block truncate mt-1">
+              الإجمالي: {liveShareholders.length} شريك ومؤسس نشط
+            </span>
+          </div>
+          <div className="w-9 h-9 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600 shrink-0 border border-purple-100">
+            <Users size={18} />
+          </div>
         </div>
+      </section>
 
-        <div className="p-6">
-          {activeTab === 'overview' && (
-            <div className="space-y-6">
-              {/* Landscape Chart Banner */}
-              <div className="bg-slate-50 rounded-xl p-6 border border-slate-100 flex flex-col md:flex-row items-center justify-between gap-6">
-                <div className="md:w-1/3 text-right">
-                  <h3 className="text-lg font-bold text-slate-800">توزيع حصص رأس المال</h3>
-                  <p className="text-xs text-slate-500 mt-1">يظهر هذا الرسم البياني نسبة مساهمة كل شريك بناءً على رأس المال الفعلي المدفوع حالياً في الشركة.</p>
-                  {liveMetrics && (
-                    <div className="mt-3 pt-3 border-t border-slate-200 text-xs text-slate-600 space-y-1">
-                      <div className="flex justify-between">
-                        <span>إجمالي المبيعات المحققة:</span>
-                        <strong className="text-slate-800">{formatCurrency(liveMetrics.totalSalesRevenue)}</strong>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>تكلفة البضاعة المباعة (COGS):</span>
-                        <strong className="text-slate-800">{formatCurrency(liveMetrics.totalCogs)}</strong>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>إجمالي المصروفات التشغيلية:</span>
-                        <strong className="text-slate-800">{formatCurrency(liveMetrics.totalExpenses)}</strong>
-                      </div>
-                    </div>
-                  )}
+      {/* TIER 3: Flexible & Contained Main Content Area */}
+      {activeTab === 'overview' ? (
+        <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+            {/* Founders Equity Distribution Breakdown Banner */}
+            {liveShareholders.length > 0 && (
+              <div className="bg-slate-50/90 rounded-xl p-3 border border-slate-200/80 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center shrink-0">
+                <div className="lg:col-span-5 space-y-1">
+                  <h3 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-1.5">
+                    <PieChartIcon size={14} className="text-indigo-600" />
+                    <span>هيكل الملكية وحصص المؤسسين والشركاء (100%)</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 leading-normal">
+                    يوضح المخطط توزيع الحصص النسبية من إجمالي 100% بين المؤسسين والشركاء، مع احتساب نصيب كل شريك من الأرباح وفق تاريخ انضمامه الفعلي وفصل رأس المال الأصلي عن الأرباح المتراكمة.
+                  </p>
+                  <div className="flex items-center gap-3 pt-0.5 text-[11px] flex-wrap">
+                    <span className="text-slate-600">
+                      إجمالي الملكية: <strong className="text-indigo-900 font-extrabold">100%</strong>
+                    </span>
+                    <span>•</span>
+                    <span className="text-purple-700">
+                      المؤسسون: <strong className="font-extrabold">{foundersSummary.foundersProportionalPct.toFixed(1)}%</strong>
+                    </span>
+                    <span>•</span>
+                    <span className="text-blue-700">
+                      الشركاء: <strong className="font-extrabold">{foundersSummary.partnersProportionalPct.toFixed(1)}%</strong>
+                    </span>
+                  </div>
                 </div>
-                <div className="w-full md:w-2/3 h-48">
-                  <TypedResponsiveContainer width="100%" height="100%">
-                    <TypedPieChart>
+
+                <div className="lg:col-span-7 min-w-0 w-full h-32 flex items-center justify-center overflow-hidden">
+                  <TypedResponsiveContainer width="100%" height={128}>
+                    <TypedPieChart margin={{ top: 0, right: 10, bottom: 0, left: 10 }}>
                       <TypedPie
-                        data={shareholders}
+                        data={chartData}
                         cx="50%"
                         cy="50%"
-                        innerRadius={45}
-                        outerRadius={65}
-                        paddingAngle={5}
-                        dataKey="capital"
+                        innerRadius={28}
+                        outerRadius={46}
+                        paddingAngle={3}
+                        dataKey="proportionalShare"
                         nameKey="name"
                       >
-                        {shareholders.map((entry: any, index: number) => (
+                        {chartData.map((_: any, index: number) => (
                           <TypedCell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </TypedPie>
-                      <TypedTooltip formatter={(value: number) => formatCurrency(value)} />
-                      <TypedLegend layout="horizontal" align="center" verticalAlign="bottom" />
+                      <TypedTooltip
+                        formatter={(value: number, _name: string, entry: any) => [
+                          `${Number(value).toFixed(1)}% من هيكل الشركة (رأس المال: ${formatCurrency(entry.payload.capital)})`,
+                          'الحصة النسبية',
+                        ]}
+                      />
+                      <TypedLegend
+                        layout="horizontal"
+                        align="center"
+                        verticalAlign="bottom"
+                        formatter={(value: string) => {
+                          const item = chartData.find((c) => c.name === value);
+                          return `${value} (${item?.proportionalShare ?? 0}%)`;
+                        }}
+                        wrapperStyle={{ fontSize: '10px', paddingTop: '2px' }}
+                      />
                     </TypedPieChart>
                   </TypedResponsiveContainer>
                 </div>
               </div>
+            )}
 
-              {/* Period filter (from / to) */}
-              <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-50/70 rounded-lg border border-gray-200/60">
-                <div className="text-xs font-medium text-gray-700">تصفية فترة الأرباح:</div>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-gray-600">من</label>
-                  <input type="date" value={periodFrom} onChange={e => setPeriodFrom(e.target.value)} className="px-2 py-1 border rounded text-xs bg-white" />
-                  <label className="text-xs text-gray-600">إلى</label>
-                  <input type="date" value={periodTo} onChange={e => setPeriodTo(e.target.value)} className="px-2 py-1 border rounded text-xs bg-white" />
-                  {(periodFrom || periodTo) && (
-                    <button onClick={() => { setPeriodFrom(''); setPeriodTo(''); }} className="text-xs text-indigo-600 hover:underline font-semibold">إلغاء التصفية</button>
-                  )}
-                </div>
+            {/* Partner Cards Grid */}
+            {visibleShareholders.length === 0 ? (
+              <div className="py-16 text-center text-slate-400">
+                <Users size={40} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-sm font-bold text-slate-600">لا يوجد مساهمون مطابقون للبحث</p>
               </div>
-              
-              {/* Spacious Shareholders Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {liveShareholders.map((shareholder, index) => (
-                  <div key={shareholder.id} className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden">
-                    {/* Live indicator dot */}
-                    <div className="absolute top-4 left-4 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="مباشر"></div>
-                    
-                    <div className="flex justify-between items-start mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{ backgroundColor: COLORS[index % COLORS.length] }}>
-                          {shareholder.name.charAt(0)}
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+                {visibleShareholders.map((shareholder: any, index: number) => {
+                  const propShare =
+                    chartData.find((c) => c.id === shareholder.id)?.proportionalShare ??
+                    shareholder.sharePercentage ??
+                    0;
+                  const weightPct = (((shareholder.capitalWeightRatio ?? shareholder.shareRatio) || 0) * 100).toFixed(1);
+                  const originalCap =
+                    shareholder.originalCapital !== undefined ? shareholder.originalCapital : shareholder.capital;
+                  return (
+                    <div
+                      key={shareholder.id}
+                      className="bg-white rounded-xl p-4 border border-slate-200 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between"
+                    >
+                      <div>
+                        {/* Card Header */}
+                        <div className="flex justify-between items-start gap-2 mb-3">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-sm shrink-0 shadow-2xs"
+                              style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                            >
+                              {shareholder.name.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <h4 className="font-black text-slate-900 text-sm truncate">{shareholder.name}</h4>
+                                {shareholder.isFounder ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-700 border border-purple-200 shrink-0">
+                                    مؤسس
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                                    شريك
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500 font-semibold">
+                                <span>الحصة من الشركة: <strong className="text-indigo-700 font-extrabold">{propShare}%</strong></span>
+                                <span>•</span>
+                                <span>نسبة توزيع الأرباح: {shareholder.sharePercentage}%</span>
+                                <span>•</span>
+                                <span>الوزن الرأسمالي: {weightPct}%</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const isF = Boolean(shareholder.isFounder);
+                                setEditingShareholder(shareholder);
+                                setShareholderForm({
+                                  name: shareholder.name,
+                                  phone: shareholder.phone,
+                                  isFounder: isF,
+                                  sharePercentage: isF ? 100 : (shareholder.sharePercentage || 50),
+                                  managementFeePercentage: isF ? 0 : (shareholder.managementFeePercentage ?? 50),
+                                  capital: shareholder.capital,
+                                  joinedDate: toIsoDay(shareholder.joinedDate || shareholder.createdAt),
+                                  notes: shareholder.notes || '',
+                                });
+                                setShowShareholderModal(true);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                              title="تعديل بيانات الشريك"
+                            >
+                              <Edit size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteShareholder(shareholder.id, shareholder.name)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                              title="حذف الشريك"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className="font-bold text-gray-800">{shareholder.name}</h4>
-                          <p className="text-xs text-gray-500 font-medium">الربح: {shareholder.sharePercentage}% | الإدارة: {shareholder.managementFeePercentage || 0}%</p>
-                          <p className="text-xs text-gray-400">انضم: {formatDateDisplay(shareholder.createdAt)}</p>
+
+                        {/* Partner Entry Date & Management Fee Strip */}
+                        <div className="mb-2.5 px-2.5 py-1.5 rounded-lg bg-slate-100/80 border border-slate-200/70 flex items-center justify-between text-[11px]">
+                          <span className="text-slate-600 font-semibold flex items-center gap-1">
+                            <Calendar size={12} className="text-indigo-600" />
+                            تاريخ الانضمام: <strong className="text-slate-900">{formatDateDisplay(shareholder.joinedDate || shareholder.createdAt)}</strong>
+                          </span>
+                          <span className="text-[10px] font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-slate-200">
+                            الحصة النسبية: {propShare}%
+                          </span>
+                        </div>
+
+                        {/* Partner Account Metrics (Strictly Partner-Centric & Protective of Capital) */}
+                        <div className="space-y-1.5 mb-2.5 bg-slate-50/80 p-3 rounded-xl border border-slate-200/80 text-xs">
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-500 font-semibold">رأس المال التأسيسي (الأصلي):</span>
+                            <span className="font-bold text-slate-700">{formatCurrency(originalCap)}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-800 font-bold flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 shrink-0" />
+                              رأس المال العامل الحالي:
+                            </span>
+                            <span className="font-black text-indigo-950 text-sm">{formatCurrency(shareholder.capital)}</span>
+                          </div>
+
+                          <div className="border-t border-slate-200/70 my-1 pt-1 flex justify-between items-center">
+                            <span className="text-slate-600 font-semibold">صافي حصة الأرباح المكتسبة:</span>
+                            <span className="font-bold text-indigo-700">+{formatCurrency(shareholder.netEntitlement)}</span>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <span className="text-amber-800 font-medium flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                              مسحوبات الأرباح (خصم أرباح):
+                            </span>
+                            <span className="font-bold text-amber-700">
+                              -{formatCurrency(shareholder.totalWithdrawnProfits || 0)}
+                            </span>
+                          </div>
+
+                          <div className="border-t border-slate-200 pt-1.5 mt-1 flex justify-between items-center bg-emerald-50/80 -mx-3 px-3 py-1.5 rounded-md">
+                            <span className="text-emerald-900 font-black flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
+                              الأرباح المتاحة للسحب الآن:
+                            </span>
+                            <span className="font-black text-emerald-700 text-sm">
+                              +{formatCurrency(shareholder.availableProfit)}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center bg-indigo-50/90 border border-indigo-100 -mx-3 -mb-3 mt-1.5 px-3 py-2 rounded-b-xl">
+                            <span className="text-indigo-950 font-black text-xs">إجمالي رصيد الشريك المركب:</span>
+                            <span className="font-black text-indigo-800 text-sm">
+                              {formatCurrency(shareholder.totalNetValue)}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1">
+
+                      {/* Standardized 4-Action Bottom Section */}
+                      <div className="pt-2.5 border-t border-slate-100 space-y-1.5 mt-auto">
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openTxModal(shareholder.id, 'capital_deposit')}
+                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white rounded-lg text-[11px] font-bold transition-all border border-indigo-200/80 active:scale-95"
+                            title="إيداع وزيادة في رأس المال العامل للشريك"
+                          >
+                            <ArrowDownToLine size={12} />
+                            <span>زيادة رأسمال</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
+                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white rounded-lg text-[11px] font-bold transition-all border border-emerald-200/80 active:scale-95"
+                            title="سحب من رصيد الأرباح المتاحة دون المساس برأس المال"
+                          >
+                            <DollarSign size={12} />
+                            <span>سحب أرباح</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openTxModal(shareholder.id, 'capital_withdrawal')}
+                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white rounded-lg text-[11px] font-bold transition-all border border-rose-200/80 active:scale-95"
+                            title="سحب وتخفيض من رأس المال العامل الأساسي"
+                          >
+                            <ArrowUpFromLine size={12} />
+                            <span>سحب رأسمال</span>
+                          </button>
+                        </div>
+
                         <button
-                          onClick={() => {
-                            setEditingShareholder(shareholder);
-                            setShareholderForm({
-                              name: shareholder.name, phone: shareholder.phone, sharePercentage: shareholder.sharePercentage, managementFeePercentage: shareholder.managementFeePercentage || 50, capital: shareholder.capital, notes: shareholder.notes || ''
-                            });
-                            setShowShareholderModal(true);
-                          }}
-                          className="text-gray-400 hover:text-indigo-600 transition-colors p-1"
-                          title="تعديل بيانات المساهم"
+                          type="button"
+                          onClick={() => setInspectingPartnerId(shareholder.id)}
+                          className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-indigo-700 rounded-lg text-xs font-bold transition-all border border-slate-200 active:scale-95"
+                          title="فتح كشف الحساب التفصيلي للشريك"
                         >
-                          <Edit size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteShareholder(shareholder.id, shareholder.name)}
-                          className="text-gray-400 hover:text-rose-600 transition-colors p-1"
-                          title="حذف المساهم"
-                        >
-                          <Trash2 size={16} />
+                          <FileText size={13} className="text-indigo-600" />
+                          <span>كشف الحساب المالي التفصيلي</span>
                         </button>
                       </div>
                     </div>
-                    
-                    <div className="space-y-2 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-100">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600 font-medium">رأس المال:</span>
-                        <span className="font-bold text-gray-900">{formatCurrency(shareholder.capital)}</span>
-                      </div>
-                      <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
-                        <span className="text-gray-600">الأرباح المستحقة (بعد الإدارة):</span>
-                        <span className="font-bold text-slate-800">{formatCurrency(shareholder.netEntitlement)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-gray-500">
-                        <span>إجمالي الربح / رسوم الإدارة:</span>
-                        <span className="font-semibold text-rose-500">{formatCurrency(shareholder.grossProfit)} / -{formatCurrency(shareholder.mgmtFee)}</span>
-                      </div>
-                      {shareholder.totalWithdrawnProfits > 0 && (
-                        <div className="flex justify-between text-xs border-t border-slate-100 pt-1 mt-1 text-gray-500">
-                          <span>أرباح تم سحبها مسبقاً:</span>
-                          <span className="font-bold text-amber-600">-{formatCurrency(shareholder.totalWithdrawnProfits)}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between text-xs border-t border-slate-200 pt-1 mt-1">
-                        <span className="text-emerald-700 font-bold">أرباح متاحة للسحب الآن:</span>
-                        <span className="font-bold text-emerald-600">+{formatCurrency(shareholder.availableProfit)}</span>
-                      </div>
-                      <div className="flex justify-between text-sm border-t border-emerald-100 pt-2 mt-2 bg-emerald-50/50 -mx-3 -mb-3 p-3 rounded-b-lg">
-                        <span className="text-emerald-800 font-bold">إجمالي أموال المساهم:</span>
-                        <span className="font-black text-emerald-700">{formatCurrency(shareholder.totalNetValue)}</span>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-50">
-                      <button
-                        onClick={() => {
-                          setSelectedShareholderId(shareholder.id);
-                          setTransactionType('capital_deposit');
-                          setShowTransactionModal(true);
-                        }}
-                        className="flex items-center justify-center gap-1 py-1.5 bg-slate-50 hover:bg-indigo-50 text-indigo-700 rounded text-xs font-semibold transition-colors"
-                      >
-                        <ArrowDownToLine size={14} />
-                        <span>إيداع رأسمال</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedShareholderId(shareholder.id);
-                          setTransactionType('capital_withdrawal');
-                          setShowTransactionModal(true);
-                        }}
-                        className="flex items-center justify-center gap-1 py-1.5 bg-slate-50 hover:bg-rose-50 text-rose-700 rounded text-xs font-semibold transition-colors"
-                      >
-                        <ArrowUpFromLine size={14} />
-                        <span>سحب رأس مال</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedShareholderId(shareholder.id);
-                          setTransactionType('profit_withdrawal');
-                          setShowTransactionModal(true);
-                        }}
-                        className="flex items-center justify-center gap-1 py-1.5 bg-slate-50 hover:bg-emerald-50 text-emerald-700 rounded text-xs font-semibold transition-colors"
-                      >
-                        <ArrowUpFromLine size={14} />
-                        <span>سحب أرباح</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Pinned Bottom Status Bar */}
+          <div className="erp-status-bar shrink-0 py-1.5 px-3 text-[11px] min-h-9">
+            <div className="flex items-center gap-4 flex-wrap">
+              <span>
+                عدد الشركاء والمؤسسين: <strong className="text-indigo-700 font-extrabold">{visibleShareholders.length}</strong>
+              </span>
+              <span>
+                إجمالي رأس المال الفعلي: <strong className="text-slate-900 font-extrabold">{formatCurrency(totalCapital)}</strong>
+              </span>
+              <span>
+                الأرباح المتاحة للسحب: <strong className="text-emerald-700 font-extrabold">{formatCurrency(totalAvailableProfits)}</strong>
+              </span>
+            </div>
+            <div className="text-slate-500 text-[10px]">
+              الأرباح مرجحة تلقائياً بتاريخ انضمام كل شريك ومؤسس
+            </div>
+          </div>
+        </section>
+      ) : (
+        /* TAB 2: Comprehensive Shareholder Ledger & Transaction History */
+        <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+          {/* Sub-toolbar for Ledger filtering */}
+          <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-2.5 shrink-0">
+            {/* Side-by-side filter controls container */}
+            <div className="flex-1 max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+              {/* Filter 1: تصفية الشريك والمؤسس */}
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                <Users size={14} className="text-indigo-600 shrink-0" />
+                <label className="text-xs font-bold text-slate-600 shrink-0 whitespace-nowrap">
+                  تصفية الشريك:
+                </label>
+                <select
+                  value={ledgerPartnerFilter}
+                  onChange={(e) => setLedgerPartnerFilter(e.target.value)}
+                  className="w-full text-xs bg-transparent border-none font-bold text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="all">جميع الشركاء والمؤسسين ({liveShareholders.length})</option>
+                  {liveShareholders.map((s: any) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {s.isFounder ? '(مؤسس)' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              {/* Debug panel toggle */}
-              <div className="mt-6">
-                <button onClick={() => setShowDebug(v => !v)} className="text-xs text-gray-500 hover:underline">
-                  {showDebug ? 'إخفاء معلومات المطابقة الفنية' : 'عرض معلومات المطابقة الفنية'}
-                </button>
-                {showDebug && (
-                  <div className="mt-2 p-3 bg-black/5 rounded text-xs font-mono max-h-64 overflow-auto">
-                    <div className="mb-2">
-                      <strong>liveMetrics:</strong>
-                      <pre className="whitespace-pre-wrap">{JSON.stringify(liveMetrics, null, 2)}</pre>
-                    </div>
-                    <div className="mb-2">
-                      <strong>liveShareholders count:</strong> {liveShareholders.length}
-                    </div>
-                    <div>
-                      <strong>transactions count:</strong> {transactions.length}
-                    </div>
-                  </div>
-                )}
+              {/* Filter 2: أنواع الحركات */}
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                <Filter size={14} className="text-indigo-600 shrink-0" />
+                <label className="text-xs font-bold text-slate-600 shrink-0 whitespace-nowrap">
+                  أنواع الحركات:
+                </label>
+                <select
+                  value={ledgerTypeFilter}
+                  onChange={(e) => setLedgerTypeFilter(e.target.value)}
+                  className="w-full text-xs bg-transparent border-none font-bold text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="all">كل أنواع الحركات المالية</option>
+                  <option value="capital_deposit">إيداع وزيادة رأس المال</option>
+                  <option value="capital_withdrawal">سحب وتخفيض رأس المال</option>
+                  <option value="profit_distribution">توزيع أرباح</option>
+                  <option value="profit_withdrawal">سحب أرباح محققة</option>
+                </select>
               </div>
             </div>
-          )}
 
-          {activeTab === 'transactions' && (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-gray-50 border-y border-gray-100">
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">التاريخ</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">المساهم</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">نوع الحركة</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">المبلغ</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">البيان</th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-600">بواسطة</th>
-                    <th className="px-4 py-3 text-center text-sm font-semibold text-gray-600">إجراء</th>
+            {/* Quick Action / Deep Statement Link */}
+            {ledgerPartnerFilter !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setInspectingPartnerId(ledgerPartnerFilter)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold transition-all border border-indigo-200 active:scale-95 shrink-0 self-start md:self-auto"
+              >
+                <FileText size={13} />
+                <span>فتح كشف الحساب الكامل للشريك</span>
+                <ChevronLeft size={13} />
+              </button>
+            )}
+          </div>
+
+          <div className="desktop-table-scroll">
+            <table className="w-full min-w-[900px] border-collapse">
+              <thead className="desktop-sticky-header">
+                <tr>
+                  <th className="py-2.5 px-4 text-right">التاريخ</th>
+                  <th className="py-2.5 px-4 text-right">الشريك</th>
+                  <th className="py-2.5 px-4 text-right">نوع الحركة</th>
+                  <th className="py-2.5 px-4 text-right">المبلغ</th>
+                  <th className="py-2.5 px-4 text-right">رصيد رأس المال بعد الحركة</th>
+                  <th className="py-2.5 px-4 text-right">الأرباح المتاحة بعد الحركة</th>
+                  <th className="py-2.5 px-4 text-right">البيان</th>
+                  <th className="py-2.5 px-4 text-right">بواسطة</th>
+                  <th className="py-2.5 px-4 text-center">إجراء</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {displayedTransactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="py-16 px-4 text-center text-slate-400">
+                      <FileText size={36} className="mx-auto mb-2 text-slate-300" />
+                      <p className="text-xs font-bold">لا توجد حركات مالية مسجلة مطابقة للفلتر</p>
+                    </td>
+                  </tr>
+                ) : (
+                  displayedTransactions.map((tx: any) => {
+                    const isPositive = tx.type === 'capital_deposit' || tx.type === 'profit_distribution';
+                    return (
+                      <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-2.5 px-4 text-xs font-mono text-slate-600">
+                          {formatDateDisplay(tx.date)}
+                        </td>
+                        <td className="py-2.5 px-4 text-xs md:text-sm font-bold text-slate-900">
+                          <button
+                            type="button"
+                            onClick={() => setInspectingPartnerId(tx.shareholderId)}
+                            className="hover:text-indigo-600 hover:underline text-right inline-flex items-center gap-1.5"
+                          >
+                            <span>{tx.shareholderName}</span>
+                            {liveShareholders.find((s: any) => s.id === tx.shareholderId)?.isFounder && (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-black bg-purple-100 text-purple-700 border border-purple-200">
+                                مؤسس
+                              </span>
+                            )}
+                          </button>
+                        </td>
+                        <td className="py-2.5 px-4">
+                          <span
+                            className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              tx.type === 'capital_deposit'
+                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                : tx.type === 'capital_withdrawal'
+                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                  : tx.type === 'profit_distribution'
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {tx.type === 'capital_deposit'
+                              ? 'إيداع رأس مال'
+                              : tx.type === 'capital_withdrawal'
+                                ? 'سحب رأس مال'
+                                : tx.type === 'profit_distribution'
+                                  ? 'توزيع أرباح'
+                                  : 'سحب أرباح'}
+                          </span>
+                        </td>
+                        <td
+                          className={`py-2.5 px-4 text-xs md:text-sm font-black tabular-nums ${
+                            isPositive ? 'text-emerald-600' : 'text-rose-600'
+                          }`}
+                        >
+                          {isPositive ? '+' : '-'}
+                          {formatCurrency(tx.amount)}
+                        </td>
+                        <td className="py-2.5 px-4 text-xs font-bold text-slate-800 tabular-nums">
+                          {tx.runningCapital !== undefined ? formatCurrency(tx.runningCapital) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-xs font-bold text-emerald-700 tabular-nums">
+                          {tx.runningAvailableProfit !== undefined ? formatCurrency(tx.runningAvailableProfit) : '-'}
+                        </td>
+                        <td className="py-2.5 px-4 text-xs text-slate-600 max-w-xs truncate" title={tx.description}>
+                          {tx.description}
+                        </td>
+                        <td className="py-2.5 px-4 text-xs text-slate-500">{tx.createdBy}</td>
+                        <td className="py-2.5 px-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTransaction(tx.id)}
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                            title="حذف وعكس أثر الحركة"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="erp-status-bar shrink-0 py-1.5 px-3 text-[11px] min-h-9">
+            <div className="flex items-center gap-4 flex-wrap">
+              <span>
+                إجمالي الحركات المعروضة:{' '}
+                <strong className="text-indigo-700 font-extrabold">{displayedTransactions.length}</strong>
+              </span>
+              <span>
+                إجمالي إيداعات رأس المال:{' '}
+                <strong className="text-emerald-700 font-extrabold">
+                  {formatCurrency(
+                    displayedTransactions
+                      .filter((t) => t.type === 'capital_deposit')
+                      .reduce((s, t) => s + Number(t.amount || 0), 0)
+                  )}
+                </strong>
+              </span>
+              <span>
+                إجمالي مسحوبات الأرباح:{' '}
+                <strong className="text-amber-700 font-extrabold">
+                  {formatCurrency(
+                    displayedTransactions
+                      .filter((t) => t.type === 'profit_withdrawal')
+                      .reduce((s, t) => s + Number(t.amount || 0), 0)
+                  )}
+                </strong>
+              </span>
+            </div>
+            <span className="text-slate-500 text-[11px]">مرتبط تلقائياً بالخزينة اليومية</span>
+          </div>
+        </section>
+      )}
+
+      {/* Detailed Partner Chronological Ledger Modal */}
+      {inspectingPartner && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[88vh] shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shrink-0 shadow-2xs">
+                    <FileText size={16} />
+                  </div>
+                  <h3 className="text-base md:text-lg font-black text-slate-900 truncate">
+                    كشف الحساب الشامل للشريك: {inspectingPartner.name}
+                  </h3>
+                  {inspectingPartner.isFounder ? (
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-purple-100 text-purple-700 border border-purple-200">
+                      شريك مؤسس
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                      شريك مساهم
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-1 flex items-center gap-3">
+                  <span>حصة الملكية: <strong className="text-indigo-700 font-bold">{inspectingPartner.sharePercentage}%</strong></span>
+                  <span>•</span>
+                  <span>تاريخ الانضمام: <strong className="text-slate-800 font-bold">{formatDateDisplay(inspectingPartner.joinedDate || inspectingPartner.createdAt)}</strong></span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingPartnerId(null)}
+                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-xl transition-colors shrink-0"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Standardized 4-KPI Summary Strip Inside Modal */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-slate-50/50 border-b border-slate-200/80 shrink-0">
+              {/* Card 1: Active Capital */}
+              <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-2xs flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-bold text-slate-500 block mb-0.5 truncate">رأس المال العامل</span>
+                  <span className="text-base md:text-lg font-black text-slate-900 tabular-nums block leading-tight truncate">
+                    {formatCurrency(inspectingPartner.capital)}
+                  </span>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                  <Wallet size={16} />
+                </div>
+              </div>
+
+              {/* Card 2: Earned Profits */}
+              <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-2xs flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-bold text-slate-500 block mb-0.5 truncate">صافي الأرباح المكتسبة</span>
+                  <span className="text-base md:text-lg font-black text-indigo-700 tabular-nums block leading-tight truncate">
+                    {formatCurrency(inspectingPartner.netEntitlement)}
+                  </span>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                  <Award size={16} />
+                </div>
+              </div>
+
+              {/* Card 3: Withdrawn Profits */}
+              <div className="p-3.5 rounded-xl bg-white border border-amber-200 shadow-2xs flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-bold text-amber-800 block mb-0.5 truncate">مسحوبات الأرباح</span>
+                  <span className="text-base md:text-lg font-black text-amber-700 tabular-nums block leading-tight truncate">
+                    -{formatCurrency(inspectingPartner.totalWithdrawnProfits || 0)}
+                  </span>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center shrink-0">
+                  <ArrowUpFromLine size={16} />
+                </div>
+              </div>
+
+              {/* Card 4: Available Profits */}
+              <div className="p-3.5 rounded-xl bg-white border border-emerald-200 shadow-2xs flex items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <span className="text-[11px] font-bold text-emerald-800 block mb-0.5 truncate">الأرباح المتاحة للسحب</span>
+                  <span className="text-base md:text-lg font-black text-emerald-700 tabular-nums block leading-tight truncate">
+                    {formatCurrency(inspectingPartner.availableProfit)}
+                  </span>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shrink-0">
+                  <DollarSign size={16} />
+                </div>
+              </div>
+            </div>
+
+            {/* Scrollable Chronological Ledger Table (Strictly 100% Modal Width, No Horizontal Scrollbar) */}
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+              <table className="w-full table-fixed border-collapse text-xs">
+                <thead className="desktop-sticky-header">
+                  <tr>
+                    <th className="py-2.5 px-3 text-right w-[13%] whitespace-nowrap">التاريخ</th>
+                    <th className="py-2.5 px-3 text-right w-[14%] whitespace-nowrap">نوع القيد</th>
+                    <th className="py-2.5 px-3 text-right w-[25%]">البيان والتفاصيل</th>
+                    <th className="py-2.5 px-3 text-right w-[12%] whitespace-nowrap">حركة رأس المال</th>
+                    <th className="py-2.5 px-3 text-right w-[12%] whitespace-nowrap">حركة الأرباح</th>
+                    <th className="py-2.5 px-3 text-right w-[12%] whitespace-nowrap">رصيد رأس المال</th>
+                    <th className="py-2.5 px-3 text-right w-[12%] whitespace-nowrap">رصيد الأرباح المتاحة</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {transactions.map(tx => (
-                    <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-4 py-3 text-sm text-gray-600">{formatDateDisplay(tx.date)}</td>
-                      <td className="px-4 py-3 text-sm font-medium text-gray-800">{tx.shareholderName}</td>
-                      <td className="px-4 py-3 text-sm">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          tx.type === 'capital_deposit' ? 'bg-indigo-100 text-indigo-700' :
-                          tx.type === 'capital_withdrawal' ? 'bg-rose-100 text-rose-700' :
-                          tx.type === 'profit_distribution' ? 'bg-emerald-100 text-emerald-700' :
-                          'bg-amber-100 text-amber-700'
-                        }`}>
-                          {tx.type === 'capital_deposit' ? 'إيداع رأس مال' :
-                           tx.type === 'capital_withdrawal' ? 'سحب رأس مال' :
-                           tx.type === 'profit_distribution' ? 'توزيع أرباح' : 'سحب أرباح'}
-                        </span>
-                      </td>
-                      <td className={`px-4 py-3 text-sm font-bold ${
-                        tx.type === 'capital_deposit' || tx.type === 'profit_distribution' ? 'text-emerald-600' : 'text-rose-600'
-                      }`}>
-                        {formatCurrency(tx.amount)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{tx.description}</td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{tx.createdBy}</td>
-                      <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => handleDeleteTransaction(tx.id)}
-                          className="text-rose-600 hover:text-rose-800 p-1"
-                          title="حذف والتراجع عن الحركة"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {transactions.length === 0 && (
+                <tbody className="divide-y divide-slate-100">
+                  {(!inspectingPartner.ledger || inspectingPartner.ledger.length === 0) ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
-                        لا توجد حركات مسجلة بعد
+                      <td colSpan={7} className="py-12 px-4 text-center text-slate-400">
+                        <FileText size={32} className="mx-auto mb-2 text-slate-300" />
+                        <p className="text-xs font-bold">لا توجد حركات مسجلة في كشف حساب الشريك</p>
                       </td>
                     </tr>
+                  ) : (
+                    inspectingPartner.ledger.map((entry: LedgerEntry) => (
+                      <tr
+                        key={entry.id}
+                        className={entry.isSynthetic ? 'bg-indigo-50/30 hover:bg-indigo-50/50' : 'hover:bg-slate-50 transition-colors'}
+                      >
+                        <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 truncate whitespace-nowrap">
+                          {formatDateDisplay(entry.date)}
+                        </td>
+                        <td className="py-2.5 px-3 truncate whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold truncate ${
+                              entry.type === 'initial_capital' || entry.type === 'capital_deposit'
+                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                : entry.type === 'capital_withdrawal'
+                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                  : entry.type === 'profit_allocation' || entry.type === 'profit_distribution'
+                                    ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            }`}
+                          >
+                            {entry.type === 'initial_capital'
+                              ? 'رأس مال تأسيسي'
+                              : entry.type === 'capital_deposit'
+                                ? 'إيداع رأس مال'
+                                : entry.type === 'capital_withdrawal'
+                                  ? 'سحب رأس مال'
+                                  : entry.type === 'profit_allocation'
+                                    ? 'استحقاق أرباح'
+                                    : entry.type === 'profit_distribution'
+                                      ? 'توزيع أرباح'
+                                      : 'سحب أرباح'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-700 font-medium truncate" title={entry.description}>
+                          {entry.description}
+                        </td>
+                        <td
+                          className={`py-2.5 px-3 font-bold tabular-nums text-right truncate whitespace-nowrap ${
+                            entry.capitalDelta > 0
+                              ? 'text-indigo-600'
+                              : entry.capitalDelta < 0
+                                ? 'text-rose-600'
+                                : 'text-slate-400'
+                          }`}
+                        >
+                          {entry.capitalDelta !== 0
+                            ? `${entry.capitalDelta > 0 ? '+' : ''}${formatCurrency(entry.capitalDelta)}`
+                            : '-'}
+                        </td>
+                        <td
+                          className={`py-2.5 px-3 font-bold tabular-nums text-right truncate whitespace-nowrap ${
+                            entry.profitDelta > 0
+                              ? 'text-purple-600'
+                              : entry.profitDelta < 0
+                                ? 'text-amber-600'
+                                : 'text-slate-400'
+                          }`}
+                        >
+                          {entry.profitDelta !== 0
+                            ? `${entry.profitDelta > 0 ? '+' : ''}${formatCurrency(entry.profitDelta)}`
+                            : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900 tabular-nums text-right truncate whitespace-nowrap">
+                          {formatCurrency(entry.runningCapital)}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-700 tabular-nums text-right truncate whitespace-nowrap">
+                          {formatCurrency(entry.runningProfit)}
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* Shareholder Modal */}
-      {showShareholderModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-            <div className="p-6 border-b border-gray-100">
-              <h3 className="text-xl font-bold text-gray-800">
-                {editingShareholder ? 'تعديل بيانات المساهم' : 'إضافة مساهم جديد'}
-              </h3>
+            {/* Standardized Modal Footer with Distinct Action Buttons */}
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => openTxModal(inspectingPartner.id, 'capital_deposit')}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95"
+                >
+                  <ArrowDownToLine size={13} />
+                  <span>+ إيداع رأس مال</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openTxModal(inspectingPartner.id, 'profit_withdrawal')}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95"
+                >
+                  <DollarSign size={13} />
+                  <span>- سحب أرباح</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openTxModal(inspectingPartner.id, 'capital_withdrawal')}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all active:scale-95"
+                >
+                  <ArrowUpFromLine size={13} />
+                  <span>- سحب رأس مال</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setInspectingPartnerId(null)}
+                className="px-5 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-2xs"
+              >
+                إغلاق
+              </button>
             </div>
-            <form onSubmit={handleShareholderSubmit} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+          </div>
+        </div>
+      )}
+
+      {/* Shareholder Create/Edit Modal */}
+      {showShareholderModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-200">
+            <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <h3 className="text-base font-black text-slate-900">
+                {editingShareholder ? 'تعديل بيانات الشريك' : 'إضافة شريك جديد'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowShareholderModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleShareholderSubmit} className="p-5 space-y-3.5">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الاسم</label>
-                  <input type="text" required value={shareholderForm.name} onChange={e => setShareholderForm({...shareholderForm, name: e.target.value})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الهاتف</label>
-                  <input type="tel" required value={shareholderForm.phone} onChange={e => setShareholderForm({...shareholderForm, phone: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">نسبة ربح المساهم %</label>
-                  <input 
-                    type="number" step="0.01" min="0" max="100" required 
-                    value={shareholderForm.sharePercentage === 0 ? '' : shareholderForm.sharePercentage} 
-                    onChange={e => {
-                      const val = Number(e.target.value);
-                      setShareholderForm({
-                        ...shareholderForm, 
-                        sharePercentage: val,
-                        managementFeePercentage: 100 - val
-                      });
-                    }} 
-                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" 
+                  <label className="block text-xs font-bold text-slate-600 mb-1">اسم الشريك</label>
+                  <input
+                    type="text"
+                    required
+                    value={shareholderForm.name}
+                    onChange={(e) => setShareholderForm({ ...shareholderForm, name: e.target.value })}
+                    className="input-ui h-9 w-full text-xs px-3"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">نسبة ربح الشركة (الإدارة) %</label>
-                  <input 
-                    type="number" step="0.01" min="0" max="100" required 
-                    value={shareholderForm.managementFeePercentage === 0 ? '' : shareholderForm.managementFeePercentage} 
-                    onChange={e => {
-                      const val = Number(e.target.value);
-                      setShareholderForm({
-                        ...shareholderForm, 
-                        managementFeePercentage: val,
-                        sharePercentage: 100 - val
-                      });
-                    }} 
-                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none bg-indigo-50" 
+                  <label className="block text-xs font-bold text-slate-600 mb-1">رقم الهاتف</label>
+                  <input
+                    type="tel"
+                    required
+                    value={shareholderForm.phone}
+                    onChange={(e) =>
+                      setShareholderForm({ ...shareholderForm, phone: e.target.value.replace(/\D/g, '') })
+                    }
+                    className="input-ui h-9 w-full text-xs px-3"
                   />
                 </div>
               </div>
-              {!editingShareholder && (
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">رأس المال الافتتاحي</label>
-                  <input 
-                    type="number" min="0" required 
-                    value={shareholderForm.capital === 0 ? '' : shareholderForm.capital} 
-                    onChange={e => setShareholderForm({...shareholderForm, capital: Number(e.target.value)})} 
-                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" 
+                  <label className="block text-xs font-bold text-slate-600 mb-1">تاريخ انضمام الشريك</label>
+                  <input
+                    type="date"
+                    required
+                    value={shareholderForm.joinedDate}
+                    onChange={(e) => setShareholderForm({ ...shareholderForm, joinedDate: e.target.value })}
+                    className="input-ui h-9 w-full text-xs px-3 font-bold"
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">
+                    {editingShareholder ? 'رأس المال الحالي' : 'رأس المال الافتتاحي'}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    required
+                    disabled={Boolean(editingShareholder)}
+                    value={shareholderForm.capital === 0 ? '' : shareholderForm.capital}
+                    onChange={(e) => setShareholderForm({ ...shareholderForm, capital: Number(e.target.value) })}
+                    className="input-ui h-9 w-full text-xs px-3 font-bold disabled:bg-slate-100"
+                  />
+                </div>
+              </div>
+
+              {/* Founder Flag Toggle */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 block">شريك مؤسس (Founder)</span>
+                  <span className="text-[11px] text-slate-500 block">
+                    {shareholderForm.isFounder
+                      ? 'تم تعيين الشريك كمؤسس رئيسي — نسبة توزيع الأرباح مثبتة تلقائياً على 100%'
+                      : 'تفعيل هذا الخيار للشريك المؤسس لتثبيت أرباحه أو تركه كشريك مساهم'}
+                  </span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={shareholderForm.isFounder}
+                    onChange={(e) => {
+                      const isF = e.target.checked;
+                      setShareholderForm({
+                        ...shareholderForm,
+                        isFounder: isF,
+                        sharePercentage: isF ? 100 : (shareholderForm.sharePercentage === 100 ? 50 : shareholderForm.sharePercentage || 50),
+                        managementFeePercentage: isF ? 0 : 50,
+                      });
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+              </div>
+
+              {/* Conditional Percentage Section */}
+              {shareholderForm.isFounder ? (
+                <div className="p-3 bg-purple-50/80 border border-purple-200/80 rounded-xl flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck size={16} className="text-purple-600 shrink-0" />
+                    <div>
+                      <span className="font-black text-purple-900 block">نسبة مشاركة الأرباح: 100% (تأسيسي)</span>
+                      <span className="text-[11px] text-purple-700 block">
+                        يستحق الشريك المؤسس كامل صافي الأرباح المحققة خلال فترة استثماره دون اقتطاع.
+                      </span>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-black bg-purple-200/70 text-purple-800 shrink-0">
+                    تلقائي 100%
+                  </span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نسبة الملكية للشريك %</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      max="100"
+                      required
+                      value={shareholderForm.sharePercentage === 0 ? '' : shareholderForm.sharePercentage}
+                      onChange={(e) => {
+                        const val = Math.min(100, Math.max(0, Number(e.target.value)));
+                        setShareholderForm({
+                          ...shareholderForm,
+                          sharePercentage: val,
+                          managementFeePercentage: Number((100 - val).toFixed(2)),
+                        });
+                      }}
+                      className="input-ui h-9 w-full text-xs px-3 font-bold"
+                      placeholder="مثال: 50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نسبة الإدارة (الشركة) %</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={
+                        shareholderForm.managementFeePercentage === 0 ? '' : shareholderForm.managementFeePercentage
+                      }
+                      onChange={(e) => {
+                        const val = Math.min(100, Math.max(0, Number(e.target.value)));
+                        setShareholderForm({
+                          ...shareholderForm,
+                          managementFeePercentage: val,
+                          sharePercentage: Number((100 - val).toFixed(2)),
+                        });
+                      }}
+                      className="input-ui h-9 w-full text-xs px-3 font-bold bg-indigo-50/60"
+                    />
+                  </div>
                 </div>
               )}
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">ملاحظات (اختياري)</label>
-                <textarea value={shareholderForm.notes} onChange={e => setShareholderForm({...shareholderForm, notes: e.target.value})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" rows={2} />
+                <label className="block text-xs font-bold text-slate-600 mb-1">ملاحظات (اختياري)</label>
+                <textarea
+                  value={shareholderForm.notes}
+                  onChange={(e) => setShareholderForm({ ...shareholderForm, notes: e.target.value })}
+                  className="input-ui w-full text-xs p-2.5"
+                  rows={2}
+                />
               </div>
-              <div className="flex gap-3 pt-4 border-t border-gray-50">
-                <button type="button" onClick={() => setShowShareholderModal(false)} className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">إلغاء</button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">{editingShareholder ? 'حفظ التعديلات' : 'إضافة المساهم'}</button>
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowShareholderModal(false)}
+                  className="flex-1 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 text-xs font-bold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs font-bold"
+                >
+                  {editingShareholder ? 'حفظ التعديلات' : 'إضافة الشريك'}
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Transaction Modal */}
+      {/* Financial Transaction Modal */}
       {showTransactionModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-            <div className="p-6 border-b border-gray-100">
-              <h3 className="text-xl font-bold text-gray-800">
-                {transactionType === 'capital_deposit' ? 'إيداع رأس مال' : transactionType === 'capital_withdrawal' ? 'سحب رأس مال' : 'سحب أرباح'}
-              </h3>
-              <p className="text-sm text-gray-500 mt-1">
-                المساهم: <span className="font-bold text-indigo-600">{shareholders.find(s => s.id === selectedShareholderId)?.name}</span>
-              </p>
-            </div>
-            <form onSubmit={handleTransactionSubmit} className="p-6 space-y-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-200">
+            <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">المبلغ</label>
-                <input 
-                  type="number" min="1" required 
-                  value={transactionForm.amount === 0 ? '' : transactionForm.amount} 
-                  onChange={e => setTransactionForm({...transactionForm, amount: Number(e.target.value)})} 
-                  onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-lg font-bold text-indigo-700" 
+                <h3 className="text-base font-black text-slate-900">
+                  {transactionType === 'capital_deposit'
+                    ? 'إيداع وزيادة رأس المال'
+                    : transactionType === 'capital_withdrawal'
+                      ? 'سحب وتخفيض من رأس المال'
+                      : 'سحب من الأرباح المتاحة'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  الشريك:{' '}
+                  <strong className="text-indigo-700">
+                    {liveShareholders.find((s: any) => s.id === selectedShareholderId)?.name}
+                  </strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTransactionModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleTransactionSubmit} className="p-5 space-y-4">
+              {(() => {
+                const partner = liveShareholders.find((s: any) => s.id === selectedShareholderId);
+                if (!partner) return null;
+                return (
+                  <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                    <div>
+                      <span className="text-slate-500 block">رأس المال الفعلي:</span>
+                      <strong className="text-slate-900 font-black">{formatCurrency(partner.capital)}</strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">الأرباح المتاحة للسحب:</span>
+                      <strong className="text-emerald-600 font-black">
+                        {formatCurrency(partner.availableProfit)}
+                      </strong>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">المبلغ</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    required
+                    value={transactionForm.amount === 0 ? '' : transactionForm.amount}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, amount: Number(e.target.value) })}
+                    className="input-ui h-10 w-full px-3 text-sm font-black text-indigo-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">تاريخ الحركة</label>
+                  <input
+                    type="date"
+                    required
+                    value={transactionForm.date}
+                    onChange={(e) => setTransactionForm({ ...transactionForm, date: e.target.value })}
+                    className="input-ui h-10 w-full px-3 text-xs font-bold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">البيان / التفاصيل</label>
+                <input
+                  type="text"
+                  required
+                  value={transactionForm.description}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, description: e.target.value })}
+                  className="input-ui h-9 w-full px-3 text-xs"
+                  placeholder="مثال: سحب أرباح نقدي، زيادة حصة رأس المال..."
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">البيان / ملاحظات</label>
-                <input type="text" required value={transactionForm.description} onChange={e => setTransactionForm({...transactionForm, description: e.target.value})} className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none" placeholder="مثال: تحويل بنكي، شيك نقدي..." />
+
+              <div
+                className={`p-3 rounded-xl text-[11px] flex items-start gap-2.5 border ${
+                  transactionType === 'profit_withdrawal'
+                    ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
+                    : transactionType === 'capital_withdrawal'
+                      ? 'bg-rose-50/90 border-rose-200 text-rose-950'
+                      : 'bg-indigo-50/90 border-indigo-200 text-indigo-950'
+                }`}
+              >
+                {transactionType === 'profit_withdrawal' ? (
+                  <DollarSign size={16} className="mt-0.5 shrink-0 text-emerald-600" />
+                ) : transactionType === 'capital_withdrawal' ? (
+                  <ArrowUpFromLine size={16} className="mt-0.5 shrink-0 text-rose-600" />
+                ) : (
+                  <ArrowDownToLine size={16} className="mt-0.5 shrink-0 text-indigo-600" />
+                )}
+                <div className="leading-relaxed">
+                  {transactionType === 'profit_withdrawal' && (
+                    <p>
+                      <strong className="font-extrabold text-emerald-800">سحب أرباح (حماية رأس المال):</strong> سيتم خصم هذا المبلغ حصرياً من رصيد الأرباح المتاحة للشريك دون أي مساس برأس المال التأسيسي، وتوليد سند صرف في الخزينة اليومية.
+                    </p>
+                  )}
+                  {transactionType === 'capital_withdrawal' && (
+                    <p>
+                      <strong className="font-extrabold text-rose-800">سحب من رأس المال:</strong> تنبيه! سيتم خصم هذا المبلغ مباشرة من رأس المال العامل للشريك، مما يقلل وزنه النسبي في الشركة، وتوليد سند صرف في الخزينة اليومية.
+                    </p>
+                  )}
+                  {transactionType === 'capital_deposit' && (
+                    <p>
+                      <strong className="font-extrabold text-indigo-800">إيداع رأس مال:</strong> سيتم إضافة هذا المبلغ إلى رأس المال العامل للشريك وزيادة وزنه النسبي، وتوليد سند قبض في الخزينة اليومية.
+                    </p>
+                  )}
+                </div>
               </div>
-              <div className="bg-amber-50 text-amber-800 p-3 rounded-lg text-xs flex items-start gap-2">
-                <Wallet size={16} className="mt-0.5 shrink-0" />
-                <p>إتمام هذه العملية سيقوم تلقائياً بتوليد حركة في <strong>الخزينة اليومية</strong> لضمان مطابقة الحسابات.</p>
-              </div>
-              <div className="flex gap-3 pt-4 border-t border-gray-50">
-                <button type="button" onClick={() => setShowTransactionModal(false)} className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">إلغاء</button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">تأكيد العملية</button>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowTransactionModal(false)}
+                  className="flex-1 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 text-xs font-bold"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs font-bold"
+                >
+                  تأكيد وتنفيذ الحركة
+                </button>
               </div>
             </form>
           </div>

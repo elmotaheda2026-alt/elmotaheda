@@ -1,8 +1,42 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { exec } = require('child_process');
 const { startBackend, stopBackend, checkHealth, getAppDataDir } = require('./backend-loader.cjs');
+
+// ── Legacy OS & Low-Spec Compatibility Settings (Windows 7 / 8 / 32-bit) ──
+const isWindows = process.platform === 'win32';
+const osRelease = isWindows ? os.release() : '';
+// Windows 7 is NT 6.1, Windows 8 is NT 6.2, Windows 8.1 is NT 6.3
+const isLegacyWindows = isWindows && (osRelease.startsWith('6.1') || osRelease.startsWith('6.2') || osRelease.startsWith('6.3'));
+const is32Bit = process.arch === 'ia32';
+
+// Global error handler to catch and log startup exceptions on legacy systems
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err);
+  try {
+    const logDir = path.join(getAppDataDir(), 'logs');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(path.join(logDir, 'error.log'), `[${new Date().toISOString()}] ${err.stack || err}\n`);
+  } catch (_) {}
+});
+
+// Configure Chromium compatibility flags for Windows 7 / 32-bit / Low-spec GPU
+if (isLegacyWindows || is32Bit || process.argv.includes('--legacy-compat') || process.argv.includes('--disable-gpu')) {
+  console.log(`[Compatibility Mode] Active (Platform: ${process.platform}, OS Release: ${osRelease}, Arch: ${process.arch})`);
+  try {
+    app.disableHardwareAcceleration();
+  } catch (_) {}
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+  app.commandLine.appendSwitch('disable-gpu-rasterization');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,D3D11Experimental,AudioServiceOutOfProcess');
+  app.commandLine.appendSwitch('ignore-certificate-errors');
+  app.commandLine.appendSwitch('allow-insecure-localhost');
+}
 
 const CONFIG_FILE = path.join(getAppDataDir(), 'config.json');
 
@@ -82,6 +116,24 @@ function showSetupWindow() {
 
 ipcMain.on('get-api-url', (event) => {
   event.returnValue = currentApiUrl;
+});
+
+ipcMain.handle('select-directory', async () => {
+  try {
+    const parent = mainWindow || setupWindow;
+    const result = await dialog.showOpenDialog(parent, {
+      title: 'اختر مجلد حفظ النسخ الاحتياطية التلقائية',
+      defaultPath: 'D:\\',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return null;
+    }
+    return result.filePaths[0];
+  } catch (err) {
+    console.warn('Directory selection failed:', err.message);
+    return null;
+  }
 });
 
 function createMainWindow(apiBaseUrl) {

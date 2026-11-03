@@ -15,8 +15,13 @@
     "electron:dev": "cross-env NODE_ENV=development electron .",
     "electron:build": "pnpm build && cross-env NODE_ENV=production electron .",
     "build:backend": "cd ../al-muttahida-backend && pnpm build",
-    "build:exe": "pnpm build && pnpm build:backend && electron-builder --win",
-    "build:exe-only": "electron-builder --win"
+    "build:exe": "pnpm build && pnpm build:backend && electron-builder --win --x64 --ia32",
+    "build:exe-only": "electron-builder --win --x64 --ia32",
+    "build:exe:ia32": "pnpm build && pnpm build:backend && electron-builder --win --ia32",
+    "build:exe:x64": "pnpm build && pnpm build:backend && electron-builder --win --x64",
+    "build:portable": "electron-builder --win portable --x64 --ia32",
+    "build:portable:ia32": "electron-builder --win portable --ia32",
+    "build:portable:x64": "electron-builder --win portable --x64"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -97,7 +102,7 @@
   "build": {
     "appId": "com.almuttahida.erp",
     "productName": "Al-Muttahida ERP",
-    "artifactName": "AlMuttahida-ERP-Setup-${version}.${ext}",
+    "artifactName": "AlMuttahida-ERP-${arch}-Setup-${version}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -109,12 +114,16 @@
       {
         "from": "../al-muttahida-backend/dist",
         "to": "backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../al-muttahida-backend/node_modules",
         "to": "backend/node_modules",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "../al-muttahida-backend/.env",
@@ -129,9 +138,20 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
         }
-      ]
+      ],
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "oneClick": false,
@@ -141,7 +161,12 @@
       "shortcutName": "Al-Muttahida ERP",
       "allowElevation": true,
       "differentialPackage": false,
+      "artifactName": "AlMuttahida-ERP-${arch}-Setup-${version}.${ext}",
       "include": "installer.nsh"
+    },
+    "portable": {
+      "artifactName": "AlMuttahida-ERP-${arch}-Portable-${version}.${ext}",
+      "requestExecutionLevel": "asInvoker"
     }
   }
 }

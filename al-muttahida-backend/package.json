@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "test:security": "tsx src/middleware/auth.test.ts",
     "test:db-wrapper": "tsx src/db.test.ts",
-    "test:db-integration": "tsx src/db.integration.test.ts"
+    "test:db-integration": "tsx src/db.integration.test.ts",
+    "test:sql-integration": "tsx src/test_sql_server_integration.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -21,7 +22,6 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "mssql": "^11.0.1",
-    "sql.js": "^1.14.2",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
     "winston": "^3.19.0",

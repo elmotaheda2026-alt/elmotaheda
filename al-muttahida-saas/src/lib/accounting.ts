@@ -30,6 +30,8 @@ export function calculateCostOfGoodsSold(sales: Sale[], products: Product[]): nu
   );
 }
 
+export const calculateCOGS = calculateCostOfGoodsSold;
+
 export function calculateNetProfit(sales: Sale[], products: Product[], expenses: Expense[] = []): number {
   const revenue = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
   const cogs = calculateCostOfGoodsSold(sales, products);

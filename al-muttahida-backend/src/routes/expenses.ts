@@ -71,6 +71,22 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       now,
     );
 
+    // Automatically record corresponding cash-out treasury payment
+    await db.run(
+      `INSERT INTO payments (
+        id, type, amount, description, date, receipt_number, status, channel,
+        reference_id, reference_type, created_by, created_at, affects_customer_balance
+      ) VALUES (?, 'out', ?, ?, ?, ?, 'posted', 'cash', ?, 'expense', ?, ?, 0)`,
+      uid(),
+      data.amount,
+      `سند صرف: ${data.category} - ${data.description}`,
+      data.date,
+      `EXP-${id.slice(-6).toUpperCase()}`,
+      id,
+      req.user?.name || 'system',
+      now,
+    );
+
     await audit('expense.create', 'expense', id, req.user?.name || 'system', data);
     await createSystemNotification(
       'warning',
@@ -117,6 +133,16 @@ router.put('/:id', requirePermission('payments:write'), async (req: AuthedReques
       req.params.id,
     );
 
+    await db.run(
+      `UPDATE payments
+       SET amount = ?, date = ?, description = ?
+       WHERE reference_type = 'expense' AND reference_id = ?`,
+      data.amount,
+      data.date,
+      `سند صرف: ${data.category} - ${data.description}`,
+      req.params.id,
+    );
+
     await audit('expense.update', 'expense', req.params.id, req.user?.name || 'system', data);
     return res.json({ message: 'Expense updated successfully' });
   } catch (error: any) {
@@ -134,6 +160,7 @@ router.delete('/:id', requirePermission('payments:write'), requireAdmin, async (
     }
 
     await db.run('DELETE FROM expenses WHERE id = ?', req.params.id);
+    await db.run("DELETE FROM payments WHERE reference_type = 'expense' AND reference_id = ?", req.params.id);
     await audit('expense.delete', 'expense', req.params.id, req.user?.name || 'system', { id: req.params.id });
     return res.json({ message: 'Expense deleted successfully' });
   } catch (error: any) {

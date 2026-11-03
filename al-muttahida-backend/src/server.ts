@@ -27,7 +27,9 @@ import settingsRoutes from './routes/settings.js';
 import backupRoutes from './routes/backup.js';
 import notificationsRoutes from './routes/notifications.js';
 import collectionTasksRoutes from './routes/collection-tasks.js';
+import duesRoutes from './routes/dues.js';
 import systemRoutes from './routes/system.js';
+import { startAutoBackupScheduler } from './autoBackupService.js';
 
 async function bootstrap() {
   const app = express();
@@ -131,6 +133,9 @@ async function bootstrap() {
   app.use('/collection-tasks', collectionTasksRoutes);
   app.use('/api/collection-tasks', collectionTasksRoutes);
 
+  app.use('/dues', duesRoutes);
+  app.use('/api/dues', duesRoutes);
+
   // Central error handling
   app.use(errorHandler);
 
@@ -147,6 +152,7 @@ async function bootstrap() {
     .then(() => {
       // eslint-disable-next-line no-console
       console.log('Database initialized successfully.');
+      startAutoBackupScheduler();
     })
     .catch((err) => {
       // eslint-disable-next-line no-console

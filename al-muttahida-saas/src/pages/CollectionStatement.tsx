@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp } from 'lucide-react';
+import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps, toggleCustomerSued } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -26,6 +26,7 @@ interface CollectionInvoiceView {
   guarantors: (Guarantor | null)[];
   isSued?: boolean;
   lastPaymentDate?: string;
+  totalInvoiceRemaining?: number;
 }
 
 interface DueCustomerRow {
@@ -46,6 +47,7 @@ interface DueCustomerRow {
   salesRepName?: string;
   isSued?: boolean;
   lastPaymentDate?: string;
+  totalInvoiceRemaining?: number;
 }
 
 const pad = (value: number) => String(value).padStart(2, '0');
@@ -74,6 +76,10 @@ const getCurrentMonthRange = () => {
   };
 };
 
+const getDefaultDueRange = () => {
+  return getCurrentMonthRange();
+};
+
 const normalizeArabic = (str: string): string => {
   if (!str) return '';
   return str
@@ -87,6 +93,7 @@ const normalizeArabic = (str: string): string => {
 export default function CollectionStatement() {
   const { settings } = useAuth();
   const currentMonthRange = useMemo(() => getCurrentMonthRange(), []);
+  const defaultDueRange = useMemo(() => getDefaultDueRange(), []);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [invoiceSales, setInvoiceSales] = useState<Sale[]>([]);
@@ -98,9 +105,10 @@ export default function CollectionStatement() {
   const [selectedCustomerId, setSelectedCustomerId] = useState('all');
   const [showOnlyDue, setShowOnlyDue] = useState(true);
   const [hideSuedCustomers, setHideSuedCustomers] = useState(false);
+  const [includeOverdue, setIncludeOverdue] = useState(true);
 
-  const [dueFromDate, setDueFromDate] = useState(currentMonthRange.from);
-  const [dueToDate, setDueToDate] = useState(currentMonthRange.to);
+  const [dueFromDate, setDueFromDate] = useState(defaultDueRange.from);
+  const [dueToDate, setDueToDate] = useState(defaultDueRange.to);
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('all');
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
@@ -109,6 +117,50 @@ export default function CollectionStatement() {
   const [expandedCustomerSaleId, setExpandedCustomerSaleId] = useState<string | null>(null);
   const [dueCurrentPage, setDueCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(6);
+
+  // Dedicated API state for dues
+  const [apiDues, setApiDues] = useState<DueCustomerRow[]>([]);
+  const [isDueLoading, setIsDueLoading] = useState(false);
+  const [dueError, setDueError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isApiMode()) return;
+    let isCancelled = false;
+
+    const fetchDues = async () => {
+      setIsDueLoading(true);
+      setDueError(null);
+      try {
+        const data = await api.listCollectionDue({
+          from: dueFromDate,
+          to: dueToDate,
+          search: dueSearchTerm,
+          salesRepId: selectedSalesRepId,
+          hideSued: hideSuedCustomers,
+          includeOverdue: includeOverdue,
+          strictDate: !includeOverdue,
+        });
+        if (!isCancelled) {
+          setApiDues(data);
+        }
+      } catch (err: any) {
+        if (!isCancelled) {
+          console.error('Failed to load due collection data:', err);
+          setDueError(err.message || 'تعذر تحميل بيانات المستحقات');
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsDueLoading(false);
+        }
+      }
+    };
+
+    void fetchDues();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue]);
 
   useEffect(() => {
     const calculatePageSize = () => {
@@ -378,17 +430,29 @@ export default function CollectionStatement() {
   }, [invoiceRows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
 
   const dueRows = useMemo<DueCustomerRow[]>(() => {
+    if (isApiMode()) {
+      return apiDues;
+    }
+
     if (!dueFromDate || !dueToDate || dueFromDate > dueToDate) return [];
 
     const result: DueCustomerRow[] = [];
 
     rows.forEach((row) => {
       if (hideSuedCustomers && row.isSued) return;
+      if (row.remaining <= 0.01) return;
 
       row.schedules.forEach((schedule) => {
         if (schedule.status === 'paid') return;
+        const remaining = Math.max(schedule.amount - schedule.paidAmount, 0);
+        if (remaining <= 0.01) return;
+
         const normalizedDueDate = toISODateOnly(schedule.dueDate);
-        if (normalizedDueDate < dueFromDate || normalizedDueDate > dueToDate) return;
+        if (includeOverdue) {
+          if (normalizedDueDate && dueToDate && normalizedDueDate > dueToDate) return;
+        } else {
+          if (!normalizedDueDate || (dueFromDate && normalizedDueDate < dueFromDate) || (dueToDate && normalizedDueDate > dueToDate)) return;
+        }
 
         result.push({
           saleId: row.saleId,
@@ -408,6 +472,7 @@ export default function CollectionStatement() {
           salesRepId: row.salesRepId,
           salesRepName: row.salesRepName,
           isSued: customerMap.get(row.customerId)?.isSued || false,
+          totalInvoiceRemaining: row.remaining,
         });
       });
     });
@@ -429,7 +494,7 @@ export default function CollectionStatement() {
     }
 
     return finalResult;
-  }, [dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap, hideSuedCustomers]);
+  }, [apiDues, dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap, hideSuedCustomers, includeOverdue]);
 
   const groupedDueRows = useMemo(() => {
     const groupsMap = new Map<string, DueCustomerRow[]>();
@@ -490,6 +555,14 @@ export default function CollectionStatement() {
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
+  useEffect(() => {
+    const handleAfterPrint = () => {
+      setPrintingInvoice(null);
+    };
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => window.removeEventListener('afterprint', handleAfterPrint);
+  }, []);
+
   const handlePrint = (invoice: CollectionInvoiceView) => {
     setPrintingInvoice(invoice);
     setTimeout(() => window.print(), 150);
@@ -501,44 +574,73 @@ export default function CollectionStatement() {
       @media print {
         @page {
           size: A4 portrait;
-          margin: 10mm;
+          margin: 10mm 12mm;
         }
-        html, body, #root, main, div, section {
+
+        /* Completely hide dashboard UI components, navigation, buttons, cards in print mode */
+        .desktop-view-container,
+        .desktop-table-card,
+        .no-print,
+        .print\\:hidden,
+        nav,
+        aside,
+        header,
+        button,
+        input,
+        select {
+          display: none !important;
+          visibility: hidden !important;
+          height: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+
+        html, body, #root, main {
           height: auto !important;
           min-height: 0 !important;
           max-height: none !important;
           overflow: visible !important;
-          position: static !important;
-        }
-        body {
           background: white !important;
           padding: 0 !important;
           margin: 0 !important;
         }
+
+        /* Isolate the printable statement template */
+        .invoice-page {
+          display: block !important;
+          visibility: visible !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          margin: 0 auto !important;
+          padding: 0 !important;
+          background: white !important;
+        }
+
+        .invoice-page * {
+          visibility: visible !important;
+        }
+
         table {
           min-width: 0 !important;
           width: 100% !important;
           table-layout: fixed !important;
+          border-collapse: collapse !important;
         }
+
         tr {
           page-break-inside: avoid !important;
           break-inside: avoid !important;
         }
+
         th, td {
-          padding: 6px 4px !important;
-          font-size: 10px !important;
-          word-break: break-all !important;
-        }
-        .print\:hidden {
-          display: none !important;
-        }
-        .invoice-page {
-          break-after: page !important;
-          page-break-after: always !important;
+          padding: 6px 8px !important;
+          font-size: 11px !important;
+          word-break: normal !important;
+          overflow-wrap: break-word !important;
         }
       }
     `}</style>
-      <div className="desktop-view-container print:h-auto print:overflow-visible">
+      <div className="desktop-view-container print:hidden">
         {/* Header/Tabs & Filters Bar */}
         <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 space-y-2.5 shrink-0 print:hidden shadow-xs">
           {/* Segmented Control Tabs */}
@@ -635,6 +737,24 @@ export default function CollectionStatement() {
                   <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
                   إخفاء القضايا
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIncludeOverdue(!includeOverdue)}
+                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
+                    includeOverdue
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100/70'
+                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                  }`}
+                  title="تفعيل/تعطيل إدراج كافة المتأخرات السابقة حتى نهاية الفترة المحددة"
+                >
+                  <Clock3 size={13} className={includeOverdue ? 'text-indigo-600' : 'text-slate-400'} />
+                  <span>شامل المتأخرات</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${includeOverdue ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    {includeOverdue ? 'مفعل' : 'مغلق'}
+                  </span>
+                </button>
+
                 <button
                   onClick={() => window.print()}
                   className="h-9 px-4 bg-sky-600 text-white rounded-xl hover:bg-sky-700 flex items-center gap-1.5 font-bold text-xs shadow-sm transition-all whitespace-nowrap"
@@ -734,17 +854,36 @@ export default function CollectionStatement() {
                     <th className="px-4 py-2.5 text-right">المندوب</th>
                     <th className="px-4 py-2.5 text-right">العنوان</th>
                     <th className="px-4 py-2.5 text-center">آخر سداد</th>
-                    <th className="px-4 py-2.5 text-center">المبلغ المستحق</th>
+                    <th className="px-4 py-2.5 text-center">القسط الشهري المستحق</th>
                     <th className="px-4 py-2.5 text-center w-[80px] print:hidden">التفاصيل</th>
                   </tr>
                 </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {groupedDueRows.length === 0 ? (
+                    {isDueLoading ? (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-12 text-center text-slate-500 font-bold">
+                          <div className="flex flex-col items-center justify-center gap-2">
+                            <RefreshCw size={28} className="animate-spin text-sky-600" />
+                            <p>جاري تحميل العملاء المستحقين من قاعدة البيانات...</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : dueError ? (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-8 text-center text-red-600 font-bold">
+                          <div className="flex flex-col items-center justify-center gap-1">
+                            <AlertTriangle size={28} className="text-red-500 mb-1" />
+                            <p>{dueError}</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : groupedDueRows.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="px-5 py-12 text-center text-slate-400 font-bold">
                           <div className="flex flex-col items-center justify-center">
                             <CheckCircle2 size={36} className="text-slate-300 mb-2" />
-                            <p>لا توجد أقساط مستحقة حالياً.</p>
+                            <p className="text-sm font-bold text-slate-600 mb-1">لا توجد أقساط مستحقة للفترة المحددة</p>
+                            <p className="text-xs text-slate-400 font-normal">يمكنك تفعيل خيار &quot;شامل المتأخرات&quot; بالأعلى لعرض كافة المستحقات السابقة، أو تعديل نطاق التاريخ.</p>
                           </div>
                         </td>
                       </tr>
@@ -752,7 +891,7 @@ export default function CollectionStatement() {
                       paginatedGroupedDueRows.map((group) => {
                         const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
                         const isExpanded = expandedCustomerSaleId === group[0].saleId;
-                        const lastPayment = group[0].lastPaymentDate ? toISODateOnly(group[0].lastPaymentDate) : '---';
+                        const lastPayment = group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---';
 
                         return (
                           <React.Fragment key={group[0].saleId}>
@@ -791,10 +930,23 @@ export default function CollectionStatement() {
                                 </div>
                               </td>
                               <td className="px-4 py-3 text-center">
-                                <span className="font-semibold text-slate-600">{lastPayment}</span>
+                                {group[0].lastPaymentDate ? (
+                                  <span className="font-bold text-slate-700 font-mono text-xs bg-slate-100 px-2 py-0.5 rounded">
+                                    {formatDateDisplay(group[0].lastPaymentDate)}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-[11px] font-medium">لا يوجد سداد سابق</span>
+                                )}
                               </td>
                               <td className="px-4 py-3 text-center">
-                                <span className="text-red-600 text-sm font-black">{formatCurrency(totalRemaining)}</span>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-red-600 text-sm font-black">{formatCurrency(totalRemaining)}</span>
+                                  {group[0].totalInvoiceRemaining !== undefined && group[0].totalInvoiceRemaining > totalRemaining && (
+                                    <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap mt-0.5">
+                                      متبقي العقد: {formatCurrency(group[0].totalInvoiceRemaining)}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-3 text-center print:hidden">
                                 <button className="text-slate-400 hover:text-slate-700 w-7 h-7 rounded-full flex items-center justify-center hover:bg-slate-100 transition-colors mx-auto">
@@ -808,6 +960,17 @@ export default function CollectionStatement() {
                               <tr className="bg-slate-50/50">
                                 <td colSpan={7} className="p-4 border-t border-slate-100">
                                   <div className="space-y-3">
+                                    <div className="flex items-center justify-between text-xs bg-white px-3 py-2 rounded-xl border border-slate-100 shadow-sm">
+                                      <div className="flex items-center gap-3">
+                                        <span className="font-bold text-slate-700">رقم الفاتورة: <span className="font-mono text-sky-700">{group[0].invoiceNumber}</span></span>
+                                        {group[0].totalInvoiceRemaining !== undefined && group[0].totalInvoiceRemaining > totalRemaining && (
+                                          <>
+                                            <span className="w-px h-3.5 bg-slate-200"></span>
+                                            <span className="font-semibold text-slate-600">إجمالي متبقي العقد: <span className="font-bold text-red-600">{formatCurrency(group[0].totalInvoiceRemaining)}</span></span>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
                                     {group[0].guarantors.some((g) => g && g.name) && (
                                       <div className="flex items-center gap-2 text-xs text-slate-500 bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
                                         <Shield size={14} className="text-amber-500 shrink-0" />
@@ -871,7 +1034,7 @@ export default function CollectionStatement() {
                   <span className="w-px h-4 bg-slate-200"></span>
                   <span>عملاء: <span className="text-slate-900 font-black">{groupedDueRows.length}</span></span>
                   <span className="w-px h-4 bg-slate-200"></span>
-                  <span>الإجمالي: <span className="text-red-600 font-black">{formatCurrency(dueTotalInPeriod)}</span></span>
+                  <span>إجمالي الأقساط: <span className="text-red-600 font-black">{formatCurrency(dueTotalInPeriod)}</span></span>
                 </div>
 
                 {/* Center: Pagination — always centered */}
@@ -1430,7 +1593,12 @@ export default function CollectionStatement() {
                     <div className="due-card-body">
                       {/* Highlighted Box: Amount */}
                       <div className="due-card-highlights">
-                        <span className="due-total-badge">المبلغ المستحق: {formatCurrency(totalRemaining)}</span>
+                        <span className="due-total-badge">القسط المستحق: {formatCurrency(totalRemaining)}</span>
+                        {firstRow.totalInvoiceRemaining !== undefined && firstRow.totalInvoiceRemaining > totalRemaining && (
+                          <span style={{ fontSize: '9px', color: '#64748b', fontWeight: 600, display: 'block' }}>
+                            (متبقي العقد: {formatCurrency(firstRow.totalInvoiceRemaining)})
+                          </span>
+                        )}
                       </div>
                       
                       {/* Prominent Guarantors */}
@@ -1479,7 +1647,7 @@ export default function CollectionStatement() {
           <div className="mt-6 pt-3 border-t border-slate-400 flex justify-between items-center text-xs font-bold">
             <div>
               <p>عدد العملاء المستحقين: <span className="text-slate-900 font-black">{groupedDueRows.length} عميل</span></p>
-              <p className="mt-0.5">إجمالي المبالغ المطلوبة: <span className="text-red-700 font-black text-sm">{formatCurrency(dueTotalInPeriod)}</span></p>
+              <p className="mt-0.5">إجمالي الأقساط المطلوبة: <span className="text-red-700 font-black text-sm">{formatCurrency(dueTotalInPeriod)}</span></p>
             </div>
             {settings.invoiceFooter && (
               <div className="text-left text-[10px] text-slate-500 font-normal">
@@ -1582,84 +1750,78 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
 
   return (
     <div className="hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
-      <style>{`
-        @page {
-          size: auto;
-          margin: 10mm;
-        }
-        @media print {
-          body {
-            margin: 0;
-            padding: 0;
-            background: #fff;
-          }
-          .print-container {
-            width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
-          }
-        }
-      `}</style>
-
-      <div className="print-container">
+      <div className="print-container w-full">
         {/* Header */}
-        <div className="flex justify-between items-start border-b-2 border-slate-800 pb-4 mb-4">
+        <div className="flex justify-between items-start border-b-2 border-slate-900 pb-3 mb-4">
           <div>
-            <h1 className="text-4xl font-black text-slate-900 mb-1">{settings.companyName}</h1>
-            <p className="text-slate-600 text-sm">{settings.companyAddress}</p>
-            <p className="text-slate-600 font-bold text-sm">{settings.companyPhone}</p>
+            <h1 className="text-2xl font-black text-slate-900 mb-1">{settings.companyName}</h1>
+            <p className="text-slate-600 text-xs">{settings.companyAddress}</p>
+            <p className="text-slate-700 font-bold text-xs">{settings.companyPhone}</p>
           </div>
           <div className="text-left">
-            <h2 className="text-3xl font-bold text-slate-800 border-b border-slate-300 pb-1 mb-1 inline-block">كشف حساب عميل</h2>
-            <p className="text-slate-600 font-bold text-sm">تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
-            <p className="text-slate-600 font-bold text-sm">رقم الفاتورة: {invoice.invoiceNumber}</p>
+            <h2 className="text-xl font-bold text-slate-900 border-b-2 border-slate-800 pb-1 mb-1 inline-block">كشف حساب عميل</h2>
+            <p className="text-slate-600 font-bold text-xs">تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
+            <p className="text-slate-600 font-bold text-xs">رقم الفاتورة: {invoice.invoiceNumber}</p>
             {invoice.salesRepName && (
-              <p className="text-sky-700 font-bold text-sm">المندوب: {invoice.salesRepName}</p>
+              <p className="text-sky-700 font-bold text-xs">المندوب: {invoice.salesRepName}</p>
             )}
           </div>
         </div>
 
-        {/* Customer Info */}
+        {/* Customer & Guarantor Info */}
         <div className="flex flex-col gap-2 mb-4">
-          <div className="border border-slate-300 p-3 rounded-lg bg-slate-50">
-            <h3 className="font-bold text-base mb-2 text-slate-800 border-b border-slate-200 pb-1">بيانات العميل</h3>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <p><span className="font-semibold text-slate-600 w-20 inline-block">اسم العميل:</span> {invoice.customerName}</p>
-              <p><span className="font-semibold text-slate-600 w-20 inline-block">رقم الموبايل:</span> {invoice.customerPhone}</p>
-              <p className="col-span-2"><span className="font-semibold text-slate-600 w-20 inline-block">العنوان:</span> {invoice.customerAddress}</p>
+          <div className="border border-slate-300 p-3 rounded-lg bg-slate-50/70">
+            <h3 className="font-bold text-sm mb-2 text-slate-800 border-b border-slate-200 pb-1">بيانات العميل</h3>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <p><span className="font-bold text-slate-600 inline-block ml-1">اسم العميل:</span> {invoice.customerName}</p>
+              <p><span className="font-bold text-slate-600 inline-block ml-1">رقم الهاتف:</span> {invoice.customerPhone}</p>
+              {invoice.customerAddress && (
+                <p className="col-span-2"><span className="font-bold text-slate-600 inline-block ml-1">العنوان:</span> {invoice.customerAddress}</p>
+              )}
             </div>
+            {hasGuarantor && (
+              <div className="border-t border-slate-200 pt-2 mt-2 text-xs">
+                <span className="font-bold text-slate-700 inline-block ml-1">بيانات الضامن:</span>
+                <span className="text-slate-800 font-medium">
+                  {invoice.guarantors
+                    .filter((g) => g && g.name)
+                    .map((g) => `${g!.name} (${g!.phone || 'بدون هاتف'}${g!.nationalId ? ` - رقم قومي: ${g!.nationalId}` : ''})`)
+                    .join(' | ')}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Financial Summary */}
-        <div className="grid grid-cols-3 gap-4 mb-4">
-          <div className="border-2 border-slate-800 p-2 text-center rounded-lg">
-            <p className="text-slate-600 font-bold mb-1 text-sm">إجمالي الفاتورة</p>
-            <p className="text-xl font-black">{formatCurrency(invoice.total)}</p>
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="border-2 border-slate-800 p-2 text-center rounded-lg bg-slate-50">
+            <p className="text-slate-600 font-bold mb-1 text-xs">إجمالي الفاتورة</p>
+            <p className="text-lg font-black text-slate-900">{formatCurrency(invoice.total)}</p>
           </div>
-          <div className="border-2 border-emerald-600 p-2 text-center rounded-lg bg-emerald-50">
-            <p className="text-emerald-700 font-bold mb-1 text-sm">إجمالي المدفوع</p>
-            <p className="text-xl font-black text-emerald-800">{formatCurrency(invoice.paid)}</p>
+          <div className="border-2 border-emerald-700 p-2 text-center rounded-lg bg-emerald-50">
+            <p className="text-emerald-700 font-bold mb-1 text-xs">إجمالي المسدد</p>
+            <p className="text-lg font-black text-emerald-800">{formatCurrency(invoice.paid)}</p>
           </div>
-          <div className="border-2 border-red-600 p-2 text-center rounded-lg bg-red-50">
-            <p className="text-red-700 font-bold mb-1 text-sm">إجمالي المتبقي</p>
-            <p className="text-xl font-black text-red-800">{formatCurrency(invoice.remaining)}</p>
+          <div className="border-2 border-red-700 p-2 text-center rounded-lg bg-red-50">
+            <p className="text-red-700 font-bold mb-1 text-xs">إجمالي المتبقي</p>
+            <p className="text-lg font-black text-red-800">{formatCurrency(invoice.remaining)}</p>
           </div>
         </div>
 
         {/* Installments Table */}
         <div className="mb-4">
-          <h3 className="font-bold text-lg mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">سجل الأقساط والدفعات</h3>
-          <table className="w-full text-right border-collapse border border-slate-300 text-sm">
+          <h3 className="font-bold text-sm mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">سجل الأقساط والدفعات التفصيلي</h3>
+          <table className="w-full text-right border-collapse border border-slate-300 text-xs">
             <thead>
-              <tr className="bg-slate-200">
-                <th className="border border-slate-300 px-1 py-1 font-bold">البيان</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold">الاستحقاق</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold">تاريخ الدفع</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">المبلغ</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">المدفوع</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">المتبقي</th>
-                <th className="border border-slate-300 px-1 py-1 font-bold text-center">الحالة</th>
+              <tr className="bg-slate-100 text-slate-900 font-bold">
+                <th className="border border-slate-300 px-2 py-1.5 font-bold">البيان</th>
+                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الاستحقاق</th>
+                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">تاريخ الدفع</th>
+                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المبلغ</th>
+                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المدفوع</th>
+                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المتبقي</th>
+                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الحالة</th>
               </tr>
             </thead>
             <tbody>
@@ -1668,13 +1830,13 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
                 const statusLabel = schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partial' ? 'جزئي' : 'غير مدفوع';
                 return (
                   <tr key={schedule.id} className="even:bg-slate-50">
-                    <td className="border border-slate-300 px-1 py-1 font-semibold text-xs">{schedule.label}</td>
-                    <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{formatDateDisplay(schedule.dueDate)}</td>
-                    <td className="border border-slate-300 px-1 py-1 whitespace-nowrap text-xs">{formatDateDisplay(schedule.paidAt)}</td>
-                    <td className="border border-slate-300 px-1 py-1 text-center text-xs">{formatCurrency(schedule.amount)}</td>
-                    <td className="border border-slate-300 px-1 py-1 text-center text-emerald-700 font-bold text-xs">{formatCurrency(schedule.paidAmount)}</td>
-                    <td className="border border-slate-300 px-1 py-1 text-center text-red-700 font-bold text-xs">{formatCurrency(remaining)}</td>
-                    <td className="border border-slate-300 px-1 py-1 text-center font-bold text-xs">{statusLabel}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 font-semibold text-xs">{schedule.label}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(schedule.dueDate)}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(schedule.paidAt)}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 text-center text-xs font-semibold">{formatCurrency(schedule.amount)}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 text-center text-emerald-700 font-bold text-xs">{formatCurrency(schedule.paidAmount)}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 text-center text-red-700 font-bold text-xs">{formatCurrency(remaining)}</td>
+                    <td className="border border-slate-300 px-2 py-1.5 text-center font-bold text-xs">{statusLabel}</td>
                   </tr>
                 );
               })}
@@ -1682,9 +1844,8 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
           </table>
         </div>
 
-
         {/* Footer */}
-        <div className="mt-6 text-center text-xs text-slate-500 border-t border-slate-300 pt-2 pb-2">
+        <div className="mt-6 text-center text-xs text-slate-500 border-t border-slate-300 pt-3 pb-2">
           {settings.invoiceFooter && <p className="mb-1 font-bold">{settings.invoiceFooter}</p>}
           <p>تم استخراج هذا الكشف من نظام {settings.companyName} للتقسيط</p>
         </div>

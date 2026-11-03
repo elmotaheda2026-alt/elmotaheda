@@ -189,9 +189,9 @@ export default function ProductsInventory() {
   };
 
   return (
-    <div className="space-y-2 pb-10">
+    <div className="desktop-view-container">
       {/* COMPACT HEADER & TOOLBAR */}
-      <section className="erp-action-bar">
+      <section className="erp-action-bar shrink-0">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-lg font-black text-slate-900 shrink-0">كتالوج الأصناف</h2>
           <div className="relative flex-1 min-w-[240px] max-w-md">
@@ -223,17 +223,18 @@ export default function ProductsInventory() {
         </button>
       </section>
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
-        <div className="overflow-auto h-[calc(100vh-210px)]">
-          <table className="w-full min-w-[800px]">
-            <thead className="bg-slate-50 border-b border-slate-200">
+      {/* Flexible & Scrollable Products Table Card */}
+      <section className="desktop-table-card">
+        <div className="desktop-table-scroll">
+          <table className="w-full min-w-[800px] border-collapse">
+            <thead className="desktop-sticky-header">
               <tr>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الصنف / الكود</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">التصنيف</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الوحدة</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">تكلفة الشراء</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">سعر البيع</th>
-                <th className="py-2.5 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
+                <th className="py-2.5 px-4 text-right">الصنف / الكود</th>
+                <th className="py-2.5 px-4 text-right">التصنيف</th>
+                <th className="py-2.5 px-4 text-right">الوحدة</th>
+                <th className="py-2.5 px-4 text-right">تكلفة الشراء</th>
+                <th className="py-2.5 px-4 text-right">سعر البيع</th>
+                <th className="py-2.5 px-4 text-center">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -297,20 +298,27 @@ export default function ProductsInventory() {
             </tbody>
           </table>
         </div>
-        {filteredProducts.length > visibleProducts.length && (
-          <div className="border-t border-slate-100 bg-slate-50 px-4 py-2 text-center">
+
+        {/* Desktop Sticky Status & Pagination Banner */}
+        <div className="erp-status-bar shrink-0">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="font-bold text-slate-700">
+              إجمالي أصناف الكتالوج: <span className="text-blue-700 font-extrabold">{products.length}</span> (المعروض: {visibleProducts.length})
+            </span>
+            <span className="font-bold text-slate-700">
+              تصفية نتائج البحث: <span className="text-slate-900 font-extrabold">{filteredProducts.length}</span> صنف
+            </span>
+          </div>
+
+          {filteredProducts.length > visibleProducts.length && (
             <button
               type="button"
               onClick={() => setVisibleLimit((limit) => limit + PRODUCT_RENDER_LIMIT)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-100 hover:text-blue-600 transition-colors"
             >
               عرض المزيد ({filteredProducts.length - visibleProducts.length})
             </button>
-          </div>
-        )}
-        <div className="erp-status-bar">
-          <span className="font-bold text-slate-700">إجمالي أصناف الكتالوج: <span className="text-blue-700 font-extrabold">{products.length}</span> (المعروض: {visibleProducts.length})</span>
-          <span className="font-bold text-slate-700">تصفية نتائج البحث: <span className="text-slate-900 font-extrabold">{filteredProducts.length}</span> صنف</span>
+          )}
         </div>
       </section>
 

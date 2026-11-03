@@ -25,8 +25,10 @@ export async function syncShareholderTransactions(): Promise<void> {
   setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, data);
 }
 
-export async function createShareholder(data: Omit<Shareholder, 'id' | 'createdAt' | 'updatedAt' | 'currentBalance' | 'capital'> & { capital?: number }): Promise<Shareholder> {
+export async function createShareholder(data: Omit<Shareholder, 'id' | 'createdAt' | 'updatedAt' | 'currentBalance' | 'capital'> & { capital?: number; joinedDate?: string; isFounder?: boolean }): Promise<Shareholder> {
   const capital = Number(data.capital || 0);
+  const joinedDate = data.joinedDate || new Date().toISOString().split('T')[0];
+  const isFounder = Boolean(data.isFounder);
   console.debug('[storage] createShareholder input capital:', data.capital, 'normalized:', capital);
   
   if (isApiMode()) {
@@ -36,14 +38,19 @@ export async function createShareholder(data: Omit<Shareholder, 'id' | 'createdA
       sharePercentage: data.sharePercentage,
       managementFeePercentage: data.managementFeePercentage,
       capital,
+      joinedDate,
+      isFounder,
       notes: data.notes,
     });
     const newShareholder: Shareholder = {
       ...data,
       id: res.id,
       capital,
+      originalCapital: capital,
+      joinedDate,
+      isFounder,
       currentBalance: 0,
-      createdAt: new Date().toISOString(),
+      createdAt: joinedDate,
       updatedAt: new Date().toISOString(),
     };
     const shareholders = getShareholders();
@@ -58,8 +65,11 @@ export async function createShareholder(data: Omit<Shareholder, 'id' | 'createdA
     ...data,
     id: generateId(),
     capital,
+    originalCapital: capital,
+    joinedDate,
+    isFounder,
     currentBalance: 0,
-    createdAt: new Date().toISOString(),
+    createdAt: joinedDate,
     updatedAt: new Date().toISOString(),
   };
   
@@ -103,16 +113,16 @@ export async function deleteShareholder(id: string): Promise<boolean> {
   return false;
 }
 
-export async function addShareholderTransaction(data: Omit<ShareholderTransaction, 'id' | 'createdAt' | 'date'>): Promise<ShareholderTransaction | null> {
+export async function addShareholderTransaction(data: Omit<ShareholderTransaction, 'id' | 'createdAt' | 'date'> & { date?: string }): Promise<ShareholderTransaction | null> {
   const transactions = getShareholderTransactions();
   const shareholders = getShareholders();
   const index = shareholders.findIndex(s => s.id === data.shareholderId);
   
   if (index === -1) return null;
   const shareholder = shareholders[index];
+  const txDate = data.date || new Date().toISOString().split('T')[0];
   
   if (isApiMode()) {
-    const txDate = (data as any).date || new Date().toISOString().split('T')[0];
     const res = await api.createShareholderTransaction({
       ...data,
       date: txDate,
@@ -140,45 +150,19 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
     
     transactions.push(newTx);
     setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, transactions);
-    
-    // Integrate with Treasury (Payments)
-    if (data.type === 'capital_deposit' || data.type === 'capital_withdrawal' || data.type === 'profit_withdrawal') {
-      const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
-      const treasuryTx: Payment = {
-        id: generateId(),
-        type: data.type === 'capital_deposit' ? 'in' : 'out',
-        amount: data.amount,
-        referenceId: newTx.id,
-        referenceType: 'other',
-        description: `${data.description} - مساهم: ${shareholder.name}`,
-        date: newTx.date,
-        createdBy: data.createdBy,
-        createdAt: newTx.createdAt
-      };
-      payments.push(treasuryTx);
-      setStorage(DB_KEYS.PAYMENTS, payments);
-      void createNotification({
-        type: treasuryTx.type === 'in' ? 'success' : 'warning',
-        title: `حركة شريك ${treasuryTx.type === 'in' ? 'وارد' : 'صادر'}`,
-        message: `${treasuryTx.type === 'in' ? 'وارد' : 'صادر'} ${Number(treasuryTx.amount || 0).toLocaleString('ar-EG')} جنيه - ${shareholder.name}: ${data.description}`,
-      });
-    }
-    
     return newTx;
   }
   
   const newTx: ShareholderTransaction = {
     ...data,
     id: generateId(),
-    date: new Date().toISOString(),
+    date: txDate,
     createdAt: new Date().toISOString()
   };
   
-  // Update shareholder balance & capital
+  // Update shareholder balance & capital strictly separated
   if (data.type === 'capital_deposit') {
-    console.debug('[storage] addShareholderTransaction capital_deposit before:', shareholder.capital, 'amount:', data.amount);
     shareholder.capital = Number(shareholder.capital || 0) + Number(data.amount || 0);
-    console.debug('[storage] addShareholderTransaction capital_deposit after:', shareholder.capital);
   } else if (data.type === 'capital_withdrawal') {
     shareholder.capital = Math.max(0, Number(shareholder.capital || 0) - Number(data.amount || 0));
   } else if (data.type === 'profit_distribution') {
@@ -187,17 +171,8 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
     shareholder.currentBalance = Number(shareholder.currentBalance || 0) - Number(data.amount || 0);
   }
   const updatedShareholder = { ...shareholder, updatedAt: new Date().toISOString() };
-
-  // If shareholder has zero capital and zero currentBalance after this tx, remove their record (card)
-  const shouldRemove = Number(updatedShareholder.capital || 0) === 0 && Number(updatedShareholder.currentBalance || 0) === 0;
-  if (shouldRemove) {
-    console.debug('[storage] addShareholderTransaction removing shareholder (capital & balance zero):', updatedShareholder.id);
-    shareholders.splice(index, 1);
-    setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
-  } else {
-    shareholders[index] = updatedShareholder;
-    setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
-  }
+  shareholders[index] = updatedShareholder;
+  setStorage(DB_KEYS.SHAREHOLDERS, shareholders);
 
   transactions.push(newTx);
   setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, transactions);

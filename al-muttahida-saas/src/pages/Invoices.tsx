@@ -1636,7 +1636,7 @@ export default function Invoices() {
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="font-bold text-violet-700">{formatCurrency(displayAmount)}</span>
-                        {(!correspondingSchedule || !isPaid) && (
+                        {Boolean(editingSale) && (!correspondingSchedule || !isPaid) && (
                           <button
                             type="button"
                             onClick={() => {
@@ -1644,47 +1644,6 @@ export default function Invoices() {
                                 setDeferModalSale(editingSale);
                                 setDeferInstallmentId(scheduleId);
                                 setDeferNewDueDate(addMonths(displayDate, 1));
-                                setDeferPenaltyFee(0);
-                                setDeferStrategy('shift_subsequent');
-                                setDeferPenaltyPaymentType('add_to_debt');
-                                setDeferMessage(null);
-                              } else {
-                                // In new contract mode, launch defer modal with draft sale representation
-                                const draftSaleObj: Sale = {
-                                  id: 'draft-new-contract',
-                                  invoiceNumber: 'فاتورة جديدة',
-                                  customerId: selectedCustomerId,
-                                  customerName: customers.find((c) => c.id === selectedCustomerId)?.name || 'العميل الحالي',
-                                  date: invoiceDate,
-                                  items: [],
-                                  subtotal,
-                                  discount: discountAmount,
-                                  tax: taxAmount,
-                                  total,
-                                  paid,
-                                  remaining,
-                                  status: 'pending',
-                                  createdBy: user?.name || 'مدير النظام',
-                                  createdAt: new Date().toISOString(),
-                                  financing: {
-                                    paymentMethod: 'installment',
-                                    installmentMonths: effectiveMonths,
-                                    installmentStartDate: firstInstallmentDate,
-                                    monthlyInstallmentAmount: monthlyInstallment,
-                                    schedules: installmentPreview.map((ip) => ({
-                                      id: `inst-${ip.monthIndex}`,
-                                      monthIndex: ip.monthIndex,
-                                      label: `القسط ${ip.monthIndex}`,
-                                      dueDate: ip.dueDate,
-                                      amount: ip.amount,
-                                      paidAmount: 0,
-                                      status: 'unpaid' as const,
-                                    })),
-                                  },
-                                };
-                                setDeferModalSale(draftSaleObj);
-                                setDeferInstallmentId(scheduleId);
-                                setDeferNewDueDate(addMonths(entry.dueDate, 1));
                                 setDeferPenaltyFee(0);
                                 setDeferStrategy('shift_subsequent');
                                 setDeferPenaltyPaymentType('add_to_debt');

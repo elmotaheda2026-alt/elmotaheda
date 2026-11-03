@@ -219,23 +219,91 @@ section[class*="rounded"], div[class*="rounded-[24px]"], div[class*="rounded-[26
 /* Print styles */
 @media print {
   @page {
-    margin: 0;
+    size: A4 portrait;
+    margin: 8mm 10mm;
   }
 
-  .no-print {
-    display: none !important;
-  }
-
-  body {
-    background: white !important;
-    padding: 1cm;
-  }
-
-  .shadow-sm, .shadow-md, .shadow-lg {
+  *, *:before, *:after {
     box-shadow: none !important;
+    text-shadow: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
-  .border {
-    border: 1px solid #ddd !important;
+  html, body {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    overflow: visible !important;
+    height: auto !important;
+    font-size: 10pt !important;
+  }
+
+  .no-print,
+  .print\:hidden,
+  .desktop-view-container.print\:hidden,
+  .desktop-table-card.print\:hidden {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+  }
+
+  /* Force all app containers to unconstrain dimensions and scrollbars during print */
+  #root,
+  .h-screen,
+  main,
+  .desktop-view-container:not(.print\:hidden):not(.no-print),
+  .desktop-table-card:not(.print\:hidden):not(.no-print),
+  .desktop-table-scroll:not(.print\:hidden):not(.no-print) {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    box-shadow: none !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .desktop-table-card {
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+  }
+
+  table {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  th, td {
+    padding: 4px 6px !important;
+    font-size: 9pt !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+  }
+
+  th {
+    background-color: #f8fafc !important;
+    font-weight: 800 !important;
+    color: #0f172a !important;
+  }
+
+  /* Remove all browser scrollbars */
+  ::-webkit-scrollbar {
+    display: none !important;
   }
 }

@@ -1,13 +1,12 @@
 import sql from 'mssql';
 import { config } from './config.js';
 import { applyPagination, normalizeQueryParams, prepareSqlRequest, type PaginationOptions, type QueryParam, type QueryParams, type RequestLike } from './dbQuery.js';
-import { createSqliteDb, initSqliteTables, type SqliteDbWrapper } from './db-sqlite.js';
 import { hashPassword, uid } from './utils.js';
 
-/** Tracks which database engine is active. */
-export let dbEngine: 'mssql' | 'sqlite' = 'mssql';
-/** Convenience boolean – true when running on the SQLite fallback. */
-export let usingSqlite = false;
+/** The active database engine (Pure Microsoft SQL Server). */
+export const dbEngine: 'mssql' = 'mssql';
+/** Pure SQL Server mode is strictly enforced. */
+export const usingSqlite = false;
 
 /**
  * Attempt to auto-provision the target database via the `master` database.
@@ -94,39 +93,27 @@ async function tryConnectMssql(): Promise<any> {
 }
 
 // ---------------------------------------------------------------------------
-// Exported pool/db promises – with automatic SQLite fallback
+// Exported pool/db promises – Microsoft SQL Server exclusive
 // ---------------------------------------------------------------------------
 
-/** The MSSQL connection pool (null when using SQLite). */
+/** The MSSQL connection pool. */
 export let mssqlPool: any = null;
 
 export const poolPromise: Promise<any> = (async () => {
   const pool = await tryConnectMssql();
-  if (pool) {
-    mssqlPool = pool;
-    return pool;
+  if (!pool) {
+    throw new Error(
+      `[FATAL] Unable to connect to Microsoft SQL Server at ${config.sql.server}:${config.sql.port}.\n` +
+      `Please ensure SQL Server is running and reachable.`
+    );
   }
-
-  // MSSQL is unavailable – switch to SQLite for desktop mode
-  console.warn(
-    '\n╔══════════════════════════════════════════════════════════════╗\n' +
-    '║  ⚠️  MSSQL unavailable – falling back to SQLite (Desktop)  ║\n' +
-    '╚══════════════════════════════════════════════════════════════╝\n'
-  );
-  dbEngine = 'sqlite';
-  usingSqlite = true;
-  return null;
+  mssqlPool = pool;
+  return pool;
 })();
 
 
 export const dbPromise = (async () => {
   const pool = await poolPromise;
-
-  // ── SQLite fallback path ──────────────────────────────────────────────
-  if (!pool) {
-    // MSSQL unavailable – return the SQLite adapter
-    return await createSqliteDb();
-  }
 
   // ── MSSQL path (pool is connected) ────────────────────────────────────
 
@@ -281,12 +268,6 @@ export const dbPromise = (async () => {
  */
 export async function initDb(): Promise<void> {
   const db = await dbPromise; // ensure the pool is created
-
-  // ── SQLite path: run SQLite-native migrations ─────────────────────────
-  if (usingSqlite) {
-    await initSqliteTables(db as SqliteDbWrapper);
-    return;
-  }
 
   // ── MSSQL path: run MSSQL migrations ──────────────────────────────────
   await db.run(`
@@ -662,10 +643,15 @@ export async function initDb(): Promise<void> {
     management_fee_percentage DECIMAL(18,2) DEFAULT 0,
     capital DECIMAL(18,2) NOT NULL DEFAULT 0,
     current_balance DECIMAL(18,2) NOT NULL DEFAULT 0,
+    joined_date NVARCHAR(40) NULL,
+    is_founder BIT NOT NULL DEFAULT 0,
     notes NVARCHAR(1000),
     created_at NVARCHAR(40) NOT NULL,
     updated_at NVARCHAR(40) NOT NULL
   );
+
+  IF COL_LENGTH('shareholders', 'joined_date') IS NULL ALTER TABLE shareholders ADD joined_date NVARCHAR(40) NULL;
+  IF COL_LENGTH('shareholders', 'is_founder') IS NULL ALTER TABLE shareholders ADD is_founder BIT NOT NULL DEFAULT 0;
 
   -- 16. Shareholder Transactions
   IF OBJECT_ID('shareholder_transactions', 'U') IS NULL

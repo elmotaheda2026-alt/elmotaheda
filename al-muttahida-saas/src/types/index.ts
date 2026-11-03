@@ -349,7 +349,10 @@ export interface Shareholder {
   sharePercentage: number;
   managementFeePercentage?: number;
   capital: number;
+  originalCapital?: number;
   currentBalance: number;
+  joinedDate?: string;
+  isFounder?: boolean;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -362,7 +365,11 @@ export interface ShareholderTransaction {
   type: 'capital_deposit' | 'capital_withdrawal' | 'profit_distribution' | 'profit_withdrawal';
   amount: number;
   date: string;
+  displayDate?: string;
   description: string;
   createdBy: string;
   createdAt: string;
+  runningCapital?: number;
+  runningAvailableProfit?: number;
+  runningTotalEquity?: number;
 }
