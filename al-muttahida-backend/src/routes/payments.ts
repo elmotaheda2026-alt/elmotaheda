@@ -268,10 +268,12 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
             );
             if (schedule) {
               const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
+              const isPaid = (schedule.amount - nextPaid) <= 1.0;
+              const finalPaid = isPaid ? schedule.amount : nextPaid;
               await tx.run(
                 `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
-                nextPaid,
-                nextPaid >= schedule.amount ? 'paid' : 'partial',
+                finalPaid,
+                isPaid ? 'paid' : (finalPaid > 0 ? 'partial' : 'unpaid'),
                 data.date,
                 data.installmentId,
               );
@@ -289,10 +291,12 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
               const applied = Math.min(schRemaining, remainingPayment);
               const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
               remainingPayment = Number((remainingPayment - applied).toFixed(2));
+              const isSchPaid = (sch.amount - nextPaidAmount) <= 1.0;
+              const finalSchPaid = isSchPaid ? sch.amount : nextPaidAmount;
               await tx.run(
                 `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
-                nextPaidAmount,
-                nextPaidAmount >= sch.amount ? 'paid' : 'partial',
+                finalSchPaid,
+                isSchPaid ? 'paid' : (finalSchPaid > 0 ? 'partial' : 'unpaid'),
                 data.date,
                 sch.id,
               );

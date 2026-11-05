@@ -1748,8 +1748,8 @@ export default function Payments() {
                         onClick={() => setIncomingSubmitMode('save_print')}
                         className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all shadow-xs active:scale-95 sm:w-56 ${
                           paymentMode === 'early_settlement'
-                            ? 'bg-sky-600 hover:bg-sky-700'
-                            : 'bg-sky-600 hover:bg-sky-700'
+                            ? 'bg-blue-600 hover:bg-blue-700'
+                            : 'bg-blue-600 hover:bg-blue-700'
                         }`}
                       >
                         <Printer size={17} />

@@ -126,7 +126,7 @@ export default function SalesReps() {
         </div>
         <button
           onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-bold shadow-sm shrink-0"
+          className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs shrink-0 cursor-pointer"
         >
           <Plus size={16} />
           <span>إضافة مندوب</span>
@@ -279,7 +279,7 @@ export default function SalesReps() {
                 <button type="button" onClick={() => { setShowModal(false); setEditingRep(null); }} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-bold">
                   إلغاء
                 </button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-bold">
+                <button type="submit" className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-bold shadow-2xs cursor-pointer">
                   {editingRep ? 'تحديث' : 'إضافة'}
                 </button>
               </div>

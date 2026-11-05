@@ -1,4 +1,28 @@
-export const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+function resolveApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    // 1. Electron or custom window injected API URL
+    if ((window as any).__API_BASE_URL__) {
+      return (window as any).__API_BASE_URL__;
+    }
+
+    // 2. Saved custom server URL in localStorage
+    const saved = localStorage.getItem('server_api_url');
+    if (saved) return saved;
+
+    // 3. Dynamic network detection:
+    // If user accesses via network IP (e.g. http://192.168.1.9:5173),
+    // automatically point backend requests to that same host on port 4000.
+    const hostname = window.location.hostname;
+    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return `${window.location.protocol}//${hostname}:4000`;
+    }
+  }
+
+  // 4. Default fallback (configured env or localhost)
+  return import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+}
+
+export const API_BASE = resolveApiBaseUrl();
 const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
 const API_USER_KEY = 'api_user';
 const FORCE_LOCAL_RESTORE_KEY = 'almuttahida_force_local_restore';

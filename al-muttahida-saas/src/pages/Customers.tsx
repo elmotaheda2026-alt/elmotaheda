@@ -709,7 +709,7 @@ export default function Customers() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
             {/* Form Header */}
-            <div className="bg-indigo-600 text-white py-4 px-6 flex items-center justify-between shrink-0">
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white py-4 px-6 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 bg-white/20 rounded-lg flex items-center justify-center">
                   <UserCircle size={20} />
@@ -768,7 +768,7 @@ export default function Customers() {
                     <div className="text-xs text-gray-400 my-2">أو</div>
                     <button
                       type="button"
-                      className="w-full px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                      className="w-full px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold transition-colors"
                     >
                       <Camera size={14} className="inline ml-1" />
                       الكاميرا
@@ -1122,7 +1122,7 @@ export default function Customers() {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-bold flex items-center gap-1.5"
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-bold flex items-center gap-1.5 shadow-2xs"
                 >
                   <Save size={16} />
                   <span>حفظ البيانات</span>

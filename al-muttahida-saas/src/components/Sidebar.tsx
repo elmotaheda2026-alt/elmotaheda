@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Permission } from '../types';
@@ -14,6 +14,8 @@ import {
   FileSearch,
   Package,
   PieChart,
+  Pin,
+  PinOff,
   Receipt,
   Settings,
   ShoppingBag,
@@ -35,11 +37,25 @@ type PermissionKey = Permission;
 const menuGroups: {
   title: string;
   defaultOpen: boolean;
+  accent: {
+    dot: string;
+    activeBorder: string;
+    activeBg: string;
+    activeText: string;
+    activeIcon: string;
+  };
   items: { icon: any; label: string; path: string; permission?: PermissionKey; adminOnly?: boolean }[];
 }[] = [
   {
     title: 'المبيعات والعملاء',
     defaultOpen: true,
+    accent: {
+      dot: 'bg-slate-400',
+      activeBorder: 'border-blue-600',
+      activeBg: 'bg-blue-50/80',
+      activeText: 'text-blue-700',
+      activeIcon: 'text-blue-600',
+    },
     items: [
       { icon: Warehouse, label: 'الرئيسية', path: '/' },
       { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
@@ -52,6 +68,13 @@ const menuGroups: {
   {
     title: 'الخزينة والتحصيل',
     defaultOpen: true,
+    accent: {
+      dot: 'bg-slate-400',
+      activeBorder: 'border-blue-600',
+      activeBg: 'bg-blue-50/80',
+      activeText: 'text-blue-700',
+      activeIcon: 'text-blue-600',
+    },
     items: [
       { icon: Banknote, label: 'الخزينة', path: '/payments', permission: 'payments:read' },
       { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
@@ -61,6 +84,13 @@ const menuGroups: {
   {
     title: 'التقارير والمالية',
     defaultOpen: true,
+    accent: {
+      dot: 'bg-slate-400',
+      activeBorder: 'border-blue-600',
+      activeBg: 'bg-blue-50/80',
+      activeText: 'text-blue-700',
+      activeIcon: 'text-blue-600',
+    },
     items: [
       { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read', adminOnly: true },
       { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'payments:read', adminOnly: true },
@@ -70,6 +100,13 @@ const menuGroups: {
   {
     title: 'الإدارة',
     defaultOpen: true,
+    accent: {
+      dot: 'bg-slate-400',
+      activeBorder: 'border-blue-600',
+      activeBg: 'bg-blue-50/80',
+      activeText: 'text-blue-700',
+      activeIcon: 'text-blue-600',
+    },
     items: [
       { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
       { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
@@ -82,6 +119,33 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, settings } = useAuth();
+
+  const [isHovered, setIsHovered] = useState(false);
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const isExpanded = isOpen || isHovered;
+
+  const handleMouseEnter = () => {
+    if (isOpen || window.innerWidth < 1024) return;
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    hoverTimeoutRef.current = setTimeout(() => {
+      setIsHovered(true);
+    }, 80);
+  };
+
+  const handleMouseLeave = () => {
+    if (window.innerWidth < 1024) return;
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    hoverTimeoutRef.current = setTimeout(() => {
+      setIsHovered(false);
+    }, 140);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    };
+  }, []);
 
   const hasPermission = (permission?: PermissionKey) => {
     if (!user) return false;
@@ -106,37 +170,40 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
       {isOpen && <div className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden" onClick={onClose} />}
 
       <aside
-        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col border-l border-slate-200 bg-white text-slate-800 transition-all duration-300 ${
-          isOpen ? 'w-64 translate-x-0 xl:w-72' : 'w-16 translate-x-full lg:translate-x-0'
-        }`}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col border-l border-slate-200 bg-white text-slate-800 transition-all duration-200 ${
+          isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
+        } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
         {/* Header / Branding */}
-        <div className={`flex items-center justify-between border-b border-slate-200 ${isOpen ? 'px-4 py-4' : 'px-2 py-4 justify-center'}`}>
+        <div className={`flex items-center justify-between border-b border-slate-200 ${isExpanded ? 'px-3.5 py-3.5' : 'px-2 py-3.5 justify-center'}`}>
           <button
             type="button"
             onClick={() => {
               navigate('/');
-              onClose();
+              setIsHovered(false);
+              if (window.innerWidth < 1024) onClose();
             }}
-            className="flex items-center gap-3 overflow-hidden text-right transition-opacity hover:opacity-85"
+            className="flex items-center gap-3 overflow-hidden text-right transition-opacity hover:opacity-85 cursor-pointer"
             title={settings.companyName || 'شركة المتحدة'}
           >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-md shadow-blue-500/20">
-              <Warehouse size={22} />
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-xs">
+              <Warehouse size={20} />
             </div>
-            {isOpen && (
+            {isExpanded && (
               <div className="flex flex-col truncate">
-                <h1 className="truncate text-base font-extrabold tracking-tight text-slate-900">
+                <h1 className="truncate text-sm font-black tracking-tight text-slate-900 leading-tight">
                   {settings.companyName || 'شركة المتحدة'}
                 </h1>
-                <span className="text-[11px] font-medium text-slate-500">نظام ERP المتكامل</span>
+                <span className="text-[11px] font-medium text-slate-500 mt-0.5">نظام ERP المتكامل</span>
               </div>
             )}
           </button>
         </div>
 
         {/* Navigation Items */}
-        <nav className={`flex-1 overflow-y-auto py-3 custom-scrollbar ${isOpen ? 'px-3' : 'px-2'}`}>
+        <nav className={`flex-1 overflow-y-auto py-3 custom-scrollbar ${isExpanded ? 'px-2.5' : 'px-2'}`}>
           <div className="space-y-3">
             {menuGroups.map((group) => {
               const allowedItems = group.items.filter((item) => (!item.adminOnly || isAdmin(user)) && hasPermission(item.permission));
@@ -144,23 +211,28 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
 
               return (
                 <section key={group.title} className="space-y-1">
-                  {isOpen ? (
+                  {isExpanded ? (
                     <button
                       type="button"
                       onClick={() => toggleGroup(group.title)}
-                      className="flex w-full items-center justify-between px-2 py-1.5 text-right text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors"
+                      className="flex w-full items-center justify-between px-2.5 py-1 text-right text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors"
                     >
-                      <span>{group.title}</span>
+                      <span className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${group.accent.dot}`} />
+                        <span>{group.title}</span>
+                      </span>
                       <ChevronDown
                         size={14}
                         className={`transition-transform duration-200 ${openGroups[group.title] ? 'rotate-180' : ''}`}
                       />
                     </button>
                   ) : (
-                    <div className="my-2 border-t border-slate-100" />
+                    <div className="my-2.5 flex justify-center items-center">
+                      <span className={`w-1.5 h-1.5 rounded-full ${group.accent.dot} opacity-60`} />
+                    </div>
                   )}
 
-                  {(isOpen ? openGroups[group.title] : true) && (
+                  {(isExpanded ? openGroups[group.title] : true) && (
                     <div className="space-y-0.5">
                       {allowedItems.map((item) => {
                         const Icon = item.icon;
@@ -173,23 +245,26 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
                             title={item.label}
                             onClick={() => {
                               navigate(item.path);
-                              onClose();
+                              setIsHovered(false);
+                              if (window.innerWidth < 1024) {
+                                onClose();
+                              }
                             }}
-                            className={`group flex w-full items-center gap-3 rounded-lg font-bold transition-all duration-150 ${
-                              isOpen ? 'px-3 py-2 text-sm' : 'justify-center px-2 py-2.5 text-xs'
+                            className={`group flex w-full items-center gap-3 rounded-lg font-bold transition-all duration-150 cursor-pointer ${
+                              isExpanded ? 'px-3 py-2 text-sm' : 'justify-center px-2 py-2.5 text-xs'
                             } ${
                               isActive
-                                ? 'border-r-4 border-blue-600 bg-blue-50 text-blue-700 font-bold shadow-sm'
+                                ? `border-r-4 ${group.accent.activeBorder} ${group.accent.activeBg} ${group.accent.activeText} font-bold shadow-2xs`
                                 : 'border-r-4 border-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900'
                             }`}
                           >
                             <Icon
-                              size={19}
+                              size={18}
                               className={`shrink-0 transition-colors ${
-                                isActive ? 'text-blue-600' : 'text-slate-500 group-hover:text-slate-700'
+                                isActive ? group.accent.activeIcon : 'text-slate-500 group-hover:text-slate-800'
                               }`}
                             />
-                            {isOpen && <span className="truncate">{item.label}</span>}
+                            {isExpanded && <span className="truncate text-sm font-bold">{item.label}</span>}
                           </button>
                         );
                       })}
@@ -201,16 +276,31 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
           </div>
         </nav>
 
-        {/* Footer / Toggle Button */}
-        <div className="border-t border-slate-200 p-2.5 bg-slate-50/50">
+        {/* Footer / Toggle & Pin Button */}
+        <div className="border-t border-slate-200 p-2.5 bg-slate-50/70">
           <button
             type="button"
-            onClick={onToggle}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 active:scale-98"
-            title={isOpen ? 'تصغير القائمة' : 'توسيع القائمة'}
+            onClick={() => {
+              setIsHovered(false);
+              onToggle();
+            }}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold transition shadow-2xs active:scale-95 cursor-pointer ${
+              isOpen
+                ? 'text-blue-700 hover:border-blue-300 hover:bg-blue-50'
+                : 'text-slate-600 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+            title={isOpen ? 'تصغير القائمة (تفعيل التوسيع التلقائي بالماوس)' : 'تثبيت القائمة مفتوحة دائماً'}
           >
-            {isOpen ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-            {isOpen && <span>تصغير القائمة</span>}
+            {isOpen ? (
+              <PinOff size={16} className="text-blue-600 shrink-0" />
+            ) : (
+              <Pin size={16} className="text-slate-500 shrink-0" />
+            )}
+            {isExpanded && (
+              <span className="truncate">
+                {isOpen ? 'تصغير (توسيع بالماوس)' : 'تثبيت القائمة'}
+              </span>
+            )}
           </button>
         </div>
       </aside>

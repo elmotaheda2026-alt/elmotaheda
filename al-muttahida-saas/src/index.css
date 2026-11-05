@@ -19,6 +19,24 @@
 
   * {
     font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+    font-feature-settings: "zero" 0;
+  }
+
+  /* Global clean standard numbers font - remove typewriter mono and slashed zeros across entire system */
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif !important;
+    font-feature-settings: "zero" 0 !important;
+    font-variant-numeric: normal !important;
+    letter-spacing: normal !important;
+  }
+
+  input, select, textarea, button {
+    font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+    font-feature-settings: "zero" 0;
   }
 
   html {

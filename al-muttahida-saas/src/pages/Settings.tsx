@@ -426,7 +426,7 @@ export default function Settings() {
             <div className="flex items-center gap-4 pt-2">
               <button
                 type="submit"
-                className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-lg hover:bg-indigo-700 transition-colors font-bold text-sm"
+                className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors font-bold text-sm shadow-2xs cursor-pointer"
               >
                 <Save size={16} />
                 حفظ الاعدادات
@@ -604,7 +604,7 @@ export default function Settings() {
                     className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition-all ${
                       connStatus === 'testing'
                         ? 'bg-slate-200 text-slate-500 cursor-wait'
-                        : 'bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50'
+                        : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 shadow-2xs'
                     }`}
                   >
                     {connStatus === 'testing' ? (
@@ -712,7 +712,7 @@ export default function Settings() {
             <div className="flex items-center gap-4 pt-2">
               <button
                 type="submit"
-                className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-lg hover:bg-indigo-700 transition-colors font-bold text-sm"
+                className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors font-bold text-sm shadow-2xs cursor-pointer"
               >
                 <Save size={16} />
                 حفظ الارصدة الافتتاحية
@@ -903,7 +903,7 @@ export default function Settings() {
                       type="button"
                       onClick={() => void handleSaveAutoBackup()}
                       disabled={autoBackupLoading}
-                      className="flex items-center gap-1.5 bg-indigo-600 text-white px-5 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-xs font-bold disabled:opacity-50"
+                      className="flex items-center gap-1.5 bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold disabled:opacity-50 shadow-2xs cursor-pointer"
                     >
                       <Save size={14} />
                       {autoBackupLoading ? 'جاري الحفظ...' : 'حفظ إعدادات النسخ التلقائي'}

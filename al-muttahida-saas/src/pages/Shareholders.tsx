@@ -19,6 +19,10 @@ import {
   ShieldCheck,
   X,
   Award,
+  Table as TableIcon,
+  LayoutGrid,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Shareholder, ShareholderTransaction, Sale, Expense, Product } from '../types';
 import {
@@ -104,6 +108,8 @@ export default function Shareholders() {
   const [lastSynced, setLastSynced] = useState<Date>(new Date());
 
   const [activeTab, setActiveTab] = useState<'overview' | 'ledger'>('overview');
+  const [overviewDisplayMode, setOverviewDisplayMode] = useState<'table' | 'cards'>('table');
+  const [showChartBanner, setShowChartBanner] = useState<boolean>(false);
 
   // Filters
   const [ledgerPartnerFilter, setLedgerPartnerFilter] = useState<string>('all');
@@ -142,6 +148,11 @@ export default function Shareholders() {
   });
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
+  const formatWithdrawal = (amount?: number | null) => {
+    const val = Math.round(Number(amount || 0));
+    if (val <= 0) return formatCurrency(0);
+    return `-${formatCurrency(val)}`;
+  };
 
   const loadData = async () => {
     setIsLoading(true);
@@ -695,10 +706,10 @@ export default function Shareholders() {
   return (
     <div className="h-full max-h-screen overflow-hidden flex flex-col gap-2.5">
       {/* TIER 1: Fixed Compact Action Header */}
-      <section className="bg-white rounded-xl px-3.5 py-2 border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-2.5 shrink-0">
-        <div className="flex items-center gap-3 flex-wrap">
+      <section className="bg-white rounded-xl px-3 py-2 border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-2xs shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-2xs shrink-0">
               <Landmark size={16} />
             </div>
             <div>
@@ -706,19 +717,19 @@ export default function Shareholders() {
                 <h2 className="text-sm md:text-base font-black text-slate-900 leading-tight">
                   حسابات الشركاء والمؤسسين
                 </h2>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
                   حسابات الشركاء
                 </span>
               </div>
               <p className="text-[10px] text-slate-400">
-                متابعة رؤوس الأموال، حصص الأرباح الزمنية، والأرباح المتاحة (آخر تحديث: {lastSynced.toLocaleTimeString('ar-EG')})
+                متابعة رؤوس الأموال وحصص الأرباح (آخر تحديث: {lastSynced.toLocaleTimeString('ar-EG')})
               </p>
             </div>
           </div>
 
           {/* Search Input */}
-          <div className="relative w-44 sm:w-56">
+          <div className="relative w-36 sm:w-44">
             <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
@@ -731,43 +742,93 @@ export default function Shareholders() {
         </div>
 
         {/* Action Controls & View Switcher */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* View Switcher Tabs */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* Main Tabs Switcher */}
           <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-bold">
             <button
               type="button"
               onClick={() => setActiveTab('overview')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all ${
                 activeTab === 'overview'
-                  ? 'bg-white text-indigo-700 shadow-2xs font-extrabold'
+                  ? 'bg-white text-blue-700 shadow-2xs font-extrabold'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <PieChartIcon size={13} />
-              <span>حصص الشركاء والمؤسسين ({liveShareholders.length})</span>
+              <span>حصص الشركاء ({liveShareholders.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('ledger')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all ${
                 activeTab === 'ledger'
-                  ? 'bg-white text-indigo-700 shadow-2xs font-extrabold'
+                  ? 'bg-white text-blue-700 shadow-2xs font-extrabold'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <FileText size={13} />
-              <span>سجل المعاملات ({displayedTransactions.length})</span>
+              <span>المعاملات ({displayedTransactions.length})</span>
             </button>
           </div>
+
+          {/* Table / Cards View Mode Switcher (Active on Overview) */}
+          {activeTab === 'overview' && (
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setOverviewDisplayMode('table')}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all ${
+                  overviewDisplayMode === 'table'
+                    ? 'bg-white text-blue-700 shadow-2xs font-extrabold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="عرض جدول مالي شامل"
+              >
+                <TableIcon size={12} />
+                <span>جدول</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setOverviewDisplayMode('cards')}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md transition-all ${
+                  overviewDisplayMode === 'cards'
+                    ? 'bg-white text-blue-700 shadow-2xs font-extrabold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="عرض بطاقات مبسطة"
+              >
+                <LayoutGrid size={12} />
+                <span>بطاقات</span>
+              </button>
+            </div>
+          )}
+
+          {/* Chart Toggle Button */}
+          {activeTab === 'overview' && liveShareholders.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowChartBanner(!showChartBanner)}
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition-all border ${
+                showChartBanner
+                  ? 'bg-blue-50 border-blue-200 text-blue-700'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+              title="عرض أو إخفاء مخطط توزيع الحصص"
+            >
+              <PieChartIcon size={12} />
+              <span>المخطط</span>
+              {showChartBanner ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            </button>
+          )}
 
           <button
             type="button"
             onClick={loadData}
             disabled={isLoading}
-            className="flex items-center gap-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50"
+            className="flex items-center gap-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2 py-1 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50"
             title="تحديث لحظي من قاعدة البيانات"
           >
-            <RefreshCw size={13} className={isLoading ? 'animate-spin text-indigo-600' : ''} />
+            <RefreshCw size={12} className={isLoading ? 'animate-spin text-blue-600' : ''} />
             <span className="hidden sm:inline">تحديث</span>
           </button>
 
@@ -787,10 +848,10 @@ export default function Shareholders() {
               });
               setShowShareholderModal(true);
             }}
-            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95"
+            className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
           >
             <Plus size={13} />
-            <span>إضافة شريك أو مؤسس</span>
+            <span>+ إضافة شريك</span>
           </button>
         </div>
       </section>
@@ -808,70 +869,60 @@ export default function Shareholders() {
               تأسيسي: {formatCurrency(foundersSummary.totalInitialCapital)}
             </span>
           </div>
-          <div className="w-9 h-9 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shrink-0 border border-indigo-100">
-            <Wallet size={18} />
+          <div className="w-8 h-8 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shrink-0 border border-indigo-100">
+            <Wallet size={16} />
           </div>
         </div>
 
         {/* KPI 2: Founders' & Partners' Total Share */}
         <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">حصص المؤسسين والشركاء</span>
+            <span className="text-[11px] font-bold text-slate-500 block truncate">توزيع الملكية</span>
             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
               <span className="inline-flex items-center gap-1 text-xs font-black text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 tabular-nums">
-                <span className="text-[10px] font-bold text-purple-600">المؤسسون:</span>
-                {foundersSummary.foundersProportionalPct.toFixed(1)}%
+                مؤسسون: {foundersSummary.foundersProportionalPct.toFixed(1)}%
               </span>
               <span className="inline-flex items-center gap-1 text-xs font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200/60 tabular-nums">
-                <span className="text-[10px] font-bold text-indigo-600">الشركاء:</span>
-                {foundersSummary.partnersProportionalPct.toFixed(1)}%
+                شركاء: {foundersSummary.partnersProportionalPct.toFixed(1)}%
               </span>
             </div>
-            <span className="text-[10px] text-slate-400 block truncate mt-1">
-              إجمالي هيكل الملكية: 100%
-            </span>
           </div>
-          <div className="w-9 h-9 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 shrink-0 border border-amber-100">
-            <Award size={18} />
+          <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 shrink-0 border border-amber-100">
+            <Award size={16} />
           </div>
         </div>
 
         {/* KPI 3: Available Profits for Withdrawal */}
         <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
           <div className="min-w-0">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">الأرباح المتاحة للسحب</span>
+            <span className="text-[11px] font-bold text-slate-500 block truncate">الأرباح المتاحة للصرف</span>
             <span className="text-base md:text-lg font-black text-emerald-600 tabular-nums block leading-tight mt-0.5">
-              {formatCurrency(totalAvailableProfits)}
+              +{formatCurrency(totalAvailableProfits)}
             </span>
             <span className="text-[10px] text-slate-400 block truncate mt-0.5">
-              أرباح محتجزة جاهزة للصرف
+              أرباح جاهزة للسحب الفوري
             </span>
           </div>
-          <div className="w-9 h-9 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600 shrink-0 border border-emerald-100">
-            <DollarSign size={18} />
+          <div className="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600 shrink-0 border border-emerald-100">
+            <DollarSign size={16} />
           </div>
         </div>
 
         {/* KPI 4: Active Partners Count */}
         <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">عدد المؤسسين والشركاء</span>
-            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-              <span className="inline-flex items-center gap-1 text-xs font-black text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 tabular-nums">
-                {foundersSummary.foundersCount}
-                <span className="text-[10px] font-bold text-purple-600">مؤسس</span>
-              </span>
-              <span className="inline-flex items-center gap-1 text-xs font-black text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 tabular-nums">
-                {foundersSummary.partnersCount}
-                <span className="text-[10px] font-bold text-slate-600">مساهم</span>
-              </span>
-            </div>
-            <span className="text-[10px] text-slate-400 block truncate mt-1">
-              الإجمالي: {liveShareholders.length} شريك ومؤسس نشط
+            <span className="text-[11px] font-bold text-slate-500 block truncate">الشركاء والمؤسسون</span>
+            <span className="text-base md:text-lg font-black text-slate-900 tabular-nums block leading-tight mt-0.5">
+              {liveShareholders.length} <span className="text-xs font-normal text-slate-500">نشط</span>
             </span>
+            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold mt-0.5">
+              <span>{foundersSummary.foundersCount} مؤسس</span>
+              <span>•</span>
+              <span>{foundersSummary.partnersCount} مساهم</span>
+            </div>
           </div>
-          <div className="w-9 h-9 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600 shrink-0 border border-purple-100">
-            <Users size={18} />
+          <div className="w-8 h-8 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600 shrink-0 border border-purple-100">
+            <Users size={16} />
           </div>
         </div>
       </section>
@@ -879,127 +930,166 @@ export default function Shareholders() {
       {/* TIER 3: Flexible & Contained Main Content Area */}
       {activeTab === 'overview' ? (
         <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
-          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-            {/* Founders Equity Distribution Breakdown Banner */}
-            {liveShareholders.length > 0 && (
-              <div className="bg-slate-50/90 rounded-xl p-3 border border-slate-200/80 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center shrink-0">
-                <div className="lg:col-span-5 space-y-1">
-                  <h3 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-1.5">
-                    <PieChartIcon size={14} className="text-indigo-600" />
-                    <span>هيكل الملكية وحصص المؤسسين والشركاء (100%)</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-500 leading-normal">
-                    يوضح المخطط توزيع الحصص النسبية من إجمالي 100% بين المؤسسين والشركاء، مع احتساب نصيب كل شريك من الأرباح وفق تاريخ انضمامه الفعلي وفصل رأس المال الأصلي عن الأرباح المتراكمة.
-                  </p>
-                  <div className="flex items-center gap-3 pt-0.5 text-[11px] flex-wrap">
-                    <span className="text-slate-600">
-                      إجمالي الملكية: <strong className="text-indigo-900 font-extrabold">100%</strong>
-                    </span>
-                    <span>•</span>
-                    <span className="text-purple-700">
-                      المؤسسون: <strong className="font-extrabold">{foundersSummary.foundersProportionalPct.toFixed(1)}%</strong>
-                    </span>
-                    <span>•</span>
-                    <span className="text-blue-700">
-                      الشركاء: <strong className="font-extrabold">{foundersSummary.partnersProportionalPct.toFixed(1)}%</strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="lg:col-span-7 min-w-0 w-full h-32 flex items-center justify-center overflow-hidden">
-                  <TypedResponsiveContainer width="100%" height={128}>
-                    <TypedPieChart margin={{ top: 0, right: 10, bottom: 0, left: 10 }}>
-                      <TypedPie
-                        data={chartData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={28}
-                        outerRadius={46}
-                        paddingAngle={3}
-                        dataKey="proportionalShare"
-                        nameKey="name"
-                      >
-                        {chartData.map((_: any, index: number) => (
-                          <TypedCell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </TypedPie>
-                      <TypedTooltip
-                        formatter={(value: number, _name: string, entry: any) => [
-                          `${Number(value).toFixed(1)}% من هيكل الشركة (رأس المال: ${formatCurrency(entry.payload.capital)})`,
-                          'الحصة النسبية',
-                        ]}
-                      />
-                      <TypedLegend
-                        layout="horizontal"
-                        align="center"
-                        verticalAlign="bottom"
-                        formatter={(value: string) => {
-                          const item = chartData.find((c) => c.name === value);
-                          return `${value} (${item?.proportionalShare ?? 0}%)`;
-                        }}
-                        wrapperStyle={{ fontSize: '10px', paddingTop: '2px' }}
-                      />
-                    </TypedPieChart>
-                  </TypedResponsiveContainer>
+          {/* Optional Collapsible Equity Distribution Chart Banner */}
+          {liveShareholders.length > 0 && showChartBanner && (
+            <div className="bg-slate-50/90 p-3 border-b border-slate-200 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center shrink-0 animate-in fade-in duration-200">
+              <div className="lg:col-span-4 space-y-1">
+                <h3 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-1.5">
+                  <PieChartIcon size={14} className="text-indigo-600" />
+                  <span>هيكل الملكية وحصص الشركاء</span>
+                </h3>
+                <div className="flex items-center gap-2 pt-1 text-xs flex-wrap font-bold">
+                  <span className="text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                    المؤسسون: {foundersSummary.foundersProportionalPct.toFixed(1)}%
+                  </span>
+                  <span className="text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                    الشركاء: {foundersSummary.partnersProportionalPct.toFixed(1)}%
+                  </span>
                 </div>
               </div>
-            )}
 
-            {/* Partner Cards Grid */}
-            {visibleShareholders.length === 0 ? (
-              <div className="py-16 text-center text-slate-400">
-                <Users size={40} className="mx-auto mb-2 text-slate-300" />
-                <p className="text-sm font-bold text-slate-600">لا يوجد مساهمون مطابقون للبحث</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
-                {visibleShareholders.map((shareholder: any, index: number) => {
-                  const propShare =
-                    chartData.find((c) => c.id === shareholder.id)?.proportionalShare ??
-                    shareholder.sharePercentage ??
-                    0;
-                  const weightPct = (((shareholder.capitalWeightRatio ?? shareholder.shareRatio) || 0) * 100).toFixed(1);
-                  const originalCap =
-                    shareholder.originalCapital !== undefined ? shareholder.originalCapital : shareholder.capital;
-                  return (
-                    <div
-                      key={shareholder.id}
-                      className="bg-white rounded-xl p-4 border border-slate-200 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between"
+              <div className="lg:col-span-8 min-w-0 w-full h-28 flex items-center justify-center overflow-hidden">
+                <TypedResponsiveContainer width="100%" height={110}>
+                  <TypedPieChart margin={{ top: 0, right: 10, bottom: 0, left: 10 }}>
+                    <TypedPie
+                      data={chartData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={24}
+                      outerRadius={42}
+                      paddingAngle={3}
+                      dataKey="proportionalShare"
+                      nameKey="name"
                     >
-                      <div>
-                        {/* Card Header */}
-                        <div className="flex justify-between items-start gap-2 mb-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
+                      {chartData.map((_: any, index: number) => (
+                        <TypedCell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </TypedPie>
+                    <TypedTooltip
+                      formatter={(value: number, _name: string, entry: any) => [
+                        `${Number(value).toFixed(1)}% (رأس المال: ${formatCurrency(entry.payload.capital)})`,
+                        'الحصة',
+                      ]}
+                    />
+                    <TypedLegend
+                      layout="horizontal"
+                      align="center"
+                      verticalAlign="bottom"
+                      formatter={(value: string) => {
+                        const item = chartData.find((c) => c.name === value);
+                        return `${value} (${item?.proportionalShare ?? 0}%)`;
+                      }}
+                      wrapperStyle={{ fontSize: '11px', paddingTop: '2px' }}
+                    />
+                  </TypedPieChart>
+                </TypedResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* Main Partners View: Table or Clean Cards */}
+          {visibleShareholders.length === 0 ? (
+            <div className="py-16 text-center text-slate-400">
+              <Users size={40} className="mx-auto mb-2 text-slate-300" />
+              <p className="text-sm font-bold text-slate-600">لا يوجد مساهمون مطابقون للبحث</p>
+            </div>
+          ) : overviewDisplayMode === 'table' ? (
+            /* High-Density Executive Financial Table */
+            <div className="flex-1 min-h-0 overflow-auto desktop-table-scroll">
+              <table className="w-full text-right border-collapse text-xs min-w-[760px]">
+                <thead className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs border-b border-slate-200 text-xs font-black text-slate-700 shadow-2xs">
+                  <tr>
+                    <th className="py-2.5 px-3 w-10 text-center">#</th>
+                    <th className="py-2.5 px-4 text-right">الشريك / المؤسس</th>
+                    <th className="py-2.5 px-3 text-center">الحصة</th>
+                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">رأس المال</th>
+                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">الأرباح المكتسبة</th>
+                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">المسحوبات</th>
+                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">الأرباح المتاحة للصرف</th>
+                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">إجمالي رصيد الشريك</th>
+                    <th className="py-2.5 px-3 text-center w-36 whitespace-nowrap">إجراءات سريعة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {visibleShareholders.map((shareholder: any, index: number) => {
+                    const propShare =
+                      chartData.find((c) => c.id === shareholder.id)?.proportionalShare ??
+                      shareholder.sharePercentage ??
+                      0;
+                    return (
+                      <tr key={shareholder.id} className="transition-colors hover:bg-slate-50/80">
+                        <td className="py-2.5 px-3 text-center font-bold text-slate-400">{index + 1}</td>
+                        <td className="py-2.5 px-4">
+                          <div className="flex items-center gap-2">
                             <div
-                              className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-sm shrink-0 shadow-2xs"
+                              className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-2xs"
                               style={{ backgroundColor: COLORS[index % COLORS.length] }}
                             >
                               {shareholder.name.charAt(0)}
                             </div>
-                            <div className="min-w-0">
+                            <div>
                               <div className="flex items-center gap-1.5">
-                                <h4 className="font-black text-slate-900 text-sm truncate">{shareholder.name}</h4>
-                                {shareholder.isFounder ? (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-700 border border-purple-200 shrink-0">
-                                    مؤسس
-                                  </span>
-                                ) : (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                                    شريك
-                                  </span>
-                                )}
+                                <span className="font-bold text-slate-900 text-xs">{shareholder.name}</span>
+                                <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                  shareholder.isFounder
+                                    ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                }`}>
+                                  {shareholder.isFounder ? 'مؤسس' : 'شريك'}
+                                </span>
                               </div>
-                              <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500 font-semibold">
-                                <span>الحصة من الشركة: <strong className="text-indigo-700 font-extrabold">{propShare}%</strong></span>
-                                <span>•</span>
-                                <span>نسبة توزيع الأرباح: {shareholder.sharePercentage}%</span>
-                                <span>•</span>
-                                <span>الوزن الرأسمالي: {weightPct}%</span>
+                              <div className="text-[10px] text-slate-400 font-medium">
+                                انضم: {formatDateDisplay(shareholder.joinedDate || shareholder.createdAt)}
                               </div>
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-1 shrink-0">
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-black text-xs">
+                            {propShare}%
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3.5 font-bold text-slate-800 whitespace-nowrap">
+                          {formatCurrency(shareholder.capital)}
+                        </td>
+                        <td className="py-2.5 px-3.5 font-bold text-blue-700 whitespace-nowrap">
+                          +{formatCurrency(shareholder.netEntitlement)}
+                        </td>
+                        <td className={`py-2.5 px-3.5 font-bold whitespace-nowrap ${Number(shareholder.totalWithdrawnProfits) > 0 ? 'text-amber-700' : 'text-slate-500'}`}>
+                          {formatWithdrawal(shareholder.totalWithdrawnProfits)}
+                        </td>
+                        <td className="py-2.5 px-3.5 font-black text-emerald-700 bg-emerald-50/40 whitespace-nowrap">
+                          +{formatCurrency(shareholder.availableProfit)}
+                        </td>
+                        <td className="py-2.5 px-3.5 font-black text-blue-900 bg-blue-50/40 whitespace-nowrap">
+                          {formatCurrency(shareholder.totalNetValue)}
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
+                              className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white text-[11px] font-bold border border-emerald-200 transition-colors"
+                              title="صرف أرباح للشريك"
+                            >
+                              صرف أرباح
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openTxModal(shareholder.id, 'capital_deposit')}
+                              className="p-1.5 rounded bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-700 border border-slate-200 transition-colors"
+                              title="زيادة رأس مال"
+                            >
+                              <ArrowDownToLine size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setInspectingPartnerId(shareholder.id)}
+                              className="p-1.5 rounded bg-slate-50 hover:bg-slate-200 text-slate-600 transition-colors"
+                              title="كشف حساب تفصيلي"
+                            >
+                              <FileText size={13} />
+                            </button>
                             <button
                               type="button"
                               onClick={() => {
@@ -1017,135 +1107,185 @@ export default function Shareholders() {
                                 });
                                 setShowShareholderModal(true);
                               }}
-                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                              className="p-1 text-slate-400 hover:text-blue-600 transition-colors"
                               title="تعديل بيانات الشريك"
                             >
-                              <Edit size={14} />
+                              <Edit size={13} />
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDeleteShareholder(shareholder.id, shareholder.name)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                              className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
                               title="حذف الشريك"
                             >
-                              <Trash2 size={14} />
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="sticky bottom-0 bg-slate-50/95 backdrop-blur-xs border-t-2 border-slate-300 font-black text-xs text-slate-800 shadow-sm">
+                  <tr>
+                    <td colSpan={2} className="py-2.5 px-4 text-slate-900">
+                      الإجمالي ({visibleShareholders.length} شريك ومؤسس)
+                    </td>
+                    <td className="py-2.5 px-3 text-center text-blue-700 font-extrabold">100%</td>
+                    <td className="py-2.5 px-3.5 text-slate-900 whitespace-nowrap">{formatCurrency(totalCapital)}</td>
+                    <td className="py-2.5 px-3.5 text-blue-700 whitespace-nowrap">+{formatCurrency(visibleShareholders.reduce((sum: number, s: any) => sum + (s.netEntitlement || 0), 0))}</td>
+                    <td className={`py-2.5 px-3.5 whitespace-nowrap ${visibleShareholders.reduce((sum: number, s: any) => sum + (s.totalWithdrawnProfits || 0), 0) > 0 ? 'text-amber-700 font-bold' : 'text-slate-500'}`}>
+                      {formatWithdrawal(visibleShareholders.reduce((sum: number, s: any) => sum + (s.totalWithdrawnProfits || 0), 0))}
+                    </td>
+                    <td className="py-2.5 px-3.5 text-emerald-700 text-sm whitespace-nowrap">+{formatCurrency(totalAvailableProfits)}</td>
+                    <td className="py-2.5 px-3.5 text-blue-900 text-sm whitespace-nowrap">{formatCurrency(visibleShareholders.reduce((sum: number, s: any) => sum + (s.totalNetValue || 0), 0))}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ) : (
+            /* Streamlined Modern Cards View */
+            <div className="flex-1 min-h-0 overflow-y-auto p-3.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+                {visibleShareholders.map((shareholder: any, index: number) => {
+                  const propShare =
+                    chartData.find((c) => c.id === shareholder.id)?.proportionalShare ??
+                    shareholder.sharePercentage ??
+                    0;
+                  return (
+                    <div
+                      key={shareholder.id}
+                      className="bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between"
+                    >
+                      <div>
+                        {/* Header */}
+                        <div className="flex justify-between items-start gap-2 mb-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-black text-sm shrink-0 shadow-2xs"
+                              style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                            >
+                              {shareholder.name.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <h4 className="font-black text-slate-900 text-sm truncate">{shareholder.name}</h4>
+                                <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                  shareholder.isFounder
+                                    ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                }`}>
+                                  {shareholder.isFounder ? 'مؤسس' : 'شريك'}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                انضم: {formatDateDisplay(shareholder.joinedDate || shareholder.createdAt)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 font-black text-xs">
+                              {propShare}%
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const isF = Boolean(shareholder.isFounder);
+                                setEditingShareholder(shareholder);
+                                setShareholderForm({
+                                  name: shareholder.name,
+                                  phone: shareholder.phone,
+                                  isFounder: isF,
+                                  sharePercentage: isF ? 100 : (shareholder.sharePercentage || 50),
+                                  managementFeePercentage: isF ? 0 : (shareholder.managementFeePercentage ?? 50),
+                                  capital: shareholder.capital,
+                                  joinedDate: toIsoDay(shareholder.joinedDate || shareholder.createdAt),
+                                  notes: shareholder.notes || '',
+                                });
+                                setShowShareholderModal(true);
+                              }}
+                              className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
+                              title="تعديل بيانات الشريك"
+                            >
+                              <Edit size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteShareholder(shareholder.id, shareholder.name)}
+                              className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
+                              title="حذف الشريك"
+                            >
+                              <Trash2 size={13} />
                             </button>
                           </div>
                         </div>
 
-                        {/* Partner Entry Date & Management Fee Strip */}
-                        <div className="mb-2.5 px-2.5 py-1.5 rounded-lg bg-slate-100/80 border border-slate-200/70 flex items-center justify-between text-[11px]">
-                          <span className="text-slate-600 font-semibold flex items-center gap-1">
-                            <Calendar size={12} className="text-indigo-600" />
-                            تاريخ الانضمام: <strong className="text-slate-900">{formatDateDisplay(shareholder.joinedDate || shareholder.createdAt)}</strong>
-                          </span>
-                          <span className="text-[10px] font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-slate-200">
-                            الحصة النسبية: {propShare}%
-                          </span>
+                        {/* 3 Clear Metric Pillars */}
+                        <div className="grid grid-cols-3 gap-2 p-2 bg-slate-50/80 rounded-xl border border-slate-200/70 mb-2.5 text-center">
+                          <div className="bg-white p-2 rounded-lg border border-slate-200/60 shadow-2xs">
+                            <span className="text-[10px] font-bold text-slate-500 block leading-tight">رأس المال</span>
+                            <span className="text-xs font-black text-slate-800 block mt-1">{formatCurrency(shareholder.capital)}</span>
+                          </div>
+                          <div className="bg-emerald-50/70 p-2 rounded-lg border border-emerald-200/60 shadow-2xs">
+                            <span className="text-[10px] font-bold text-emerald-700 block leading-tight">الأرباح المتاحة</span>
+                            <span className="text-xs font-black text-emerald-800 block mt-1">+{formatCurrency(shareholder.availableProfit)}</span>
+                          </div>
+                          <div className="bg-indigo-50/70 p-2 rounded-lg border border-indigo-200/60 shadow-2xs">
+                            <span className="text-[10px] font-bold text-indigo-700 block leading-tight">إجمالي الرصيد</span>
+                            <span className="text-xs font-black text-indigo-900 block mt-1">{formatCurrency(shareholder.totalNetValue)}</span>
+                          </div>
                         </div>
 
-                        {/* Partner Account Metrics (Strictly Partner-Centric & Protective of Capital) */}
-                        <div className="space-y-1.5 mb-2.5 bg-slate-50/80 p-3 rounded-xl border border-slate-200/80 text-xs">
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-500 font-semibold">رأس المال التأسيسي (الأصلي):</span>
-                            <span className="font-bold text-slate-700">{formatCurrency(originalCap)}</span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-800 font-bold flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 shrink-0" />
-                              رأس المال العامل الحالي:
-                            </span>
-                            <span className="font-black text-indigo-950 text-sm">{formatCurrency(shareholder.capital)}</span>
-                          </div>
-
-                          <div className="border-t border-slate-200/70 my-1 pt-1 flex justify-between items-center">
-                            <span className="text-slate-600 font-semibold">صافي حصة الأرباح المكتسبة:</span>
-                            <span className="font-bold text-indigo-700">+{formatCurrency(shareholder.netEntitlement)}</span>
-                          </div>
-
-                          <div className="flex justify-between items-center">
-                            <span className="text-amber-800 font-medium flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                              مسحوبات الأرباح (خصم أرباح):
-                            </span>
-                            <span className="font-bold text-amber-700">
-                              -{formatCurrency(shareholder.totalWithdrawnProfits || 0)}
-                            </span>
-                          </div>
-
-                          <div className="border-t border-slate-200 pt-1.5 mt-1 flex justify-between items-center bg-emerald-50/80 -mx-3 px-3 py-1.5 rounded-md">
-                            <span className="text-emerald-900 font-black flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
-                              الأرباح المتاحة للسحب الآن:
-                            </span>
-                            <span className="font-black text-emerald-700 text-sm">
-                              +{formatCurrency(shareholder.availableProfit)}
-                            </span>
-                          </div>
-
-                          <div className="flex justify-between items-center bg-indigo-50/90 border border-indigo-100 -mx-3 -mb-3 mt-1.5 px-3 py-2 rounded-b-xl">
-                            <span className="text-indigo-950 font-black text-xs">إجمالي رصيد الشريك المركب:</span>
-                            <span className="font-black text-indigo-800 text-sm">
-                              {formatCurrency(shareholder.totalNetValue)}
-                            </span>
-                          </div>
+                        {/* Compact Secondary Line */}
+                        <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-100/70 border border-slate-200/60 text-slate-600 mb-2.5 font-semibold">
+                          <span>أرباح مكتسبة: <strong className="text-blue-700">+{formatCurrency(shareholder.netEntitlement)}</strong></span>
+                          <span>•</span>
+                          <span>مسحوبات سابقة: <strong className={Number(shareholder.totalWithdrawnProfits) > 0 ? 'text-amber-700' : 'text-slate-600'}>{formatWithdrawal(shareholder.totalWithdrawnProfits)}</strong></span>
                         </div>
                       </div>
 
-                      {/* Standardized 4-Action Bottom Section */}
-                      <div className="pt-2.5 border-t border-slate-100 space-y-1.5 mt-auto">
-                        <div className="grid grid-cols-3 gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => openTxModal(shareholder.id, 'capital_deposit')}
-                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white rounded-lg text-[11px] font-bold transition-all border border-indigo-200/80 active:scale-95"
-                            title="إيداع وزيادة في رأس المال العامل للشريك"
-                          >
-                            <ArrowDownToLine size={12} />
-                            <span>زيادة رأسمال</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
-                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white rounded-lg text-[11px] font-bold transition-all border border-emerald-200/80 active:scale-95"
-                            title="سحب من رصيد الأرباح المتاحة دون المساس برأس المال"
-                          >
-                            <DollarSign size={12} />
-                            <span>سحب أرباح</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openTxModal(shareholder.id, 'capital_withdrawal')}
-                            className="flex items-center justify-center gap-1 py-1.5 px-1.5 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white rounded-lg text-[11px] font-bold transition-all border border-rose-200/80 active:scale-95"
-                            title="سحب وتخفيض من رأس المال العامل الأساسي"
-                          >
-                            <ArrowUpFromLine size={12} />
-                            <span>سحب رأسمال</span>
-                          </button>
-                        </div>
-
+                      {/* Clean Action Buttons */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 mt-auto">
+                        <button
+                          type="button"
+                          onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
+                          className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 active:scale-95"
+                        >
+                          <DollarSign size={13} />
+                          <span>صرف أرباح</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openTxModal(shareholder.id, 'capital_deposit')}
+                          className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200 flex items-center justify-center gap-1 active:scale-95"
+                          title="إيداع وزيادة رأس المال"
+                        >
+                          <ArrowDownToLine size={13} />
+                          <span>إيداع</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => setInspectingPartnerId(shareholder.id)}
-                          className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-indigo-700 rounded-lg text-xs font-bold transition-all border border-slate-200 active:scale-95"
-                          title="فتح كشف الحساب التفصيلي للشريك"
+                          className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200 flex items-center justify-center gap-1 active:scale-95"
+                          title="كشف الحساب التفصيلي للشريك"
                         >
-                          <FileText size={13} className="text-indigo-600" />
-                          <span>كشف الحساب المالي التفصيلي</span>
+                          <FileText size={13} />
                         </button>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Pinned Bottom Status Bar */}
           <div className="erp-status-bar shrink-0 py-1.5 px-3 text-[11px] min-h-9">
             <div className="flex items-center gap-4 flex-wrap">
               <span>
-                عدد الشركاء والمؤسسين: <strong className="text-indigo-700 font-extrabold">{visibleShareholders.length}</strong>
+                عدد الشركاء والمؤسسين: <strong className="text-blue-700 font-extrabold">{visibleShareholders.length}</strong>
               </span>
               <span>
                 إجمالي رأس المال الفعلي: <strong className="text-slate-900 font-extrabold">{formatCurrency(totalCapital)}</strong>
@@ -1163,12 +1303,12 @@ export default function Shareholders() {
         /* TAB 2: Comprehensive Shareholder Ledger & Transaction History */
         <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
           {/* Sub-toolbar for Ledger filtering */}
-          <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-2.5 shrink-0">
+          <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
             {/* Side-by-side filter controls container */}
             <div className="flex-1 max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
               {/* Filter 1: تصفية الشريك والمؤسس */}
               <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-                <Users size={14} className="text-indigo-600 shrink-0" />
+                <Users size={14} className="text-blue-600 shrink-0" />
                 <label className="text-xs font-bold text-slate-600 shrink-0 whitespace-nowrap">
                   تصفية الشريك:
                 </label>
@@ -1188,7 +1328,7 @@ export default function Shareholders() {
 
               {/* Filter 2: أنواع الحركات */}
               <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-                <Filter size={14} className="text-indigo-600 shrink-0" />
+                <Filter size={14} className="text-blue-600 shrink-0" />
                 <label className="text-xs font-bold text-slate-600 shrink-0 whitespace-nowrap">
                   أنواع الحركات:
                 </label>
@@ -1361,14 +1501,14 @@ export default function Shareholders() {
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
               <div className="min-w-0">
                 <div className="flex items-center gap-2.5 flex-wrap">
-                  <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shrink-0 shadow-2xs">
+                  <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold shrink-0 shadow-2xs">
                     <FileText size={16} />
                   </div>
                   <h3 className="text-base md:text-lg font-black text-slate-900 truncate">
                     كشف الحساب الشامل للشريك: {inspectingPartner.name}
                   </h3>
                   {inspectingPartner.isFounder ? (
-                    <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-purple-100 text-purple-700 border border-purple-200">
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-blue-50 text-blue-700 border border-blue-200">
                       شريك مؤسس
                     </span>
                   ) : (
@@ -1378,7 +1518,7 @@ export default function Shareholders() {
                   )}
                 </div>
                 <p className="text-xs text-slate-500 mt-1 flex items-center gap-3">
-                  <span>حصة الملكية: <strong className="text-indigo-700 font-bold">{inspectingPartner.sharePercentage}%</strong></span>
+                  <span>حصة الملكية: <strong className="text-blue-700 font-bold">{inspectingPartner.sharePercentage}%</strong></span>
                   <span>•</span>
                   <span>تاريخ الانضمام: <strong className="text-slate-800 font-bold">{formatDateDisplay(inspectingPartner.joinedDate || inspectingPartner.createdAt)}</strong></span>
                 </p>
@@ -1425,7 +1565,7 @@ export default function Shareholders() {
                 <div className="min-w-0">
                   <span className="text-[11px] font-bold text-amber-800 block mb-0.5 truncate">مسحوبات الأرباح</span>
                   <span className="text-base md:text-lg font-black text-amber-700 tabular-nums block leading-tight truncate">
-                    -{formatCurrency(inspectingPartner.totalWithdrawnProfits || 0)}
+                    {formatWithdrawal(inspectingPartner.totalWithdrawnProfits)}
                   </span>
                 </div>
                 <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center shrink-0">
@@ -1551,7 +1691,7 @@ export default function Shareholders() {
                 <button
                   type="button"
                   onClick={() => openTxModal(inspectingPartner.id, 'capital_deposit')}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95"
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95"
                 >
                   <ArrowDownToLine size={13} />
                   <span>+ إيداع رأس مال</span>
@@ -1768,7 +1908,7 @@ export default function Shareholders() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs font-bold"
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-bold"
                 >
                   {editingShareholder ? 'حفظ التعديلات' : 'إضافة الشريك'}
                 </button>
@@ -1909,7 +2049,7 @@ export default function Shareholders() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs font-bold"
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-bold"
                 >
                   تأكيد وتنفيذ الحركة
                 </button>

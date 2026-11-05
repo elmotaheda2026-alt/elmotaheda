@@ -23,7 +23,7 @@ export default function Layout() {
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} onToggle={toggleSidebar} />
       </div>
 
-      <div className={`h-screen flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-64 xl:mr-72' : 'lg:mr-16'} print:m-0 overflow-hidden`}>
+      <div className={`h-screen flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-60' : 'lg:mr-16'} print:m-0 overflow-hidden`}>
         <div className="print:hidden shrink-0 z-30">
           <Header onMenuClick={toggleSidebar} />
         </div>

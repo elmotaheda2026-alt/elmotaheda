@@ -92,10 +92,12 @@ export function DatePicker({ value, onChange, placeholder = 'يوم/شهر/سن�
 
   // Extract vertical padding passed (like py-2) to apply to the input, default to py-1.5
   const pyClass = className?.match(/\b(py-[0-9.]+)\b/)?.[1] || 'py-1.5';
+  const fontSizeClass = className?.includes('text-xs') ? 'text-xs' : 'text-sm';
+  const fontWeightClass = className?.includes('font-bold') ? 'font-bold' : 'font-medium';
 
   return (
     <div
-      className={`relative flex items-center rounded-lg border bg-white text-right text-sm transition ${cleanClassName || 'w-full border-slate-200 focus-within:border-indigo-500'}`}
+      className={`relative flex items-center rounded-lg border bg-white text-right transition ${cleanClassName || 'w-full border-slate-200 focus-within:border-indigo-500'}`}
     >
       <input
         type="text"
@@ -104,9 +106,9 @@ export function DatePicker({ value, onChange, placeholder = 'يوم/شهر/سن�
         onChange={handleChange}
         onBlur={handleBlur}
         placeholder={placeholder}
-        className={`h-full w-full rounded-[inherit] border-0 bg-transparent pl-9 pr-3 ${pyClass} text-right text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400`}
+        className={`h-full w-full rounded-[inherit] border-0 bg-transparent pl-7 pr-2.5 ${pyClass} text-right ${fontSizeClass} ${fontWeightClass} font-mono text-slate-900 outline-none placeholder:text-slate-400`}
       />
-      <CalendarIcon size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <CalendarIcon size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
     </div>
   );
 }

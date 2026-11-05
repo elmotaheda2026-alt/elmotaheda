@@ -5,7 +5,7 @@ import {
   Plus,
   Save,
   ShoppingCart,
-  Sparkles,
+  Info,
   Trash2,
   Search,
   Printer,
@@ -13,6 +13,7 @@ import {
   Edit3,
   CalendarCheck,
   ArrowRight,
+  Loader2,
 } from 'lucide-react';
 import { Customer, Product, PurchaseItem, SaleItem, Supplier, SalesRep, Sale } from '../types';
 import {
@@ -127,6 +128,7 @@ export default function Invoices() {
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [selectedSalesRepId, setSelectedSalesRepId] = useState('');
   const [procurementSupplierId, setProcurementSupplierId] = useState('');
+  const [autoProcureEnabled, setAutoProcureEnabled] = useState(true);
   const [quickProduct, setQuickProduct] = useState<QuickProductForm>({
     name: '',
     purchasePrice: 0,
@@ -205,6 +207,14 @@ export default function Invoices() {
     }
   }, [procurementSupplierId, suppliers, showSupplierSuggestions]);
 
+  // Auto-select single supplier if available
+  useEffect(() => {
+    if (suppliers.length === 1 && !procurementSupplierId) {
+      setProcurementSupplierId(suppliers[0].id);
+      setSupplierSearchTerm(suppliers[0].name);
+    }
+  }, [suppliers, procurementSupplierId]);
+
   // Autocomplete for Quick Product Supplier (On-demand)
   const [quickSupplierSearchTerm, setQuickSupplierSearchTerm] = useState('');
   const [showQuickSupplierSuggestions, setShowQuickSupplierSuggestions] = useState(false);
@@ -239,6 +249,7 @@ export default function Invoices() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
   const [modalSearchLoading, setModalSearchLoading] = useState(false);
+  const [modalContracts, setModalContracts] = useState<Sale[]>([]);
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
   const [deferModalSale, setDeferModalSale] = useState<Sale | null>(null);
   const [deferInstallmentId, setDeferInstallmentId] = useState('');
@@ -260,24 +271,31 @@ export default function Invoices() {
     return refreshedSales;
   };
 
-  const searchContracts = async (query: string) => {
+  const searchContracts = async (query: string, cancelledRef: { current: boolean }) => {
+    const q = query.trim();
     if (isApiMode()) {
-      const results = await api.searchSales({ search: query.trim() || undefined, limit: 10, includeItems: true });
-      setSales(sortSalesNewestFirst(results));
+      const results = await api.searchSales({ search: q || undefined, limit: 15, includeItems: true });
+      if (!cancelledRef.current) {
+        setModalContracts(sortSalesNewestFirst(results));
+      }
       return;
     }
 
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = q.toLowerCase();
     const localResults = sortSalesNewestFirst(getSales()).filter(
       (sale) =>
         !normalizedQuery ||
         sale.invoiceNumber.toLowerCase().includes(normalizedQuery) ||
         sale.customerName.toLowerCase().includes(normalizedQuery),
     );
-    setSales(localResults.slice(0, 10));
+    if (!cancelledRef.current) {
+      setModalContracts(localResults.slice(0, 15));
+    }
   };
 
   const openContractsSearch = () => {
+    const initialList = sales.length > 0 ? sales.slice(0, 15) : sortSalesNewestFirst(getSales()).slice(0, 15);
+    setModalContracts(initialList);
     setModalSearchQuery('');
     setShowSearchModal(true);
   };
@@ -285,25 +303,32 @@ export default function Invoices() {
   useEffect(() => {
     if (!showSearchModal) return;
 
-    let cancelled = false;
+    const cancelledRef = { current: false };
+    const query = modalSearchQuery.trim();
+
+    // If modal is opened with empty query and we already have contracts loaded, don't show loading flicker
+    if (!query && modalContracts.length > 0) {
+      return;
+    }
+
     const timer = window.setTimeout(async () => {
       setModalSearchLoading(true);
       try {
-        await searchContracts(modalSearchQuery);
+        await searchContracts(query, cancelledRef);
       } catch (err: any) {
-        if (!cancelled) {
+        if (!cancelledRef.current) {
           setMessage({
             type: 'error',
             text: err.message || 'حدث خطأ أثناء تحميل سجل التعاقدات.',
           });
         }
       } finally {
-        if (!cancelled) setModalSearchLoading(false);
+        if (!cancelledRef.current) setModalSearchLoading(false);
       }
     }, 250);
 
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
       window.clearTimeout(timer);
     };
   }, [showSearchModal, modalSearchQuery]);
@@ -328,7 +353,7 @@ export default function Invoices() {
     setInvoiceNotes(sale.notes || '');
 
     setDraftItems(
-      sale.items.map((item) => ({
+      (sale.items || []).map((item) => ({
         productId: item.productId,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
@@ -353,6 +378,7 @@ export default function Invoices() {
     try {
       await deleteSale(sale.id, user?.name || 'system');
       setSales((current) => current.filter((entry) => entry.id !== sale.id));
+      setModalContracts((current) => current.filter((entry) => entry.id !== sale.id));
       setMessage({
         type: 'success',
         text: `تم حذف التعاقد رقم ${sale.invoiceNumber} وكل الحسابات المرتبطة به بنجاح.`,
@@ -574,8 +600,6 @@ export default function Invoices() {
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
-  const filteredModalContracts = useMemo(() => sales.slice(0, 10), [sales]);
-
   const editingSale = useMemo(() => {
     if (!editingSaleId) return null;
     return sales.find((s) => s.id === editingSaleId) || null;
@@ -779,8 +803,8 @@ export default function Invoices() {
       return;
     }
 
-    if (procurementRows.length > 0 && !selectedProcurementSupplier) {
-      setMessage({ type: 'error', text: 'اختر المورد ليتم إنشاء شراء تلقائي للأصناف غير المتوفرة.' });
+    if (autoProcureEnabled && procurementRows.length > 0 && !selectedProcurementSupplier) {
+      setMessage({ type: 'error', text: 'اختر المورد لإنشاء شراء تلقائي للأصناف غير المتوفرة، أو قم بإلغاء تفعيل الشراء التلقائي لحفظ الفاتورة مباشرة.' });
       return;
     }
 
@@ -812,7 +836,7 @@ export default function Invoices() {
         },
       });
 
-      if (procurementRows.length > 0 && selectedProcurementSupplier) {
+      if (autoProcureEnabled && procurementRows.length > 0 && selectedProcurementSupplier) {
         const purchaseItems: PurchaseItem[] = procurementRows.map((item) => {
           const unitPrice = item.product?.purchasePrice || 0;
           const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
@@ -934,10 +958,10 @@ export default function Invoices() {
                 <button
                   type="button"
                   onClick={openContractsSearch}
-                  className="inline-flex items-center gap-2 px-3 py-2 bg-sky-50 border border-sky-200 hover:bg-sky-100 text-sky-700 font-bold rounded-lg text-sm transition-all shadow-sm active:scale-95"
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 font-bold rounded-lg text-sm transition-all shadow-2xs active:scale-95 cursor-pointer"
                 >
                   <Search size={16} />
-                  البحث في سجل التعاقدات
+                  <span>البحث في سجل التعاقدات</span>
                 </button>
               </div>
             </div>
@@ -1210,7 +1234,7 @@ export default function Invoices() {
                         productSelectRef.current?.focus();
                       }
                     }}
-                    className="inline-flex h-10 items-center gap-2 rounded-lg bg-sky-600 px-4 font-bold text-white hover:bg-sky-700"
+                    className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 font-bold text-white hover:bg-blue-700 transition-colors shadow-2xs"
                   >
                     <Plus size={18} />
                     إضافة
@@ -1222,18 +1246,18 @@ export default function Invoices() {
                 <button
                   type="button"
                   onClick={() => setShowQuickProduct((current) => !current)}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100"
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
                 >
-                  <Sparkles size={16} />
-                  {showQuickProduct ? 'إخفاء صنف حسب الطلب' : 'إضافة صنف حسب الطلب'}
+                  <Plus size={15} className="text-blue-600" />
+                  <span>{showQuickProduct ? 'إخفاء صنف حسب الطلب' : 'إضافة صنف حسب الطلب'}</span>
                 </button>
-                <span className="text-sm text-slate-500">
+                <span className="text-xs text-slate-500 font-medium">
                   إذا الصنف غير موجود، أنشئه هنا وسيتم اعتباره حسب الطلب تلقائيًا.
                 </span>
               </div>
 
               {showQuickProduct && (
-                <div className="mt-4 rounded-[24px] border border-dashed border-sky-300 bg-white p-4">
+                <div className="mt-4 rounded-xl border border-dashed border-blue-300 bg-blue-50/20 p-4">
                   <div className="mb-4">
                     <h4 className="font-bold text-slate-800">إدخال صنف حسب الطلب</h4>
                     <p className="mt-1 text-sm text-slate-500">
@@ -1265,38 +1289,23 @@ export default function Invoices() {
                     </Field>
                     {/* sale price removed for on_demand quick products */}
                     <Field label="المورد المتوقع">
-                      <div className="relative w-full">
-                        <input
-                          value={quickSupplierSearchTerm}
-                          onChange={(e) => {
-                            setQuickSupplierSearchTerm(e.target.value);
-                            setShowQuickSupplierSuggestions(true);
-                            setQuickProduct((current) => ({ ...current, supplierId: '' }));
-                          }}
-                          onFocus={() => setShowQuickSupplierSuggestions(true)}
-                          onBlur={() => setTimeout(() => setShowQuickSupplierSuggestions(false), 200)}
-                          className="input-ui w-full"
-                          placeholder="اكتب اسم المورد للبحث..."
-                        />
-                        {showQuickSupplierSuggestions && quickSupplierSuggestions.length > 0 && (
-                          <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-slate-100">
-                            {quickSupplierSuggestions.map((s) => (
-                              <button
-                                key={s.id}
-                                type="button"
-                                onClick={() => {
-                                  setQuickProduct((current) => ({ ...current, supplierId: s.id }));
-                                  setQuickSupplierSearchTerm(s.name);
-                                  setShowQuickSupplierSuggestions(false);
-                                }}
-                                className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
-                              >
-                                <span>{s.name}</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                      <select
+                        value={quickProduct.supplierId}
+                        onChange={(e) => {
+                          const sid = e.target.value;
+                          setQuickProduct((current) => ({ ...current, supplierId: sid }));
+                          const s = suppliers.find((entry) => entry.id === sid);
+                          setQuickSupplierSearchTerm(s ? s.name : '');
+                        }}
+                        className="input-ui"
+                      >
+                        <option value="">-- اختر المورد --</option>
+                        {suppliers.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} {s.phone ? `(${s.phone})` : ''}
+                          </option>
+                        ))}
+                      </select>
                     </Field>
                   </div>
 
@@ -1482,80 +1491,83 @@ export default function Invoices() {
           )}
 
           {procurementRows.length > 0 && (
-            <Panel title="3. شراء تلقائي من نفس الشاشة" icon={<ShoppingCart size={18} className="text-amber-600" />}>
-              <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
-                <div className="space-y-4">
-                  <Field label="المورد الذي سيُنشأ له الشراء">
-                    <div className="relative w-full">
-                      <input
-                        value={supplierSearchTerm}
+            <Panel
+              title="3. شراء تلقائي من نفس الشاشة (للأصناف غير المتوفرة بالمخزن)"
+              icon={<ShoppingCart size={18} className="text-amber-600" />}
+              action={
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoProcureEnabled}
+                    onChange={(e) => setAutoProcureEnabled(e.target.checked)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span>تفعيل إنشاء فاتورة شراء تلقائية للمورد</span>
+                </label>
+              }
+            >
+              {autoProcureEnabled ? (
+                <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+                  <div className="space-y-4">
+                    <Field label="المورد الذي سيُنشأ له الشراء">
+                      <select
+                        value={procurementSupplierId}
                         onChange={(e) => {
-                          setSupplierSearchTerm(e.target.value);
-                          setShowSupplierSuggestions(true);
-                          if (e.target.value.trim() === '') {
-                            setProcurementSupplierId('');
-                          }
+                          const sid = e.target.value;
+                          setProcurementSupplierId(sid);
+                          const found = suppliers.find((s) => s.id === sid);
+                          setSupplierSearchTerm(found ? found.name : '');
                         }}
-                        onFocus={() => setShowSupplierSuggestions(true)}
-                        onBlur={() => setTimeout(() => setShowSupplierSuggestions(false), 200)}
-                        className="input-ui w-full"
-                        placeholder="اكتب اسم المورد للبحث..."
-                      />
-                      {showSupplierSuggestions && supplierSuggestions.length > 0 && (
-                        <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-slate-100">
-                          {supplierSuggestions.map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              onClick={() => {
-                                setProcurementSupplierId(s.id);
-                                setSupplierSearchTerm(s.name);
-                                setShowSupplierSuggestions(false);
-                              }}
-                              className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
-                            >
-                              <span>{s.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </Field>
-
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    سيتم تجهيز شراء تلقائي للأصناف غير المتوفرة عند حفظ الفاتورة، ثم تُخصم الكمية مباشرة من الشراء إلى البيع.
-                  </div>
-                </div>
-
-                <div className="overflow-hidden rounded-[24px] border border-slate-200">
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[620px]">
-                      <thead className="bg-slate-50 text-slate-700">
-                        <tr>
-                          <th className="px-4 py-3 text-right">الصنف</th>
-                          <th className="px-4 py-3 text-right">الكمية المطلوب شراؤها</th>
-                          <th className="px-4 py-3 text-right">سعر الشراء</th>
-                          <th className="px-4 py-3 text-right">الإجمالي التقريبي</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {procurementRows.map((item) => (
-                          <tr key={`procurement-${item.productId}`}>
-                            <td className="px-4 py-3 font-semibold text-slate-800">{item.productName}</td>
-                            <td className="px-4 py-3 text-slate-700">{item.shortageQuantity}</td>
-                            <td className="px-4 py-3 text-slate-700">
-                              {formatCurrency(item.product?.purchasePrice || 0)}
-                            </td>
-                            <td className="px-4 py-3 font-bold text-amber-700">
-                              {formatCurrency(item.shortageQuantity * (item.product?.purchasePrice || 0))}
-                            </td>
-                          </tr>
+                        className="input-ui font-bold text-slate-800"
+                      >
+                        <option value="">-- اختر المورد من القائمة --</option>
+                        {suppliers.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} {s.phone ? `(${s.phone})` : ''}
+                          </option>
                         ))}
-                      </tbody>
-                    </table>
+                      </select>
+                    </Field>
+
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800 leading-relaxed">
+                      💡 تم تفعيل هذا القسم لأن الصنف المطلوب رصيده 0 في المخزن. عند الحفظ، سيقوم النظام تلقائياً بإنشاء فاتورة شراء من المورد وإدخال الصنف ثم بيعه للعميل.
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-[24px] border border-slate-200">
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[620px]">
+                        <thead className="bg-slate-50 text-slate-700">
+                          <tr>
+                            <th className="px-4 py-3 text-right">الصنف</th>
+                            <th className="px-4 py-3 text-right">الكمية المطلوب شراؤها</th>
+                            <th className="px-4 py-3 text-right">سعر الشراء</th>
+                            <th className="px-4 py-3 text-right">الإجمالي التقريبي</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {procurementRows.map((item) => (
+                            <tr key={`procurement-${item.productId}`}>
+                              <td className="px-4 py-3 font-semibold text-slate-800">{item.productName}</td>
+                              <td className="px-4 py-3 font-bold text-amber-700">{item.shortageQuantity}</td>
+                              <td className="px-4 py-3 text-slate-700">
+                                {formatCurrency(item.product?.purchasePrice || 0)}
+                              </td>
+                              <td className="px-4 py-3 font-bold text-amber-700">
+                                {formatCurrency(item.shortageQuantity * (item.product?.purchasePrice || 0))}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600 leading-relaxed font-medium">
+                  تم إلغاء الشراء التلقائي. سيتم بيع الأصناف للعميل مباشرة دون قيد فاتورة شراء جديدة على حساب مورد.
+                </div>
+              )}
             </Panel>
           )}
         </div>
@@ -1665,7 +1677,7 @@ export default function Invoices() {
             </Panel>
           )}
 
-          <Panel title="ماذا سيحدث عند الحفظ؟" icon={<Sparkles size={18} className="text-slate-700" />}>
+          <Panel title="ماذا سيحدث عند الحفظ؟" icon={<Info size={18} className="text-blue-600" />}>
             <div className="space-y-3 text-sm leading-6 text-slate-600">
               <p>1. يتم حفظ الفاتورة للعميل مباشرة.</p>
               <p>2. إذا كان هناك صنف غير متوفر، يتم إنشاء شراء تلقائي من نفس الشاشة.</p>
@@ -1677,98 +1689,112 @@ export default function Invoices() {
       </div>
       </div>
 
-      {/* NEW: Gorgeous Advanced Floating Search Overlay Modal */}
+      {/* High-Performance Contracts Search Modal */}
       {showSearchModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="w-full max-w-3xl rounded-[28px] bg-white shadow-2xl border border-slate-100 overflow-hidden transform transition-all duration-300 scale-100 flex flex-col max-h-[90vh]">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
+          onClick={() => setShowSearchModal(false)}
+        >
+          <div
+            className="w-full max-w-3xl h-[85vh] max-h-[680px] rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
-            <div className="bg-gradient-to-r from-sky-600 to-sky-700 p-6 text-white flex items-center justify-between shrink-0">
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 px-5 py-3.5 text-white flex items-center justify-between shrink-0">
               <div>
-                <h3 className="text-xl font-bold flex items-center gap-2 text-right">
-                  <Search size={22} />
-                  البحث الذكي في سجل التعاقدات
+                <h3 className="text-base font-bold flex items-center gap-2 text-right">
+                  <Search size={18} />
+                  <span>البحث في سجل التعاقدات</span>
                 </h3>
-                <p className="text-xs text-sky-100 mt-1 text-right">اكتب اسم العميل أو رقم العقد، ثم اختر الإجراء (تعديل أو طباعة).</p>
+                <p className="text-[11px] text-blue-100 mt-0.5 text-right">
+                  اكتب اسم العميل أو رقم العقد للبحث الفوري، ثم اختر الإجراء المطلوب (تعديل أو طباعة أو ترحيل قسط).
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowSearchModal(false)}
-                className="text-white/80 hover:text-white text-3xl font-light p-1 leading-none transition-colors outline-none"
+                className="text-white/80 hover:text-white text-2xl font-light p-1 leading-none transition-colors outline-none cursor-pointer"
+                title="إغلاق النافذة"
               >
                 &times;
               </button>
             </div>
 
             {/* Modal Content */}
-            <div className="p-6 overflow-y-auto flex-1">
+            <div className="p-4 overflow-y-auto flex-1 min-h-0 flex flex-col">
               {/* Big Search Input */}
-              <div className="relative mb-6">
-                <Search className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+              <div className="relative mb-3 shrink-0">
+                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={18} />
                 <input
                   type="text"
                   autoFocus
                   value={modalSearchQuery}
                   onChange={(e) => setModalSearchQuery(e.target.value)}
                   placeholder="اكتب اسم العميل المشتري أو رقم العقد للبحث الفوري..."
-                  className="w-full rounded-2xl border-2 border-sky-100 focus:border-sky-500 bg-slate-50 px-4 py-3.5 pr-12 text-base font-semibold outline-none transition-all shadow-inner"
+                  className="w-full rounded-xl border border-slate-200 focus:border-blue-500 bg-slate-50 focus:bg-white px-4 py-2.5 pr-10 pl-10 text-sm font-semibold outline-none transition-colors shadow-2xs"
                 />
+                {modalSearchLoading && (
+                  <Loader2 size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-600 animate-spin pointer-events-none" />
+                )}
               </div>
 
               {/* List of Results */}
-              <div className="space-y-3">
-                {modalSearchLoading ? (
-                  <div className="py-12 text-center text-slate-400 font-bold">
-                    جاري تحميل سجل التعاقدات...
+              <div className={`space-y-2.5 flex-1 min-h-0 overflow-y-auto pr-0.5 transition-opacity duration-150 ${modalSearchLoading && modalContracts.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
+                {modalSearchLoading && modalContracts.length === 0 ? (
+                  <div className="py-16 text-center text-slate-400 font-bold flex flex-col items-center justify-center gap-2">
+                    <Loader2 size={28} className="animate-spin text-blue-600" />
+                    <span className="text-xs">جاري تحميل سجل التعاقدات...</span>
                   </div>
-                ) : filteredModalContracts.length === 0 ? (
-                  <div className="py-12 text-center text-slate-400 font-bold">
+                ) : modalContracts.length === 0 ? (
+                  <div className="py-16 text-center text-slate-400 font-bold text-xs">
                     لا توجد تعاقدات سابقة مسجلة أو مطابقة لبحثك الحالي.
                   </div>
                 ) : (
-                  filteredModalContracts.map((sale) => (
+                  modalContracts.map((sale) => (
                     <div
                       key={sale.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl border border-slate-100 hover:border-sky-200 hover:bg-sky-50/30 transition-all shadow-sm bg-white"
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200/90 hover:border-blue-300 hover:bg-blue-50/20 transition-colors shadow-2xs bg-white"
                     >
-                      <div className="space-y-1 text-right">
+                      <div className="space-y-1 text-right min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono font-black text-sky-600">{sale.invoiceNumber}</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
+                          <span className="font-mono font-black text-blue-700 text-xs sm:text-sm">{sale.invoiceNumber}</span>
+                          <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-bold">
                             {formatDateDisplay(sale.date)}
                           </span>
-                          <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700' : 'bg-emerald-50 text-emerald-700'
+                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700 border border-violet-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
                             }`}>
                             {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
                           </span>
                         </div>
-                        <p className="font-bold text-slate-800 text-base">{sale.customerName}</p>
-                        <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
-                          <span>الإجمالي: <b className="text-emerald-700">{formatCurrency(sale.total)}</b></span>
-                          <span>المتبقي: <b className="text-red-600">{formatCurrency(sale.remaining)}</b></span>
+                        <p className="font-bold text-slate-900 text-sm truncate">{sale.customerName}</p>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                          <span>الإجمالي: <b className="text-emerald-700 font-bold">{formatCurrency(sale.total)}</b></span>
+                          <span>•</span>
+                          <span>المتبقي: <b className="text-rose-600 font-bold">{formatCurrency(sale.remaining)}</b></span>
                         </div>
                       </div>
 
                       {/* Actions */}
-                      <div className="flex items-center gap-2 shrink-0 justify-end sm:justify-start">
+                      <div className="flex items-center gap-1.5 shrink-0 justify-end sm:justify-start flex-wrap">
                         <button
                           type="button"
                           onClick={() => {
                             handleLoadForEdit(sale);
                             setShowSearchModal(false);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                         >
-                          <Edit3 size={13} />
-                          تعديل البيانات
+                          <Edit3 size={12} className="text-amber-600" />
+                          <span>تعديل البيانات</span>
                         </button>
                         {canDelete && (
                           <button
                             type="button"
                             onClick={() => handleDeleteContract(sale)}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <Trash2 size={13} />
-                            حذف التعاقد
+                            <Trash2 size={12} className="text-rose-600" />
+                            <span>حذف التعاقد</span>
                           </button>
                         )}
                         {canDelete && sale.financing?.paymentMethod === 'installment' && (sale.financing?.schedules?.length ?? 0) > 0 && (
@@ -1784,10 +1810,10 @@ export default function Invoices() {
                               setDeferMessage(null);
                               setShowSearchModal(false);
                             }}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <CalendarCheck size={13} />
-                            ترحيل قسط
+                            <CalendarCheck size={12} className="text-indigo-600" />
+                            <span>ترحيل قسط</span>
                           </button>
                         )}
                         <button
@@ -1796,10 +1822,10 @@ export default function Invoices() {
                             setSavedSaleForPrinting(sale);
                             setShowSearchModal(false);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                         >
-                          <Printer size={13} />
-                          طباعة المستندات
+                          <Printer size={12} />
+                          <span>طباعة المستندات</span>
                         </button>
                       </div>
                     </div>
@@ -1809,11 +1835,11 @@ export default function Invoices() {
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end shrink-0">
+            <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 flex justify-end shrink-0">
               <button
                 type="button"
                 onClick={() => setShowSearchModal(false)}
-                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-sm transition-colors"
+                className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
               >
                 إغلاق
               </button>
@@ -2072,16 +2098,21 @@ function Panel({
   title,
   children,
   icon,
+  action,
 }: {
   title: string;
   children: React.ReactNode;
   icon?: React.ReactNode;
+  action?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition-all focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-200 focus-within:shadow-md">
-      <div className="mb-3 flex items-center gap-2">
-        {icon}
-        <h3 className="text-sm font-bold text-slate-800">{title}</h3>
+    <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-200">
+      <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          {icon}
+          <h3 className="text-sm font-bold text-slate-800">{title}</h3>
+        </div>
+        {action}
       </div>
       {children}
     </section>

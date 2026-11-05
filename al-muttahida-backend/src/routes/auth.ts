@@ -33,7 +33,16 @@ const legacyPermissionMap: Record<string, Permission[]> = {
 function parseApiPermissions(value?: string | null): Permission[] | undefined {
   if (!value) return undefined;
   try {
-    const permissions = JSON.parse(value) as Record<string, boolean>;
+    let raw: any = value;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch {}
+      if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch {}
+      }
+    }
+    if (!raw || typeof raw !== 'object') return undefined;
+
+    const permissions = raw as Record<string, boolean>;
     const parsedPermissions = new Set<Permission>();
     apiPermissions.forEach((permission) => {
       if (permissions[permission]) parsedPermissions.add(permission);
@@ -43,7 +52,7 @@ function parseApiPermissions(value?: string | null): Permission[] | undefined {
         mappedPermissions.forEach((permission) => parsedPermissions.add(permission));
       }
     });
-    return [...parsedPermissions];
+    return parsedPermissions.size > 0 ? [...parsedPermissions] : undefined;
   } catch {
     return undefined;
   }
@@ -52,7 +61,14 @@ function parseApiPermissions(value?: string | null): Permission[] | undefined {
 function parseStoredPermissions(value?: string | null): Record<string, boolean> | undefined {
   if (!value) return undefined;
   try {
-    return JSON.parse(value) as Record<string, boolean>;
+    let raw: any = value;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch {}
+      if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch {}
+      }
+    }
+    return raw && typeof raw === 'object' ? raw : undefined;
   } catch {
     return undefined;
   }

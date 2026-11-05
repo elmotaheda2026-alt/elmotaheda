@@ -349,8 +349,8 @@ export default function Accounts() {
                 formula="إجمالي أرصدة العملاء المتبقية"
                 value={formatCurrency(receivables)}
                 icon={Users}
-                iconTone="bg-sky-50 text-sky-600 border-sky-100"
-                valueColor="text-sky-700"
+                iconTone="bg-blue-50 text-blue-600 border-blue-100"
+                valueColor="text-blue-700"
                 onClick={() => navigate('/customers')}
               />
               <KPICard
@@ -367,7 +367,7 @@ export default function Accounts() {
                 formula="النقدية + مستحقات العملاء − مستحقات الموردين"
                 value={formatCurrency(netFinancialPosition)}
                 icon={Scale}
-                iconTone="bg-indigo-50 text-indigo-600 border-indigo-100"
+                iconTone="bg-blue-50 text-blue-600 border-blue-100"
                 valueColor={netFinancialPosition >= 0 ? 'text-emerald-600' : 'text-rose-600'}
               />
             </div>
@@ -390,8 +390,8 @@ export default function Accounts() {
                 formula="مجموع الفواتير المصدرة خلال الفترة"
                 value={formatCurrency(sales)}
                 icon={ShoppingBag}
-                iconTone="bg-indigo-50 text-indigo-600 border-indigo-100"
-                valueColor="text-indigo-700"
+                iconTone="bg-blue-50 text-blue-600 border-blue-100"
+                valueColor="text-blue-700"
                 onClick={() => navigate('/sales')}
               />
               <KPICard
@@ -433,11 +433,11 @@ export default function Accounts() {
                 <span className="w-36 shrink-0 text-xs font-bold text-slate-500">إجمالي المبيعات</span>
                 <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
                   <div
-                    className="absolute inset-y-0 right-0 rounded-lg bg-indigo-500/20 transition-all duration-500"
+                    className="absolute inset-y-0 right-0 rounded-lg bg-blue-500/20 transition-all duration-500"
                     style={{ width: `${salesPct}%` }}
                   />
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3">
-                    <span className="text-xs font-black tabular-nums text-indigo-700">
+                    <span className="text-xs font-black tabular-nums text-blue-700">
                       {formatCurrency(sales)}
                     </span>
                   </div>

@@ -324,7 +324,7 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
     createdAt: row.created_at,
     items,
     financing: {
-      paymentMethod: row.payment_method || 'cash',
+      paymentMethod: row.payment_method || (row.installment_months && row.installment_months > 1 ? 'installment' : 'cash'),
       manualInvoiceRef: row.manual_invoice_ref,
       salesRepId: row.sales_rep_id,
       salesRepName: row.sales_rep_name,

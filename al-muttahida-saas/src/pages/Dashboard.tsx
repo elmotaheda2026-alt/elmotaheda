@@ -98,22 +98,18 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 pb-6 animate-fadeIn">
-      {/* 1. Hero Header Banner (Premium Look without heavy dark shadows) */}
-      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 p-6 sm:p-8 text-white border border-slate-800 shadow-none">
-        {/* Subtle decorative background light */}
-        <div className="absolute -left-10 -top-10 h-48 w-48 rounded-full bg-blue-500/10 blur-2xl pointer-events-none" />
-        <div className="absolute right-1/3 bottom-0 h-40 w-40 rounded-full bg-indigo-500/10 blur-xl pointer-events-none" />
-
+      {/* 1. Executive Modern Header Card */}
+      <section className="relative overflow-hidden rounded-2xl bg-white p-6 sm:p-7 border border-slate-200/90 shadow-2xs">
         <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-2 max-w-2xl">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-1 text-xs font-semibold text-blue-200 backdrop-blur-xs border border-white/10">
-              <Calendar size={14} />
+          <div className="space-y-2.5 max-w-2xl">
+            <div className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 border border-slate-200">
+              <Calendar size={14} className="text-slate-500" />
               <span>{formatDateDisplay(todayStr)}</span>
             </div>
-            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-white">
+            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-slate-900">
               {settings.companyName || 'شركة المتحدة'} لإدارة المبيعات والحسابات
             </h1>
-            <p className="text-sm font-medium text-slate-300 leading-relaxed">
+            <p className="text-sm font-medium text-slate-500 leading-relaxed">
               مرحباً بك، {user?.name || roleLabel} 👋 — بيئة عمل مخصصة لإدارة العمليات والمبيعات اليومية بسرعة وسهولة.
             </p>
           </div>
@@ -122,7 +118,7 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => navigate('/invoices')}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white transition-all hover:bg-blue-500 active:scale-98 border border-blue-500/30"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white transition-all hover:bg-blue-700 active:scale-98 shadow-sm shadow-blue-500/20 cursor-pointer"
             >
               <Plus size={18} />
               <span>إصدار فاتورة جديدة</span>

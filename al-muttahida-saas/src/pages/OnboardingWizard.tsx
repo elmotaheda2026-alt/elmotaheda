@@ -60,7 +60,7 @@ export default function OnboardingWizard() {
       <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-2xl w-full p-6 md:p-10 shadow-2xl space-y-8">
         {/* Header */}
         <div className="text-center space-y-3">
-          <div className="w-16 h-16 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+          <div className="w-16 h-16 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
             <ShieldCheck size={36} />
           </div>
           <h1 className="text-2xl md:text-3xl font-extrabold text-white">
@@ -184,7 +184,7 @@ export default function OnboardingWizard() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-600/30 transition-all text-base disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-600/30 transition-all text-base disabled:opacity-50 cursor-pointer"
           >
             <CheckCircle2 size={20} />
             <span>{submitting ? 'جاري حفظ تهيئة النظام...' : 'إتمام التهيئة وبدء استخدام النظام'}</span>
