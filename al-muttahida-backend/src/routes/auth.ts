@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import rateLimit from 'express-rate-limit';
 import { dbPromise } from '../db.js';
 import { Permission } from '../types.js';
 import { comparePassword, hashPassword, signToken, uid } from '../utils.js';
@@ -123,7 +124,15 @@ router.post('/seed-admin', async (req, res) => {
   );
   return res.status(201).json({ message: 'Admin created', username: 'admin' });
 });
-router.post('/login', async (req, res) => {
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // 20 attempts per 15 minutes per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'تم تجاوز عدد محاولات الدخول المسموح بها، يرجى المحاولة بعد 15 دقيقة.' },
+});
+
+router.post('/login', loginLimiter, async (req, res) => {
   const schema = z.object({ username: z.string().min(3), password: z.string().min(6) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });

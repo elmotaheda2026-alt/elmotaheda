@@ -57,35 +57,37 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
   try {
     const db = await dbPromise;
-    await db.run(
-      `INSERT INTO expenses (
-        id, category, description, amount, date, receipt, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      data.category,
-      data.description,
-      data.amount,
-      data.date,
-      data.receipt || null,
-      req.user?.name || 'system',
-      now,
-    );
+    await db.withTransaction(async (tx) => {
+      await tx.run(
+        `INSERT INTO expenses (
+          id, category, description, amount, date, receipt, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        data.category,
+        data.description,
+        data.amount,
+        data.date,
+        data.receipt || null,
+        req.user?.name || 'system',
+        now,
+      );
 
-    // Automatically record corresponding cash-out treasury payment
-    await db.run(
-      `INSERT INTO payments (
-        id, type, amount, description, date, receipt_number, status, channel,
-        reference_id, reference_type, created_by, created_at, affects_customer_balance
-      ) VALUES (?, 'out', ?, ?, ?, ?, 'posted', 'cash', ?, 'expense', ?, ?, 0)`,
-      uid(),
-      data.amount,
-      `سند صرف: ${data.category} - ${data.description}`,
-      data.date,
-      `EXP-${id.slice(-6).toUpperCase()}`,
-      id,
-      req.user?.name || 'system',
-      now,
-    );
+      // Automatically record corresponding cash-out treasury payment
+      await tx.run(
+        `INSERT INTO payments (
+          id, type, amount, description, date, receipt_number, status, channel,
+          reference_id, reference_type, created_by, created_at, affects_customer_balance
+        ) VALUES (?, 'out', ?, ?, ?, ?, 'posted', 'cash', ?, 'expense', ?, ?, 0)`,
+        uid(),
+        data.amount,
+        `سند صرف: ${data.category} - ${data.description}`,
+        data.date,
+        `EXP-${id.slice(-6).toUpperCase()}`,
+        id,
+        req.user?.name || 'system',
+        now,
+      );
+    });
 
     await audit('expense.create', 'expense', id, req.user?.name || 'system', data);
     await createSystemNotification(
@@ -121,27 +123,29 @@ router.put('/:id', requirePermission('payments:write'), async (req: AuthedReques
       return res.status(404).json({ message: 'Expense not found' });
     }
 
-    await db.run(
-      `UPDATE expenses
-       SET category = ?, description = ?, amount = ?, date = ?, receipt = ?
-       WHERE id = ?`,
-      data.category,
-      data.description,
-      data.amount,
-      data.date,
-      data.receipt || null,
-      req.params.id,
-    );
+    await db.withTransaction(async (tx) => {
+      await tx.run(
+        `UPDATE expenses
+         SET category = ?, description = ?, amount = ?, date = ?, receipt = ?
+         WHERE id = ?`,
+        data.category,
+        data.description,
+        data.amount,
+        data.date,
+        data.receipt || null,
+        req.params.id,
+      );
 
-    await db.run(
-      `UPDATE payments
-       SET amount = ?, date = ?, description = ?
-       WHERE reference_type = 'expense' AND reference_id = ?`,
-      data.amount,
-      data.date,
-      `سند صرف: ${data.category} - ${data.description}`,
-      req.params.id,
-    );
+      await tx.run(
+        `UPDATE payments
+         SET amount = ?, date = ?, description = ?
+         WHERE reference_type = 'expense' AND reference_id = ?`,
+        data.amount,
+        data.date,
+        `سند صرف: ${data.category} - ${data.description}`,
+        req.params.id,
+      );
+    });
 
     await audit('expense.update', 'expense', req.params.id, req.user?.name || 'system', data);
     return res.json({ message: 'Expense updated successfully' });
@@ -159,8 +163,10 @@ router.delete('/:id', requirePermission('payments:write'), requireAdmin, async (
       return res.status(404).json({ message: 'Expense not found' });
     }
 
-    await db.run('DELETE FROM expenses WHERE id = ?', req.params.id);
-    await db.run("DELETE FROM payments WHERE reference_type = 'expense' AND reference_id = ?", req.params.id);
+    await db.withTransaction(async (tx) => {
+      await tx.run('DELETE FROM expenses WHERE id = ?', req.params.id);
+      await tx.run("DELETE FROM payments WHERE reference_type = 'expense' AND reference_id = ?", req.params.id);
+    });
     await audit('expense.delete', 'expense', req.params.id, req.user?.name || 'system', { id: req.params.id });
     return res.json({ message: 'Expense deleted successfully' });
   } catch (error: any) {

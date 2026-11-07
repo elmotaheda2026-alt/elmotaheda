@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission } from '../middleware/auth.js';
 
 const router = Router();
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requirePermission('reports:read'));
 
 const dayMs = 86400000;
 
@@ -291,7 +291,7 @@ router.get('/dashboard/metrics-cached', async (_req, res) => {
 });
 
 // POST /reports/dashboard/refresh-cache — Force refresh the dashboard cache
-router.post('/dashboard/refresh-cache', async (_req, res) => {
+router.post('/dashboard/refresh-cache', requireAdmin, async (_req, res) => {
   try {
     const db = await dbPromise;
     await db.run('EXEC sp_refresh_dashboard_metrics');

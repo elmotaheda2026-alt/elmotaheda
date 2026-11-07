@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { Calendar, CalendarCheck, CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps, toggleCustomerSued } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -39,6 +39,7 @@ interface DueCustomerRow {
   installmentLabel: string;
   dueDate: string;
   installmentAmount: number;
+  paidAmount?: number;
   remainingAmount: number;
   status: InstallmentSchedule['status'];
   paidAt?: string;
@@ -113,6 +114,9 @@ export default function CollectionStatement() {
   const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [printingInvoice, setPrintingInvoice] = useState<CollectionInvoiceView | null>(null);
   const [printingLegalReport, setPrintingLegalReport] = useState(false);
+  // Status & Date Basis filters: 'unpaid' | 'paid' | 'all'
+  const [dueStatusFilter, setDueStatusFilter] = useState<'unpaid' | 'paid' | 'all'>('unpaid');
+  const [dueDateBasis, setDueDateBasis] = useState<'actual_payment' | 'due_date'>('actual_payment');
   // Collapsible cards & pagination states for "due" tab
   const [expandedCustomerSaleId, setExpandedCustomerSaleId] = useState<string | null>(null);
   const [dueCurrentPage, setDueCurrentPage] = useState(1);
@@ -139,6 +143,8 @@ export default function CollectionStatement() {
           hideSued: hideSuedCustomers,
           includeOverdue: includeOverdue,
           strictDate: !includeOverdue,
+          statusFilter: dueStatusFilter,
+          dateBasis: dueStatusFilter === 'paid' ? dueDateBasis : 'due_date',
         });
         if (!isCancelled) {
           setApiDues(data);
@@ -160,7 +166,7 @@ export default function CollectionStatement() {
     return () => {
       isCancelled = true;
     };
-  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue]);
+  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis]);
 
   useEffect(() => {
     const calculatePageSize = () => {
@@ -448,18 +454,31 @@ export default function CollectionStatement() {
 
     rows.forEach((row) => {
       if (hideSuedCustomers && row.isSued) return;
-      if (row.remaining <= 0.01) return;
+      if (dueStatusFilter === 'unpaid' && row.remaining <= 0.01) return;
 
       row.schedules.forEach((schedule) => {
-        if (schedule.status === 'paid') return;
+        const isPaid = schedule.status === 'paid' || (schedule.paidAmount >= schedule.amount);
+        if (dueStatusFilter === 'unpaid' && isPaid) return;
+        if (dueStatusFilter === 'paid' && !isPaid) return;
+
         const remaining = Math.max(schedule.amount - schedule.paidAmount, 0);
-        if (remaining <= 0.01) return;
+        if (dueStatusFilter === 'unpaid' && remaining <= 0.01) return;
 
         const normalizedDueDate = toISODateOnly(schedule.dueDate);
-        if (includeOverdue) {
-          if (normalizedDueDate && dueToDate && normalizedDueDate > dueToDate) return;
+        const normalizedPaidDate = schedule.paidAt ? toISODateOnly(schedule.paidAt) : null;
+
+        if (dueStatusFilter === 'unpaid') {
+          if (includeOverdue) {
+            if (normalizedDueDate && dueToDate && normalizedDueDate > dueToDate) return;
+          } else {
+            if (!normalizedDueDate || (dueFromDate && normalizedDueDate < dueFromDate) || (dueToDate && normalizedDueDate > dueToDate)) return;
+          }
+        } else if (dueStatusFilter === 'paid') {
+          const dateToCheck = dueDateBasis === 'actual_payment' ? (normalizedPaidDate || normalizedDueDate) : normalizedDueDate;
+          if (!dateToCheck || (dueFromDate && dateToCheck < dueFromDate) || (dueToDate && dateToCheck > dueToDate)) return;
         } else {
-          if (!normalizedDueDate || (dueFromDate && normalizedDueDate < dueFromDate) || (dueToDate && normalizedDueDate > dueToDate)) return;
+          const dateToCheck = dueDateBasis === 'actual_payment' && isPaid ? (normalizedPaidDate || normalizedDueDate) : normalizedDueDate;
+          if (!dateToCheck || (dueFromDate && dateToCheck < dueFromDate) || (dueToDate && dateToCheck > dueToDate)) return;
         }
 
         result.push({
@@ -472,7 +491,8 @@ export default function CollectionStatement() {
           installmentLabel: schedule.label,
           dueDate: toISODateOnly(schedule.dueDate),
           installmentAmount: schedule.amount,
-          remainingAmount: Math.max(schedule.amount - schedule.paidAmount, 0),
+          paidAmount: schedule.paidAmount,
+          remainingAmount: remaining,
           status: schedule.status,
           paidAt: schedule.paidAt,
           lastPaymentDate: row.lastPaymentDate,
@@ -502,7 +522,7 @@ export default function CollectionStatement() {
     }
 
     return finalResult;
-  }, [apiDues, dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap, hideSuedCustomers, includeOverdue]);
+  }, [apiDues, dueFromDate, dueToDate, dueSearchTerm, rows, selectedSalesRepId, customerMap, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis]);
 
   const groupedDueRows = useMemo(() => {
     const groupsMap = new Map<string, DueCustomerRow[]>();
@@ -559,7 +579,26 @@ export default function CollectionStatement() {
     0,
   );
 
-  const dueTotalInPeriod = dueRows.reduce((sum, row) => sum + row.remainingAmount, 0);
+  const { totalInstallmentsAmount, totalPaidAmount, totalRemainingAmount, collectionRate } = useMemo(() => {
+    let instTotal = 0;
+    let paidTotal = 0;
+    let remTotal = 0;
+    dueRows.forEach((r) => {
+      instTotal += r.installmentAmount || 0;
+      const paid = r.status === 'paid' ? r.installmentAmount : (r.paidAmount || Math.max(0, (r.installmentAmount || 0) - (r.remainingAmount || 0)));
+      paidTotal += paid;
+      remTotal += r.remainingAmount || 0;
+    });
+    const rate = instTotal > 0 ? Math.round((paidTotal / instTotal) * 100) : 0;
+    return {
+      totalInstallmentsAmount: instTotal,
+      totalPaidAmount: paidTotal,
+      totalRemainingAmount: remTotal,
+      collectionRate: rate,
+    };
+  }, [dueRows]);
+
+  const dueTotalInPeriod = dueStatusFilter === 'paid' ? totalPaidAmount : totalRemainingAmount;
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -580,11 +619,6 @@ export default function CollectionStatement() {
     <>
       <style>{`
       @media print {
-        @page {
-          size: A4 portrait;
-          margin: 10mm 12mm;
-        }
-
         /* Completely hide dashboard UI components, navigation, buttons, cards in print mode */
         .desktop-view-container,
         .desktop-table-card,
@@ -613,8 +647,9 @@ export default function CollectionStatement() {
           margin: 0 !important;
         }
 
-        /* Isolate the printable statement template */
-        .invoice-page {
+        /* Isolate the printable statement templates */
+        .invoice-page,
+        .due-print-page {
           display: block !important;
           visibility: visible !important;
           width: 100% !important;
@@ -624,7 +659,8 @@ export default function CollectionStatement() {
           background: white !important;
         }
 
-        .invoice-page * {
+        .invoice-page *,
+        .due-print-page * {
           visibility: visible !important;
         }
 
@@ -701,75 +737,205 @@ export default function CollectionStatement() {
 
           {/* Render filters inside this card based on activeTab */}
           {activeTab === 'due' && (
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              {/* Centered/Prominent Search Bar */}
-              <div className="relative flex-1 max-w-md min-w-[240px]">
-                <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={dueSearchTerm}
-                  onChange={(e) => setDueSearchTerm(e.target.value)}
-                  className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400 shadow-sm"
-                  placeholder="بحث باسم العميل أو رقم الفاتورة..."
-                />
+            <div className="space-y-3 pt-1">
+              {/* Row 1: Primary Scope (Status Capsule) & Search Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                {/* Right: Main Status Segmented Capsule */}
+                <div className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-slate-100/90 p-0.5 text-xs font-bold shadow-2xs shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDueStatusFilter('unpaid');
+                      setDueCurrentPage(1);
+                      setExpandedCustomerSaleId(null);
+                      setIncludeOverdue(false);
+                    }}
+                    className={`h-full px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                      dueStatusFilter === 'unpaid'
+                        ? 'bg-white text-rose-700 shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${dueStatusFilter === 'unpaid' ? 'bg-rose-500 ring-2 ring-rose-200' : 'bg-slate-300'}`} />
+                    <span>غير محصل</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDueStatusFilter('paid');
+                      setDueCurrentPage(1);
+                      setExpandedCustomerSaleId(null);
+                      setIncludeOverdue(false);
+                    }}
+                    className={`h-full px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                      dueStatusFilter === 'paid'
+                        ? 'bg-white text-emerald-700 shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${dueStatusFilter === 'paid' ? 'bg-emerald-500 ring-2 ring-emerald-200' : 'bg-slate-300'}`} />
+                    <span>تم تحصيله</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDueStatusFilter('all');
+                      setDueDateBasis('due_date');
+                      setDueCurrentPage(1);
+                      setExpandedCustomerSaleId(null);
+                      setIncludeOverdue(false);
+                    }}
+                    className={`h-full px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                      dueStatusFilter === 'all'
+                        ? 'bg-white text-sky-700 shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${dueStatusFilter === 'all' ? 'bg-sky-500 ring-2 ring-sky-200' : 'bg-slate-300'}`} />
+                    <span>الكل</span>
+                  </button>
+                </div>
+
+                {/* Left: Wide, Elegant Search Input */}
+                <div className="relative flex-1 max-w-md min-w-[260px]">
+                  <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    value={dueSearchTerm}
+                    onChange={(e) => { setDueSearchTerm(e.target.value); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
+                    className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white focus:bg-white px-3 pr-10 pl-8 text-xs font-medium outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400 shadow-2xs"
+                    placeholder="بحث سريع باسم العميل، الهاتف، أو رقم الفاتورة..."
+                  />
+                  {dueSearchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => { setDueSearchTerm(''); setDueCurrentPage(1); }}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm font-bold w-4 h-4 flex items-center justify-center rounded-full hover:bg-slate-200"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* Filters group */}
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-1">
-                  <span className="text-[11px] text-slate-400 font-bold ml-1">الفترة من:</span>
-                  <DatePicker value={dueFromDate} onChange={setDueFromDate} className="h-9 w-[130px] rounded-xl border-slate-200 text-xs font-bold" />
-                  <span className="text-[11px] text-slate-400 font-bold mx-1">إلى:</span>
-                  <DatePicker value={dueToDate} onChange={setDueToDate} className="h-9 w-[130px] rounded-xl border-slate-200 text-xs font-bold" />
+              {/* Row 2: Secondary Refinements (Date Range, Date Logic, Sales Rep, Toggles, Print) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+                {/* Right: Date Range + Attached Date Basis (only in Paid tab) + Sales Rep */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Date Range Group (Height h-9 unified) */}
+                  <div className="flex h-9 items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 text-xs shadow-2xs">
+                    <Calendar size={14} className="text-slate-400 shrink-0" />
+                    <span className="text-[11px] text-slate-400 font-bold">الفترة:</span>
+                    <DatePicker value={dueFromDate} onChange={(d) => { setDueFromDate(d); setDueCurrentPage(1); }} className="h-7 w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
+                    <span className="text-[11px] text-slate-300 font-bold px-0.5">←</span>
+                    <DatePicker value={dueToDate} onChange={(d) => { setDueToDate(d); setDueCurrentPage(1); }} className="h-7 w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
+                  </div>
+
+                  {/* Date Basis Switcher: Only shown in 'paid' page as requested */}
+                  {dueStatusFilter === 'paid' && (
+                    <div className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-xs font-bold shadow-2xs animate-in fade-in duration-200">
+                      <button
+                        type="button"
+                        onClick={() => { setDueDateBasis('actual_payment'); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
+                        className={`h-full px-2.5 rounded-lg transition-all text-[11px] flex items-center gap-1.5 ${
+                          dueDateBasis === 'actual_payment'
+                            ? 'bg-white text-emerald-700 shadow-2xs font-black'
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                        title="فلترة بحسب تاريخ السداد والتحصيل الفعلي بالخزينة"
+                      >
+                        <CheckCircle2 size={12} className={dueDateBasis === 'actual_payment' ? 'text-emerald-600' : 'text-slate-400'} />
+                        <span>السداد الفعلي</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setDueDateBasis('due_date'); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
+                        className={`h-full px-2.5 rounded-lg transition-all text-[11px] flex items-center gap-1.5 ${
+                          dueDateBasis === 'due_date'
+                            ? 'bg-white text-sky-700 shadow-2xs font-black'
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                        title="فلترة بحسب موعد استحقاق القسط الشهري"
+                      >
+                        <Clock3 size={12} className={dueDateBasis === 'due_date' ? 'text-sky-600' : 'text-slate-400'} />
+                        <span>تاريخ الاستحقاق</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Sales Rep Selector: Clean, professional, NO emoji */}
+                  <select
+                    value={selectedSalesRepId}
+                    onChange={(e) => { setSelectedSalesRepId(e.target.value); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
+                    className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-700 font-bold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[120px] shadow-2xs cursor-pointer"
+                  >
+                    <option value="all">كل المناديب</option>
+                    {salesReps.map((rep) => (
+                      <option key={rep.id} value={rep.id}>
+                        {rep.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <select
-                  value={selectedSalesRepId}
-                  onChange={(e) => setSelectedSalesRepId(e.target.value)}
-                  className="h-9 rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-700 font-bold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[110px] shadow-sm"
-                >
-                  <option value="all">كل المناديب</option>
-                  {salesReps.map((rep) => (
-                    <option key={rep.id} value={rep.id}>
-                      {rep.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => setHideSuedCustomers(!hideSuedCustomers)}
-                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
-                    hideSuedCustomers
-                      ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100/70'
-                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
-                  }`}
-                >
-                  <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
-                  إخفاء القضايا
-                </button>
 
-                <button
-                  type="button"
-                  onClick={() => setIncludeOverdue(!includeOverdue)}
-                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
-                    includeOverdue
-                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100/70'
-                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
-                  }`}
-                  title="تفعيل/تعطيل إدراج كافة المتأخرات السابقة حتى نهاية الفترة المحددة"
-                >
-                  <Clock3 size={13} className={includeOverdue ? 'text-indigo-600' : 'text-slate-400'} />
-                  <span>شامل المتأخرات</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${includeOverdue ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                    {includeOverdue ? 'مفعل' : 'مغلق'}
-                  </span>
-                </button>
+                {/* Left: Action Toggles & Print Button */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Include Overdue Toggle: Non-default (default = false). Shown only in unpaid tab */}
+                  {dueStatusFilter === 'unpaid' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIncludeOverdue(!includeOverdue);
+                        setDueCurrentPage(1);
+                        setExpandedCustomerSaleId(null);
+                      }}
+                      className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all shadow-2xs cursor-pointer ${
+                        includeOverdue
+                          ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100/70 ring-1 ring-indigo-200'
+                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                      }`}
+                      title={includeOverdue ? 'إلغاء المتأخرات والاكتفاء بأقساط الشهر المحدد فقط' : 'إدراج كافة الأقساط المتأخرة غير المسددة من الأشهر السابقة'}
+                    >
+                      <Clock3 size={13} className={includeOverdue ? 'text-indigo-600' : 'text-slate-400'} />
+                      <span>شامل المتأخرات</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${includeOverdue ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {includeOverdue ? 'مفعل' : 'مغلق'}
+                      </span>
+                    </button>
+                  )}
 
-                <button
-                  onClick={() => window.print()}
-                  className="h-9 px-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 flex items-center gap-1.5 font-bold text-xs shadow-2xs transition-all whitespace-nowrap cursor-pointer"
-                >
-                  <Printer size={13} />
-                  طباعة
-                </button>
+                  {/* Hide Lawsuits Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHideSuedCustomers(!hideSuedCustomers);
+                      setDueCurrentPage(1);
+                      setExpandedCustomerSaleId(null);
+                    }}
+                    className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all shadow-2xs cursor-pointer ${
+                      hideSuedCustomers
+                        ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100/70'
+                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                    }`}
+                    title={hideSuedCustomers ? 'إلغاء إخفاء القضايا' : 'إخفاء العملاء المحالين للشئون القانونية (القضاء)'}
+                  >
+                    <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
+                    <span>إخفاء القضايا</span>
+                    {hideSuedCustomers && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    )}
+                  </button>
+
+                  {/* Print Button */}
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="h-9 px-4 bg-sky-600 text-white rounded-xl hover:bg-sky-700 flex items-center gap-1.5 font-bold text-xs shadow-2xs transition-all whitespace-nowrap cursor-pointer active:scale-95"
+                    title="طباعة كشف التحصيل الحالي"
+                  >
+                    <Printer size={13} />
+                    <span>طباعة</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -861,8 +1027,12 @@ export default function CollectionStatement() {
                     <th className="px-4 py-2.5 text-right">الهاتف</th>
                     <th className="px-4 py-2.5 text-right">المندوب</th>
                     <th className="px-4 py-2.5 text-right">العنوان</th>
-                    <th className="px-4 py-2.5 text-center">آخر سداد</th>
-                    <th className="px-4 py-2.5 text-center">القسط الشهري المستحق</th>
+                    <th className="px-4 py-2.5 text-center">
+                      {dueStatusFilter === 'paid' ? 'تاريخ التحصيل' : (dueStatusFilter === 'all' ? 'تاريخ الاستحقاق / السداد' : 'تاريخ الاستحقاق')}
+                    </th>
+                    <th className="px-4 py-2.5 text-center">
+                      {dueStatusFilter === 'paid' ? 'المبلغ المحصل' : (dueStatusFilter === 'all' ? 'القسط / المحصل' : 'القسط الشهري المستحق')}
+                    </th>
                     <th className="px-4 py-2.5 text-center w-[80px] print:hidden">التفاصيل</th>
                   </tr>
                 </thead>
@@ -890,16 +1060,24 @@ export default function CollectionStatement() {
                         <td colSpan={7} className="px-5 py-12 text-center text-slate-400 font-bold">
                           <div className="flex flex-col items-center justify-center">
                             <CheckCircle2 size={36} className="text-slate-300 mb-2" />
-                            <p className="text-sm font-bold text-slate-600 mb-1">لا توجد أقساط مستحقة للفترة المحددة</p>
-                            <p className="text-xs text-slate-400 font-normal">يمكنك تفعيل خيار &quot;شامل المتأخرات&quot; بالأعلى لعرض كافة المستحقات السابقة، أو تعديل نطاق التاريخ.</p>
+                            <p className="text-sm font-bold text-slate-600 mb-1">
+                              {dueStatusFilter === 'paid' ? 'لا توجد أقساط مسددة في هذه الفترة' : 'لا توجد أقساط مستحقة للفترة المحددة'}
+                            </p>
+                            <p className="text-xs text-slate-400 font-normal">
+                              {dueStatusFilter === 'paid' ? 'يمكنك تبديل خيار تاريخ الفلترة أو توسيع نطاق التاريخ.' : 'يمكنك تفعيل خيار "شامل المتأخرات" بالأعلى لعرض كافة المستحقات السابقة، أو تعديل نطاق التاريخ.'}
+                            </p>
                           </div>
                         </td>
                       </tr>
                     ) : (
                       paginatedGroupedDueRows.map((group) => {
                         const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+                        const totalPaidInGroup = group.reduce((sum, r) => sum + (r.status === 'paid' ? r.installmentAmount : (r.paidAmount || (r.installmentAmount - r.remainingAmount))), 0);
+                        const isAllPaid = group.every((r) => r.status === 'paid' || r.remainingAmount <= 1);
+                        const isPartial = !isAllPaid && group.some((r) => (r.paidAmount && r.paidAmount > 0) || r.status === 'paid');
                         const isExpanded = expandedCustomerSaleId === group[0].saleId;
                         const lastPayment = group[0].lastPaymentDate ? formatDateDisplay(group[0].lastPaymentDate) : '---';
+                        const actualPaidDate = group[0].paidAt || group[0].lastPaymentDate;
 
                         return (
                           <React.Fragment key={group[0].saleId}>
@@ -909,8 +1087,8 @@ export default function CollectionStatement() {
                             >
                               <td className="px-4 py-3">
                                 <div className="flex items-center gap-2.5">
-                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${group[0].isSued ? 'bg-red-50 text-red-500' : 'bg-sky-50 text-sky-500'}`}>
-                                    {group[0].isSued ? <Gavel size={14} /> : <User size={14} />}
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${group[0].isSued ? 'bg-red-50 text-red-500' : (isAllPaid ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-500')}`}>
+                                    {group[0].isSued ? <Gavel size={14} /> : (isAllPaid ? <CheckCircle2 size={15} /> : <User size={14} />)}
                                   </div>
                                   <div className="flex flex-col">
                                     <span className={`font-bold text-slate-800 text-sm ${group[0].isSued ? 'text-red-500 line-through' : ''}`}>
@@ -938,21 +1116,48 @@ export default function CollectionStatement() {
                                 </div>
                               </td>
                               <td className="px-4 py-3 text-center">
-                                {group[0].lastPaymentDate ? (
-                                  <span className="font-bold text-slate-700 text-xs bg-slate-100 px-2 py-0.5 rounded">
-                                    {formatDateDisplay(group[0].lastPaymentDate)}
+                                {isAllPaid ? (
+                                  <span className="font-bold text-emerald-800 text-xs bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-md inline-flex items-center gap-1 shadow-2xs">
+                                    <CheckCircle2 size={12} className="text-emerald-600" />
+                                    {actualPaidDate ? formatDateDisplay(actualPaidDate) : 'تم التحصيل'}
                                   </span>
                                 ) : (
-                                  <span className="text-slate-400 text-[11px] font-medium">لا يوجد سداد سابق</span>
+                                  <span className="font-bold text-slate-800 text-xs bg-slate-100/90 px-2.5 py-0.5 rounded-md border border-slate-200/70 inline-flex items-center gap-1 shadow-2xs">
+                                    <Calendar size={12} className="text-slate-500" />
+                                    {formatDateDisplay(group[0].dueDate)}
+                                  </span>
                                 )}
                               </td>
                               <td className="px-4 py-3 text-center">
                                 <div className="flex flex-col items-center">
-                                  <span className="text-red-600 text-sm font-black">{formatCurrency(totalRemaining)}</span>
-                                  {group[0].totalInvoiceRemaining !== undefined && group[0].totalInvoiceRemaining > totalRemaining && (
-                                    <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap mt-0.5">
-                                      متبقي العقد: {formatCurrency(group[0].totalInvoiceRemaining)}
-                                    </span>
+                                  {isAllPaid ? (
+                                    <>
+                                      <span className="text-emerald-700 text-sm font-black flex items-center gap-1">
+                                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-bold">تم السداد</span>
+                                        {formatCurrency(totalPaidInGroup)}
+                                      </span>
+                                      <span className="text-[10px] text-emerald-600 font-medium whitespace-nowrap mt-0.5">
+                                        مسدد بالكامل
+                                      </span>
+                                    </>
+                                  ) : isPartial ? (
+                                    <>
+                                      <span className="text-amber-700 text-sm font-black">
+                                        {formatCurrency(totalRemaining)}
+                                      </span>
+                                      <span className="text-[10px] text-amber-600 font-medium whitespace-nowrap mt-0.5">
+                                        متبقي (سُدد: {formatCurrency(totalPaidInGroup)})
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="text-red-600 text-sm font-black">{formatCurrency(totalRemaining)}</span>
+                                      {group[0].totalInvoiceRemaining !== undefined && group[0].totalInvoiceRemaining > totalRemaining && (
+                                        <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap mt-0.5">
+                                          متبقي العقد: {formatCurrency(group[0].totalInvoiceRemaining)}
+                                        </span>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               </td>
@@ -975,6 +1180,12 @@ export default function CollectionStatement() {
                                           <>
                                             <span className="w-px h-3.5 bg-slate-200"></span>
                                             <span className="font-semibold text-slate-600">إجمالي متبقي العقد: <span className="font-bold text-red-600">{formatCurrency(group[0].totalInvoiceRemaining)}</span></span>
+                                          </>
+                                        )}
+                                        {dueStatusFilter !== 'paid' && group[0].lastPaymentDate && (
+                                          <>
+                                            <span className="w-px h-3.5 bg-slate-200"></span>
+                                            <span className="font-semibold text-slate-500">آخر سداد سابق: <span className="font-bold text-slate-700">{formatDateDisplay(group[0].lastPaymentDate)}</span></span>
                                           </>
                                         )}
                                       </div>
@@ -1000,7 +1211,9 @@ export default function CollectionStatement() {
                                         <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
                                           <tr>
                                             <th className="px-3 py-2 text-right">القسط</th>
-                                            <th className="px-3 py-2 text-right">تاريخ الاستحقاق</th>
+                                            <th className="px-3 py-2 text-center">
+                                              {dueStatusFilter === 'paid' ? 'تاريخ الاستحقاق' : 'آخر سداد'}
+                                            </th>
                                             <th className="px-3 py-2 text-center">قيمة القسط</th>
                                             <th className="px-3 py-2 text-center">المتبقي</th>
                                             <th className="px-3 py-2 text-center">الحالة</th>
@@ -1009,12 +1222,28 @@ export default function CollectionStatement() {
                                         <tbody className="divide-y divide-slate-50">
                                           {group.map((row) => {
                                             const rowStatus = (row.status === 'paid' || row.remainingAmount <= 1) ? 'paid' : row.status;
+                                            const lastPayDate = row.status === 'paid' && row.paidAt ? row.paidAt : row.lastPaymentDate;
                                             return (
                                             <tr key={`${row.saleId}-${row.installmentLabel}-${row.dueDate}`} className="hover:bg-slate-50/30 transition-colors">
                                               <td className="px-3 py-2 font-semibold text-slate-800">{row.installmentLabel}</td>
-                                              <td className="px-3 py-2 text-slate-500">{toISODateOnly(row.dueDate)}</td>
+                                              <td className="px-3 py-2 text-slate-600 text-center font-medium">
+                                                {dueStatusFilter === 'paid' ? (
+                                                  <span className="font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-xs inline-flex items-center gap-1">
+                                                    <Calendar size={11} className="text-slate-500" />
+                                                    {formatDateDisplay(row.dueDate)}
+                                                  </span>
+                                                ) : lastPayDate ? (
+                                                  <span className="font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-xs">
+                                                    {formatDateDisplay(lastPayDate)}
+                                                  </span>
+                                                ) : (
+                                                  <span className="text-slate-400 text-[11px]">لا يوجد سداد سابق</span>
+                                                )}
+                                              </td>
                                               <td className="px-3 py-2 text-slate-600 text-center">{formatCurrency(row.installmentAmount)}</td>
-                                              <td className="px-3 py-2 font-bold text-red-600 text-center">{formatCurrency(row.remainingAmount <= 1 ? 0 : row.remainingAmount)}</td>
+                                              <td className={`px-3 py-2 font-bold text-center ${rowStatus === 'paid' ? 'text-emerald-700 font-black' : 'text-red-600'}`}>
+                                                {rowStatus === 'paid' ? '0 جنيه (مسدد)' : formatCurrency(row.remainingAmount <= 1 ? 0 : row.remainingAmount)}
+                                              </td>
                                               <td className="px-3 py-2 text-center">
                                                 <MonthBadge status={rowStatus} />
                                               </td>
@@ -1040,11 +1269,40 @@ export default function CollectionStatement() {
               <div className="grid grid-cols-3 items-center gap-4">
                 {/* Right: Statistics */}
                 <div className="flex items-center gap-3 text-xs font-bold text-slate-600">
-                  <span>أقساط مستحقة: <span className="text-slate-900 font-black">{dueRows.length}</span></span>
-                  <span className="w-px h-4 bg-slate-200"></span>
-                  <span>عملاء: <span className="text-slate-900 font-black">{groupedDueRows.length}</span></span>
-                  <span className="w-px h-4 bg-slate-200"></span>
-                  <span>إجمالي الأقساط: <span className="text-red-600 font-black">{formatCurrency(dueTotalInPeriod)}</span></span>
+                  {dueStatusFilter === 'unpaid' && (
+                    <>
+                      <span>أقساط مستحقة: <span className="text-slate-900 font-black">{dueRows.length}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span>عملاء: <span className="text-slate-900 font-black">{groupedDueRows.length}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span>إجمالي المستحق: <span className="text-red-600 font-black">{formatCurrency(dueTotalInPeriod)}</span></span>
+                    </>
+                  )}
+                  {dueStatusFilter === 'paid' && (
+                    <>
+                      <span>أقساط محصلة: <span className="text-slate-900 font-black">{dueRows.length}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span>عملاء: <span className="text-slate-900 font-black">{groupedDueRows.length}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span>إجمالي المحصل: <span className="text-emerald-600 font-black">{formatCurrency(totalPaidAmount)}</span></span>
+                    </>
+                  )}
+                  {dueStatusFilter === 'all' && (
+                    <>
+                      <span>الأقساط: <span className="text-slate-900 font-black">{dueRows.length}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span>محصل: <span className="text-emerald-600 font-black">{formatCurrency(totalPaidAmount)}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span>متبقي: <span className="text-red-600 font-black">{formatCurrency(totalRemainingAmount)}</span></span>
+                      <span className="w-px h-4 bg-slate-200"></span>
+                      <span className="inline-flex items-center gap-1">
+                        التحصيل:
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-black border border-emerald-200 text-[11px]">
+                          {collectionRate}%
+                        </span>
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 {/* Center: Pagination — always centered */}
@@ -1514,114 +1772,173 @@ export default function CollectionStatement() {
         </div>
       ) : (
         /* PRINTABLE ALL DUE CUSTOMERS (MULTIPLE PAGES) */
-        <div className="hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
+        <div className="due-print-page hidden print:block bg-white text-slate-900 w-full text-right" dir="rtl">
           <style>{`
             @page {
               size: A4 portrait;
-              margin: 8mm;
+              margin: 7mm 6mm;
             }
             @media print {
               body {
                 margin: 0;
                 padding: 0;
                 background: #fff;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
               }
               .due-print-grid {
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 5px;
+                display: grid !important;
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 6.5px !important;
                 width: 100% !important;
               }
               .due-card {
-                border: 1px solid #1e293b;
-                border-radius: 4px;
-                padding: 5px;
-                font-size: 9px;
-                line-height: 1.35;
-                page-break-inside: avoid;
-                break-inside: avoid;
-                background: #fff;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-                gap: 2px;
+                border: 1px solid #cbd5e1 !important;
+                border-radius: 6px !important;
+                padding: 6.5px 8.5px !important;
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+                background: #fff !important;
+                display: flex !important;
+                flex-direction: column !important;
+                justify-content: space-between !important;
+                gap: 3.5px !important;
+                box-shadow: none !important;
               }
               .due-card-header {
-                border-bottom: 1.5px solid #1e293b;
-                padding-bottom: 2px;
-                margin-bottom: 2px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
+                border-bottom: 1px solid #e2e8f0 !important;
+                padding-bottom: 3.5px !important;
+                margin-bottom: 1px !important;
+                display: flex !important;
+                justify-content: space-between !important;
+                align-items: baseline !important;
               }
               .due-card-title {
-                font-weight: 900;
-                font-size: 11px;
-                color: #000;
+                font-weight: 900 !important;
+                font-size: 12.5px !important;
+                color: #0f172a !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                flex: 1 !important;
+                padding-left: 4px !important;
               }
               .due-card-phone {
-                font-weight: 900;
-                font-size: 9.5px;
-                color: #0f172a;
+                font-weight: 800 !important;
+                font-size: 11px !important;
+                color: #0284c7 !important;
+                direction: ltr !important;
+                white-space: nowrap !important;
               }
-              .due-card-highlights {
-                text-align: center;
-                background-color: #fef2f2;
-                border: 1px solid #fee2e2;
-                padding: 2.5px 4px;
-                border-radius: 3px;
-                margin-bottom: 1px;
+              .due-card-body {
+                display: flex !important;
+                flex-direction: column !important;
+                gap: 3.5px !important;
               }
-              .due-total-badge {
-                font-weight: 900;
-                color: #b91c1c;
-                font-size: 11px;
+              .due-amount-banner {
+                background: #f8fafc !important;
+                border: 1px solid #e2e8f0 !important;
+                border-radius: 4px !important;
+                padding: 3.5px 7px !important;
+                display: flex !important;
+                justify-content: space-between !important;
+                align-items: center !important;
               }
-              .due-card-label {
-                font-weight: bold;
-                color: #334155;
-                display: inline-block;
-                width: 45px;
+              .due-amount-banner-unpaid {
+                border-right: 3px solid #dc2626 !important;
               }
-              .due-card-guarantors {
-                border-bottom: 1px dashed #cbd5e1;
-                padding-bottom: 2px;
-                margin-bottom: 1px;
+              .due-amount-banner-paid {
+                border-right: 3px solid #16a34a !important;
               }
-              .due-guarantor-value {
-                font-weight: 900;
-                color: #000;
-                font-size: 9.5px;
+              .due-amount-main {
+                display: flex !important;
+                align-items: baseline !important;
+                gap: 4px !important;
               }
-              .due-card-text {
-                color: #475569;
-                font-size: 8.5px;
+              .due-amount-label {
+                font-size: 10px !important;
+                font-weight: 700 !important;
+                color: #475569 !important;
               }
-              .due-installments-box {
-                border: 1px solid #e2e8f0;
-                background-color: #f8fafc;
-                border-radius: 3px;
-                padding: 2px 4px;
-                font-size: 8px;
+              .due-amount-value {
+                font-size: 13px !important;
+                font-weight: 900 !important;
               }
-              .due-installment-item {
-                display: flex;
-                justify-content: space-between;
-                border-bottom: 1px dashed #e2e8f0;
-                padding: 1px 0;
+              .due-amount-side {
+                text-align: left !important;
+                font-size: 9.5px !important;
+                color: #64748b !important;
+                font-weight: 700 !important;
               }
-              .due-installment-item:last-child {
-                border-bottom: none;
+              .due-contract-rem {
+                color: #475569 !important;
+                font-weight: 800 !important;
+              }
+              .due-info-line {
+                display: flex !important;
+                align-items: flex-start !important;
+                gap: 4px !important;
+                font-size: 10px !important;
+                line-height: 1.35 !important;
+              }
+              .due-info-tag {
+                font-weight: 800 !important;
+                color: #475569 !important;
+                white-space: nowrap !important;
+                min-width: 44px !important;
+              }
+              .due-info-val {
+                color: #1e293b !important;
+                font-weight: 600 !important;
+                flex: 1 !important;
+              }
+              .due-guarantor-strong {
+                font-weight: 800 !important;
+                color: #0f172a !important;
+              }
+              .due-guarantor-phone {
+                color: #0284c7 !important;
+                direction: ltr !important;
+                font-weight: 700 !important;
+                margin-right: 2px !important;
+              }
+              .due-installments-strip {
+                background: #f1f5f9 !important;
+                border-radius: 3px !important;
+                padding: 2.5px 6px !important;
+                font-size: 9.5px !important;
+                display: flex !important;
+                justify-content: space-between !important;
+                align-items: center !important;
+                color: #334155 !important;
+                font-weight: 700 !important;
               }
               .due-card-footer {
-                border-top: 1px solid #94a3b8;
-                padding-top: 2px;
-                margin-top: 3px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                font-size: 8px;
-                color: #475569;
+                border-top: 1px dashed #cbd5e1 !important;
+                padding-top: 3.5px !important;
+                margin-top: 1px !important;
+                display: flex !important;
+                justify-content: space-between !important;
+                align-items: center !important;
+                font-size: 9.5px !important;
+              }
+              .due-notes-area {
+                display: flex !important;
+                align-items: center !important;
+              }
+              .due-notes-label {
+                font-weight: 900 !important;
+                color: #1e293b !important;
+                font-size: 10px !important;
+              }
+              .due-lastpay-area {
+                font-size: 9.5px !important;
+                color: #475569 !important;
+                font-weight: 600 !important;
+              }
+              .due-lastpay-area b {
+                color: #0f172a !important;
+                font-weight: 800 !important;
               }
             }
           `}</style>
@@ -1633,75 +1950,92 @@ export default function CollectionStatement() {
               <p className="text-slate-600 text-xs">{settings.companyAddress} | {settings.companyPhone}</p>
             </div>
             <div className="text-left">
-              <h2 className="text-2xl font-bold text-slate-800 border-b border-slate-300 pb-0.5 mb-0.5 inline-block">كشف التحصيل والمتابعة</h2>
+              <h2 className="text-2xl font-bold text-slate-800 border-b border-slate-300 pb-0.5 mb-0.5 inline-block">
+                {dueStatusFilter === 'paid' ? 'كشف الأقساط المحصلة (المسددة)' : dueStatusFilter === 'all' ? 'كشف التحصيل والمتابعة الشامل' : 'كشف التحصيل والمتابعة (المستحق)'}
+              </h2>
               <p className="text-slate-500 font-semibold text-[10px]">من {formatDateDisplay(dueFromDate)} إلى {formatDateDisplay(dueToDate)} | تاريخ الطباعة: {formatDateDisplay(new Date())}</p>
             </div>
           </div>
 
           {groupedDueRows.length === 0 ? (
-            <div className="p-12 text-center text-slate-500">لا توجد أقساط مستحقة حالياً.</div>
+            <div className="p-12 text-center text-slate-500">لا توجد أقساط مطابقة للفترة المحددة.</div>
           ) : (
             <div className="due-print-grid">
               {groupedDueRows.map((group, idx) => {
                 const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+                const totalPaid = group.reduce((sum, r) => sum + (r.paidAmount || 0), 0);
+                const isPaidMode = dueStatusFilter === 'paid' || (dueStatusFilter === 'all' && totalRemaining === 0);
                 const firstRow = group[0];
                 const activeGuarantors = firstRow.guarantors.filter(g => g && g.name);
                 const lastPayment = firstRow.lastPaymentDate ? formatDateDisplay(firstRow.lastPaymentDate) : 'لا يوجد سداد سابق';
+                const dueDateStr = group.map(r => `${r.installmentLabel} (${formatDateDisplay(r.dueDate)})`).join(' ، ');
 
                 return (
                   <div key={idx} className="due-card">
                     {/* Header: Customer Name and Phone */}
                     <div className="due-card-header">
-                      <span className="due-card-title">{firstRow.customerName}</span>
-                      <span className="due-card-phone">{firstRow.customerPhone}</span>
+                      <span className="due-card-title">{idx + 1}. {firstRow.customerName}</span>
+                      <span className="due-card-phone">{firstRow.customerPhone || '---'}</span>
                     </div>
 
                     <div className="due-card-body">
-                      {/* Highlighted Box: Amount */}
-                      <div className="due-card-highlights">
-                        <span className="due-total-badge">القسط المستحق: {formatCurrency(totalRemaining)}</span>
-                        {firstRow.totalInvoiceRemaining !== undefined && firstRow.totalInvoiceRemaining > totalRemaining && (
-                          <span style={{ fontSize: '9px', color: '#64748b', fontWeight: 600, display: 'block' }}>
-                            (متبقي العقد: {formatCurrency(firstRow.totalInvoiceRemaining)})
+                      {/* Highlight Banner: Due Amount & Contract Remaining */}
+                      <div className={`due-amount-banner ${isPaidMode ? 'due-amount-banner-paid' : 'due-amount-banner-unpaid'}`}>
+                        <div className="due-amount-main">
+                          <span className="due-amount-label">
+                            {isPaidMode ? 'المبلغ المحصل:' : 'القسط المستحق:'}
                           </span>
-                        )}
-                      </div>
-                      
-                      {/* Prominent Guarantors */}
-                      {activeGuarantors.length > 0 && (
-                        <div className="due-card-guarantors">
-                          <span className="due-card-label">الضامن:</span>
-                          <span className="due-guarantor-value">
-                            {activeGuarantors.map((g, gIdx) => (
-                              <span key={gIdx} className="block">
-                                {g!.name} ({g!.phone})
-                              </span>
-                            ))}
+                          <span className={`due-amount-value ${isPaidMode ? 'text-emerald-700' : 'text-red-700'}`}>
+                            {formatCurrency(isPaidMode ? (totalPaid > 0 ? totalPaid : group.reduce((sum, r) => sum + r.installmentAmount, 0)) : totalRemaining)}
                           </span>
                         </div>
-                      )}
-
-                      {/* Smaller Secondary Info: Address */}
-                      <div className="due-card-text">
-                        <span className="due-card-label">العنوان:</span>
-                        <span>{firstRow.customerAddress}</span>
+                        <div className="due-amount-side">
+                          {firstRow.totalInvoiceRemaining !== undefined && firstRow.totalInvoiceRemaining > totalRemaining ? (
+                            <span>متبقي العقد: <span className="due-contract-rem">{formatCurrency(firstRow.totalInvoiceRemaining)}</span></span>
+                          ) : (
+                            <span>فاتورة: <b>{firstRow.invoiceNumber || '---'}</b></span>
+                          )}
+                        </div>
                       </div>
 
-                      {/* Small Compact Installments box */}
-                      <div className="due-installments-box">
-                        {group.map((row, rIdx) => (
-                          <div key={rIdx} className="due-installment-item">
-                            <span>{row.installmentLabel} ({formatDateDisplay(row.dueDate)})</span>
-                            <span className="font-bold">{formatCurrency(row.remainingAmount)}</span>
-                          </div>
-                        ))}
+                      {/* Prominent Guarantors */}
+                      <div className="due-info-line">
+                        <span className="due-info-tag">الضامن:</span>
+                        <span className="due-info-val">
+                          {activeGuarantors.length > 0 ? (
+                            activeGuarantors.map((g, gIdx) => (
+                              <span key={gIdx} className="inline-block ml-2">
+                                <span className="due-guarantor-strong">{g!.name}</span>
+                                {g!.phone && <span className="due-guarantor-phone"> ({g!.phone})</span>}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-slate-400">لا يوجد ضامن مسجل</span>
+                          )}
+                        </span>
+                      </div>
+
+                      {/* Customer Address */}
+                      <div className="due-info-line">
+                        <span className="due-info-tag">العنوان:</span>
+                        <span className="due-info-val">{firstRow.customerAddress || '---'}</span>
+                      </div>
+
+                      {/* Installments strip */}
+                      <div className="due-installments-strip">
+                        <span>{dueDateStr}</span>
+                        <span>المندوب: <b>{firstRow.salesRepName || 'غير محدد'}</b></span>
                       </div>
                     </div>
 
-                    {/* Footer: Last Payment and Sales Rep */}
+                    {/* Footer: Notes on Right (no box, no line, open space), Last Payment on Left */}
                     <div className="due-card-footer">
-                      <span>آخر سداد: {lastPayment}</span>
-                      <span>المندوب: {firstRow.salesRepName || '---'}</span>
+                      <div className="due-notes-area">
+                        <span className="due-notes-label">ملاحظات:</span>
+                      </div>
+                      <div className="due-lastpay-area">
+                        <span>آخر سداد: <b>{lastPayment}</b></span>
+                      </div>
                     </div>
                   </div>
                 );

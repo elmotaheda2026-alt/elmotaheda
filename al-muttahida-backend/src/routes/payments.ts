@@ -263,11 +263,13 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
           if (data.installmentId) {
             const schedule = await tx.get(
-              'SELECT id, amount, paid_amount FROM installment_schedules WHERE id = ?',
+              'SELECT id, amount, paid_amount, month_index, sale_id FROM installment_schedules WHERE id = ?',
               data.installmentId,
             );
             if (schedule) {
-              const nextPaid = Number((schedule.paid_amount + data.amount).toFixed(2));
+              const schRemaining = Math.max(0, Number((schedule.amount - schedule.paid_amount).toFixed(2)));
+              const applied = Math.min(schRemaining, data.amount);
+              const nextPaid = Number((schedule.paid_amount + applied).toFixed(2));
               const isPaid = (schedule.amount - nextPaid) <= 1.0;
               const finalPaid = isPaid ? schedule.amount : nextPaid;
               await tx.run(
@@ -277,6 +279,35 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
                 data.date,
                 data.installmentId,
               );
+
+              // If payment exceeds current installment, cascade surplus to subsequent installments
+              let surplus = Number((data.amount - applied).toFixed(2));
+              if (surplus > 0) {
+                const subsequentSchedules = await tx.all(
+                  `SELECT id, amount, paid_amount FROM installment_schedules
+                   WHERE sale_id = ? AND status <> 'paid' AND id <> ? AND month_index > ?
+                   ORDER BY month_index ASC`,
+                  schedule.sale_id,
+                  schedule.id,
+                  schedule.month_index,
+                );
+                for (const nextSch of subsequentSchedules) {
+                  if (surplus <= 0) break;
+                  const nextRemaining = Math.max(0, Number((nextSch.amount - nextSch.paid_amount).toFixed(2)));
+                  const nextApplied = Math.min(nextRemaining, surplus);
+                  const nextSchPaid = Number((nextSch.paid_amount + nextApplied).toFixed(2));
+                  surplus = Number((surplus - nextApplied).toFixed(2));
+                  const isNextPaid = (nextSch.amount - nextSchPaid) <= 1.0;
+                  const finalNextPaid = isNextPaid ? nextSch.amount : nextSchPaid;
+                  await tx.run(
+                    `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+                    finalNextPaid,
+                    isNextPaid ? 'paid' : (finalNextPaid > 0 ? 'partial' : 'unpaid'),
+                    data.date,
+                    nextSch.id,
+                  );
+                }
+              }
             }
           } else {
             const schedules = await tx.all(
@@ -314,6 +345,21 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
            WHERE id = ?`,
           customerDeduction, customerDeduction, now, finalCustomerId,
         );
+
+        // If customer has no active remaining debt left across all sales, clear legal lawsuit flag
+        const remainingCustomerDebt = (await tx.get(
+          `SELECT COALESCE(SUM(remaining), 0) as total_debt
+           FROM sales
+           WHERE customer_id = ? AND status NOT IN ('cancelled', 'settled_early')`,
+          finalCustomerId,
+        )) as { total_debt: number } | undefined;
+        if (Number(remainingCustomerDebt?.total_debt || 0) <= 0.5) {
+          await tx.run(
+            `UPDATE customers SET is_sued = 0, updated_at = ? WHERE id = ? AND is_sued = 1`,
+            now,
+            finalCustomerId,
+          );
+        }
       }
 
       // 3. Update Supplier Balance
@@ -422,89 +468,144 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
     }
     await db.withTransaction(async (tx) => {
       // 1. If reversing a sale payment, deduct from paid and add back to remaining
+      let isEarlySettlementReversal = false;
+      let restoredEarlyRemaining = 0;
+
       if (original.sale_id && original.type === 'in') {
-        await tx.run(
-          `UPDATE sales
-           SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
-               remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
-               status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
-           WHERE id = ?`,
-          original.amount,
-          original.amount,
-          original.amount,
-          original.amount,
-          original.amount,
+        const linkedSale = (await tx.get(
+          'SELECT id, status, discount, total, paid, remaining FROM sales WHERE id = ?',
           original.sale_id,
-        );
+        )) as { id: string; status: string; discount: number; total: number; paid: number; remaining: number } | undefined;
 
-        // Revert schedules
-        if (original.installment_id) {
-          const schedule = (await tx.get(
-            'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE id = ?',
-            original.installment_id,
-          )) as { id: string; paid_amount: number; sale_id: string } | undefined;
-          if (schedule) {
-            const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - original.amount).toFixed(2)));
-            const scheduleStatus = nextPaidAmount <= 0 ? 'unpaid' : 'partial';
-            const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
-              'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
-              schedule.sale_id,
-              original.id,
-            )) as { date: string } | undefined) : null;
-            await tx.run(
-              `UPDATE installment_schedules
-               SET paid_amount = ?,
-                   status = ?,
-                   paid_at = ?
-               WHERE id = ?`,
-              nextPaidAmount,
-              scheduleStatus,
-              latestPayment ? latestPayment.date : null,
-              original.installment_id,
-            );
-          }
-        } else {
-          // Auto-revert schedules in reverse order (month_index DESC)
-          const schedules = (await tx.all(
-            'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
+        if (linkedSale && linkedSale.status === 'settled_early') {
+          isEarlySettlementReversal = true;
+          // 1. Reopen all early settled schedules
+          await tx.run(
+            `UPDATE installment_schedules
+             SET status = CASE WHEN paid_amount > 0 THEN 'partial' ELSE 'unpaid' END,
+                 paid_at = CASE WHEN paid_amount > 0 THEN paid_at ELSE NULL END
+             WHERE sale_id = ? AND status = 'settled_early'`,
             original.sale_id,
-          )) as { id: string; paid_amount: number; sale_id: string }[];
-          let remainingRevert = original.amount;
-          for (const sch of schedules) {
-            if (remainingRevert <= 0) break;
-            const applied = Math.min(sch.paid_amount, remainingRevert);
-            const nextPaidAmount = Number((sch.paid_amount - applied).toFixed(2));
-            remainingRevert = Number((remainingRevert - applied).toFixed(2));
+          );
 
-            const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
-              'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
-              sch.sale_id,
-              original.id,
-            )) as { date: string } | undefined) : null;
+          // 2. Calculate restored unpaid remaining installments
+          const schedDebt = (await tx.get(
+            `SELECT COALESCE(SUM(amount - paid_amount), 0) as total_debt
+             FROM installment_schedules
+             WHERE sale_id = ?`,
+            original.sale_id,
+          )) as { total_debt: number } | undefined;
 
-            await tx.run(
-              `UPDATE installment_schedules
-               SET paid_amount = ?,
-                   status = ?,
-                   paid_at = ?
-               WHERE id = ?`,
-              nextPaidAmount,
-              nextPaidAmount <= 0 ? 'unpaid' : 'partial',
-              latestPayment ? latestPayment.date : null,
-              sch.id,
-            );
+          restoredEarlyRemaining = Number((schedDebt?.total_debt || 0).toFixed(2));
+          const restoredPaid = Math.max(0, Number((linkedSale.paid - original.amount).toFixed(2)));
+          const restoredDiscount = Math.max(0, Number((linkedSale.total - (restoredPaid + restoredEarlyRemaining)).toFixed(2)));
+
+          await tx.run(
+            `UPDATE sales
+             SET paid = ?,
+                 remaining = ?,
+                 discount = ?,
+                 locked = 0,
+                 status = CASE WHEN ? <= 0 THEN 'completed' ELSE 'pending' END,
+                 last_edited_by = ?,
+                 last_edited_at = ?
+             WHERE id = ?`,
+            restoredPaid,
+            restoredEarlyRemaining,
+            restoredDiscount,
+            restoredEarlyRemaining,
+            req.user?.name || 'system',
+            now,
+            original.sale_id,
+          );
+        } else {
+          await tx.run(
+            `UPDATE sales
+             SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
+                 remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
+                 status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
+             WHERE id = ?`,
+            original.amount,
+            original.amount,
+            original.amount,
+            original.amount,
+            original.amount,
+            original.sale_id,
+          );
+
+          // Revert schedules
+          if (original.installment_id) {
+            const schedule = (await tx.get(
+              'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE id = ?',
+              original.installment_id,
+            )) as { id: string; paid_amount: number; sale_id: string } | undefined;
+            if (schedule) {
+              const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - original.amount).toFixed(2)));
+              const scheduleStatus = nextPaidAmount <= 0 ? 'unpaid' : 'partial';
+              const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
+                'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+                schedule.sale_id,
+                original.id,
+              )) as { date: string } | undefined) : null;
+              await tx.run(
+                `UPDATE installment_schedules
+                 SET paid_amount = ?,
+                     status = ?,
+                     paid_at = ?
+                 WHERE id = ?`,
+                nextPaidAmount,
+                scheduleStatus,
+                latestPayment ? latestPayment.date : null,
+                original.installment_id,
+              );
+            }
+          } else {
+            // Auto-revert schedules in reverse order (month_index DESC)
+            const schedules = (await tx.all(
+              'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE sale_id = ? AND paid_amount > 0 ORDER BY month_index DESC',
+              original.sale_id,
+            )) as { id: string; paid_amount: number; sale_id: string }[];
+            let remainingRevert = original.amount;
+            for (const sch of schedules) {
+              if (remainingRevert <= 0) break;
+              const applied = Math.min(sch.paid_amount, remainingRevert);
+              const nextPaidAmount = Number((sch.paid_amount - applied).toFixed(2));
+              remainingRevert = Number((remainingRevert - applied).toFixed(2));
+
+              const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
+                'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+                sch.sale_id,
+                original.id,
+              )) as { date: string } | undefined) : null;
+
+              await tx.run(
+                `UPDATE installment_schedules
+                 SET paid_amount = ?,
+                     status = ?,
+                     paid_at = ?
+                 WHERE id = ?`,
+                nextPaidAmount,
+                nextPaidAmount <= 0 ? 'unpaid' : 'partial',
+                latestPayment ? latestPayment.date : null,
+                sch.id,
+              );
+            }
           }
         }
       }
 
       // 2. Revert Customer Balance (outgoing reverse payment increases debtor balance)
       if (original.type === 'in' && original.customer_id && original.affects_customer_balance) {
+        const revertBalanceAmount = isEarlySettlementReversal && restoredEarlyRemaining > 0
+          ? restoredEarlyRemaining
+          : original.amount;
+
         await tx.run(
           `UPDATE customers
            SET balance = balance + ?,
                updated_at = ?
            WHERE id = ?`,
-          original.amount,
+          revertBalanceAmount,
           now,
           original.customer_id,
         );

@@ -508,7 +508,7 @@ export default function Shareholders() {
       return {
         ...s,
         proportionalShare,
-        displayName: `${s.name} (${s.isFounder ? 'مؤسس' : 'شريك'})`,
+        displayName: `${s.name} (${s.isFounder ? 'شريك' : 'مساهم'})`,
       };
     });
   }, [liveShareholders]);
@@ -549,13 +549,13 @@ export default function Shareholders() {
     e.preventDefault();
     try {
       const isFounder = Boolean(shareholderForm.isFounder);
-      const sharePercentage = isFounder ? 100 : Number(shareholderForm.sharePercentage || 0);
+      const sharePercentage = Number(shareholderForm.sharePercentage || 0);
       const managementFeePercentage = isFounder
         ? 0
         : Number(shareholderForm.managementFeePercentage || Math.max(0, 100 - sharePercentage));
 
-      if (!isFounder && (sharePercentage <= 0 || sharePercentage > 100)) {
-        window.alert('الرجاء إدخال نسبة مشاركة صحيحة للشريك بين 1% و 100%.');
+      if (sharePercentage <= 0 || sharePercentage > 100) {
+        window.alert('الرجاء إدخال نسبة مشاركة صحيحة بين 1% و 100%.');
         return;
       }
 
@@ -715,11 +715,11 @@ export default function Shareholders() {
             <div>
               <div className="flex items-center gap-1.5">
                 <h2 className="text-sm md:text-base font-black text-slate-900 leading-tight">
-                  حسابات الشركاء والمؤسسين
+                  حسابات الشركاء والمساهمين
                 </h2>
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                  حسابات الشركاء
+                  الشركاء والمساهمين
                 </span>
               </div>
               <p className="text-[10px] text-slate-400">
@@ -735,7 +735,7 @@ export default function Shareholders() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث باسم الشريك..."
+              placeholder="بحث باسم الشريك أو المساهم..."
               className="input-ui h-7.5 w-full pr-7 pl-2.5 text-xs bg-slate-50 border-slate-200 focus:bg-white"
             />
           </div>
@@ -755,7 +755,7 @@ export default function Shareholders() {
               }`}
             >
               <PieChartIcon size={13} />
-              <span>حصص الشركاء ({liveShareholders.length})</span>
+              <span>حصص الشركاء والمساهمين ({liveShareholders.length})</span>
             </button>
             <button
               type="button"
@@ -851,7 +851,7 @@ export default function Shareholders() {
             className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
           >
             <Plus size={13} />
-            <span>+ إضافة شريك</span>
+            <span>+ إضافة شريك / مساهم</span>
           </button>
         </div>
       </section>
@@ -866,7 +866,7 @@ export default function Shareholders() {
               {formatCurrency(totalCapital)}
             </span>
             <span className="text-[10px] text-slate-400 block truncate mt-0.5">
-              تأسيسي: {formatCurrency(foundersSummary.totalInitialCapital)}
+              الافتتاحي: {formatCurrency(foundersSummary.totalInitialCapital)}
             </span>
           </div>
           <div className="w-8 h-8 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shrink-0 border border-indigo-100">
@@ -880,10 +880,10 @@ export default function Shareholders() {
             <span className="text-[11px] font-bold text-slate-500 block truncate">توزيع الملكية</span>
             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
               <span className="inline-flex items-center gap-1 text-xs font-black text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60 tabular-nums">
-                مؤسسون: {foundersSummary.foundersProportionalPct.toFixed(1)}%
+                شركاء: {foundersSummary.foundersProportionalPct.toFixed(1)}%
               </span>
               <span className="inline-flex items-center gap-1 text-xs font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200/60 tabular-nums">
-                شركاء: {foundersSummary.partnersProportionalPct.toFixed(1)}%
+                مساهمون: {foundersSummary.partnersProportionalPct.toFixed(1)}%
               </span>
             </div>
           </div>
@@ -911,12 +911,12 @@ export default function Shareholders() {
         {/* KPI 4: Active Partners Count */}
         <div className="bg-white rounded-xl px-3.5 py-2.5 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5">
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">الشركاء والمؤسسون</span>
+            <span className="text-[11px] font-bold text-slate-500 block truncate">الشركاء والمساهمون</span>
             <span className="text-base md:text-lg font-black text-slate-900 tabular-nums block leading-tight mt-0.5">
               {liveShareholders.length} <span className="text-xs font-normal text-slate-500">نشط</span>
             </span>
             <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold mt-0.5">
-              <span>{foundersSummary.foundersCount} مؤسس</span>
+              <span>{foundersSummary.foundersCount} شريك</span>
               <span>•</span>
               <span>{foundersSummary.partnersCount} مساهم</span>
             </div>
@@ -936,14 +936,14 @@ export default function Shareholders() {
               <div className="lg:col-span-4 space-y-1">
                 <h3 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-1.5">
                   <PieChartIcon size={14} className="text-indigo-600" />
-                  <span>هيكل الملكية وحصص الشركاء</span>
+                  <span>هيكل الملكية وحصص الشركاء والمساهمين</span>
                 </h3>
                 <div className="flex items-center gap-2 pt-1 text-xs flex-wrap font-bold">
                   <span className="text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
-                    المؤسسون: {foundersSummary.foundersProportionalPct.toFixed(1)}%
+                    الشركاء: {foundersSummary.foundersProportionalPct.toFixed(1)}%
                   </span>
                   <span className="text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                    الشركاء: {foundersSummary.partnersProportionalPct.toFixed(1)}%
+                    المساهمون: {foundersSummary.partnersProportionalPct.toFixed(1)}%
                   </span>
                 </div>
               </div>
@@ -1000,13 +1000,13 @@ export default function Shareholders() {
                 <thead className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs border-b border-slate-200 text-xs font-black text-slate-700 shadow-2xs">
                   <tr>
                     <th className="py-2.5 px-3 w-10 text-center">#</th>
-                    <th className="py-2.5 px-4 text-right">الشريك / المؤسس</th>
+                    <th className="py-2.5 px-4 text-right">الشريك / المساهم</th>
                     <th className="py-2.5 px-3 text-center">الحصة</th>
                     <th className="py-2.5 px-3.5 text-right whitespace-nowrap">رأس المال</th>
                     <th className="py-2.5 px-3.5 text-right whitespace-nowrap">الأرباح المكتسبة</th>
                     <th className="py-2.5 px-3.5 text-right whitespace-nowrap">المسحوبات</th>
                     <th className="py-2.5 px-3.5 text-right whitespace-nowrap">الأرباح المتاحة للصرف</th>
-                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">إجمالي رصيد الشريك</th>
+                    <th className="py-2.5 px-3.5 text-right whitespace-nowrap">إجمالي الرصيد</th>
                     <th className="py-2.5 px-3 text-center w-36 whitespace-nowrap">إجراءات سريعة</th>
                   </tr>
                 </thead>
@@ -1035,7 +1035,7 @@ export default function Shareholders() {
                                     ? 'bg-blue-100 text-blue-700 border border-blue-200'
                                     : 'bg-slate-100 text-slate-600 border border-slate-200'
                                 }`}>
-                                  {shareholder.isFounder ? 'مؤسس' : 'شريك'}
+                                  {shareholder.isFounder ? 'شريك' : 'مساهم'}
                                 </span>
                               </div>
                               <div className="text-[10px] text-slate-400 font-medium">
@@ -1099,7 +1099,7 @@ export default function Shareholders() {
                                   name: shareholder.name,
                                   phone: shareholder.phone,
                                   isFounder: isF,
-                                  sharePercentage: isF ? 100 : (shareholder.sharePercentage || 50),
+                                  sharePercentage: shareholder.sharePercentage || 0,
                                   managementFeePercentage: isF ? 0 : (shareholder.managementFeePercentage ?? 50),
                                   capital: shareholder.capital,
                                   joinedDate: toIsoDay(shareholder.joinedDate || shareholder.createdAt),
@@ -1129,7 +1129,7 @@ export default function Shareholders() {
                 <tfoot className="sticky bottom-0 bg-slate-50/95 backdrop-blur-xs border-t-2 border-slate-300 font-black text-xs text-slate-800 shadow-sm">
                   <tr>
                     <td colSpan={2} className="py-2.5 px-4 text-slate-900">
-                      الإجمالي ({visibleShareholders.length} شريك ومؤسس)
+                      الإجمالي ({visibleShareholders.length} شريك ومساهم)
                     </td>
                     <td className="py-2.5 px-3 text-center text-blue-700 font-extrabold">100%</td>
                     <td className="py-2.5 px-3.5 text-slate-900 whitespace-nowrap">{formatCurrency(totalCapital)}</td>
@@ -1176,7 +1176,7 @@ export default function Shareholders() {
                                     ? 'bg-purple-100 text-purple-700 border border-purple-200'
                                     : 'bg-slate-100 text-slate-600 border border-slate-200'
                                 }`}>
-                                  {shareholder.isFounder ? 'مؤسس' : 'شريك'}
+                                  {shareholder.isFounder ? 'شريك' : 'مساهم'}
                                 </span>
                               </div>
                               <div className="text-[10px] text-slate-400 font-medium mt-0.5">
@@ -1198,7 +1198,7 @@ export default function Shareholders() {
                                   name: shareholder.name,
                                   phone: shareholder.phone,
                                   isFounder: isF,
-                                  sharePercentage: isF ? 100 : (shareholder.sharePercentage || 50),
+                                  sharePercentage: shareholder.sharePercentage || 0,
                                   managementFeePercentage: isF ? 0 : (shareholder.managementFeePercentage ?? 50),
                                   capital: shareholder.capital,
                                   joinedDate: toIsoDay(shareholder.joinedDate || shareholder.createdAt),
@@ -1285,7 +1285,7 @@ export default function Shareholders() {
           <div className="erp-status-bar shrink-0 py-1.5 px-3 text-[11px] min-h-9">
             <div className="flex items-center gap-4 flex-wrap">
               <span>
-                عدد الشركاء والمؤسسين: <strong className="text-blue-700 font-extrabold">{visibleShareholders.length}</strong>
+                عدد الشركاء والمساهمين: <strong className="text-blue-700 font-extrabold">{visibleShareholders.length}</strong>
               </span>
               <span>
                 إجمالي رأس المال الفعلي: <strong className="text-slate-900 font-extrabold">{formatCurrency(totalCapital)}</strong>
@@ -1295,7 +1295,7 @@ export default function Shareholders() {
               </span>
             </div>
             <div className="text-slate-500 text-[10px]">
-              الأرباح مرجحة تلقائياً بتاريخ انضمام كل شريك ومؤسس
+              الأرباح مرجحة تلقائياً بتاريخ انضمام كل شريك ومساهم
             </div>
           </div>
         </section>
@@ -1306,21 +1306,21 @@ export default function Shareholders() {
           <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
             {/* Side-by-side filter controls container */}
             <div className="flex-1 max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
-              {/* Filter 1: تصفية الشريك والمؤسس */}
+              {/* Filter 1: تصفية الشريك والمساهم */}
               <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
                 <Users size={14} className="text-blue-600 shrink-0" />
                 <label className="text-xs font-bold text-slate-600 shrink-0 whitespace-nowrap">
-                  تصفية الشريك:
+                  الشريك / المساهم:
                 </label>
                 <select
                   value={ledgerPartnerFilter}
                   onChange={(e) => setLedgerPartnerFilter(e.target.value)}
                   className="w-full text-xs bg-transparent border-none font-bold text-slate-800 outline-none cursor-pointer"
                 >
-                  <option value="all">جميع الشركاء والمؤسسين ({liveShareholders.length})</option>
+                  <option value="all">جميع الشركاء والمساهمين ({liveShareholders.length})</option>
                   {liveShareholders.map((s: any) => (
                     <option key={s.id} value={s.id}>
-                      {s.name} {s.isFounder ? '(مؤسس)' : ''}
+                      {s.name} {s.isFounder ? '(شريك)' : '(مساهم)'}
                     </option>
                   ))}
                 </select>
@@ -1398,9 +1398,13 @@ export default function Shareholders() {
                             className="hover:text-indigo-600 hover:underline text-right inline-flex items-center gap-1.5"
                           >
                             <span>{tx.shareholderName}</span>
-                            {liveShareholders.find((s: any) => s.id === tx.shareholderId)?.isFounder && (
-                              <span className="px-1 py-0.5 rounded text-[9px] font-black bg-purple-100 text-purple-700 border border-purple-200">
-                                مؤسس
+                            {liveShareholders.find((s: any) => s.id === tx.shareholderId)?.isFounder ? (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-black bg-blue-100 text-blue-700 border border-blue-200">
+                                شريك
+                              </span>
+                            ) : (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-black bg-slate-100 text-slate-600 border border-slate-200">
+                                مساهم
                               </span>
                             )}
                           </button>
@@ -1505,15 +1509,15 @@ export default function Shareholders() {
                     <FileText size={16} />
                   </div>
                   <h3 className="text-base md:text-lg font-black text-slate-900 truncate">
-                    كشف الحساب الشامل للشريك: {inspectingPartner.name}
+                    كشف الحساب الشامل: {inspectingPartner.name}
                   </h3>
                   {inspectingPartner.isFounder ? (
                     <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-blue-50 text-blue-700 border border-blue-200">
-                      شريك مؤسس
+                      شريك
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                      شريك مساهم
+                      مساهم
                     </span>
                   )}
                 </div>
@@ -1732,7 +1736,7 @@ export default function Shareholders() {
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-200">
             <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
               <h3 className="text-base font-black text-slate-900">
-                {editingShareholder ? 'تعديل بيانات الشريك' : 'إضافة شريك جديد'}
+                {editingShareholder ? 'تعديل بيانات الشريك / المساهم' : 'إضافة شريك أو مساهم جديد'}
               </h3>
               <button
                 type="button"
@@ -1745,7 +1749,7 @@ export default function Shareholders() {
             <form onSubmit={handleShareholderSubmit} className="p-5 space-y-3.5">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">اسم الشريك</label>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">الاسم</label>
                   <input
                     type="text"
                     required
@@ -1770,7 +1774,7 @@ export default function Shareholders() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">تاريخ انضمام الشريك</label>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">تاريخ الانضمام</label>
                   <input
                     type="date"
                     required
@@ -1799,11 +1803,11 @@ export default function Shareholders() {
               {/* Founder Flag Toggle */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
                 <div>
-                  <span className="text-xs font-bold text-slate-800 block">شريك مؤسس (Founder)</span>
+                  <span className="text-xs font-bold text-slate-800 block">شريك رئيسي (Partner)</span>
                   <span className="text-[11px] text-slate-500 block">
                     {shareholderForm.isFounder
-                      ? 'تم تعيين الشريك كمؤسس رئيسي — نسبة توزيع الأرباح مثبتة تلقائياً على 100%'
-                      : 'تفعيل هذا الخيار للشريك المؤسس لتثبيت أرباحه أو تركه كشريك مساهم'}
+                      ? 'تم تعيينه كشريك رئيسي — نسبة توزيع الأرباح مثبتة تلقائياً على 100%'
+                      : 'تفعيل هذا الخيار للشريك لتثبيت أرباحه، أو تركه كمساهم'}
                   </span>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -1831,9 +1835,9 @@ export default function Shareholders() {
                   <div className="flex items-center gap-2">
                     <ShieldCheck size={16} className="text-purple-600 shrink-0" />
                     <div>
-                      <span className="font-black text-purple-900 block">نسبة مشاركة الأرباح: 100% (تأسيسي)</span>
+                      <span className="font-black text-purple-900 block">نسبة مشاركة الأرباح: 100% (شريك)</span>
                       <span className="text-[11px] text-purple-700 block">
-                        يستحق الشريك المؤسس كامل صافي الأرباح المحققة خلال فترة استثماره دون اقتطاع.
+                        يستحق الشريك كامل صافي الأرباح المحققة خلال فترة استثماره دون اقتطاع.
                       </span>
                     </div>
                   </div>
@@ -1844,7 +1848,7 @@ export default function Shareholders() {
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">نسبة الملكية للشريك %</label>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">نسبة الملكية للمساهم %</label>
                     <input
                       type="number"
                       step="0.01"

@@ -143,6 +143,35 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
 
   try {
     const db = await dbPromise;
+
+    // Check for duplicate phone number
+    const cleanPhone = data.phone?.trim();
+    if (cleanPhone) {
+      const existingPhone = (await db.get(
+        'SELECT id, name, customer_number FROM customers WHERE phone = ?',
+        cleanPhone
+      )) as { id: string; name: string; customer_number: string } | undefined;
+      if (existingPhone) {
+        return res.status(409).json({
+          message: `رقم الهاتف (${cleanPhone}) مسجل بالفعل للعميل "${existingPhone.name}" (كود: ${existingPhone.customer_number}). يرجى التأكد من عدم تكرار العميل.`
+        });
+      }
+    }
+
+    // Check for duplicate national ID
+    const cleanNid = data.nationalId?.trim();
+    if (cleanNid) {
+      const existingNid = (await db.get(
+        'SELECT id, name, customer_number FROM customers WHERE national_id = ?',
+        cleanNid
+      )) as { id: string; name: string; customer_number: string } | undefined;
+      if (existingNid) {
+        return res.status(409).json({
+          message: `الرقم القومي (${cleanNid}) مسجل بالفعل للعميل "${existingNid.name}" (كود: ${existingNid.customer_number}).`
+        });
+      }
+    }
+
     await db.run(
       `INSERT INTO customers (
         id, customer_number, name, phone, email, address, gender, city, governorate, region,
@@ -199,6 +228,36 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
     const existing = await db.get<any>('SELECT id, sued_date FROM customers WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    // Check for duplicate phone number against other customers
+    const cleanPhone = data.phone?.trim();
+    if (cleanPhone) {
+      const existingPhone = (await db.get(
+        'SELECT id, name, customer_number FROM customers WHERE phone = ? AND id <> ?',
+        cleanPhone,
+        req.params.id
+      )) as { id: string; name: string; customer_number: string } | undefined;
+      if (existingPhone) {
+        return res.status(409).json({
+          message: `رقم الهاتف (${cleanPhone}) مسجل بالفعل لعميل آخر "${existingPhone.name}" (كود: ${existingPhone.customer_number}).`
+        });
+      }
+    }
+
+    // Check for duplicate national ID against other customers
+    const cleanNid = data.nationalId?.trim();
+    if (cleanNid) {
+      const existingNid = (await db.get(
+        'SELECT id, name, customer_number FROM customers WHERE national_id = ? AND id <> ?',
+        cleanNid,
+        req.params.id
+      )) as { id: string; name: string; customer_number: string } | undefined;
+      if (existingNid) {
+        return res.status(409).json({
+          message: `الرقم القومي (${cleanNid}) مسجل بالفعل لعميل آخر "${existingNid.name}" (كود: ${existingNid.customer_number}).`
+        });
+      }
     }
 
     const isValidExistingSuedDate = (date?: string | null) => {
@@ -322,6 +381,17 @@ router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (re
     const existing = await db.get('SELECT id FROM customers WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    const activeSales = await db.get<{ count: number; total_debt: number }>(
+      `SELECT COUNT(*) as count, COALESCE(SUM(remaining), 0) as total_debt
+       FROM sales WHERE customer_id = ?`,
+      req.params.id
+    );
+    if (activeSales && activeSales.count > 0) {
+      return res.status(400).json({
+        message: `لا يمكن حذف العميل لوجود ${activeSales.count} فاتورة/معاملة بيع مرتبطة بحسابه.`
+      });
     }
 
     await db.run('DELETE FROM customers WHERE id = ?', req.params.id);

@@ -41,10 +41,26 @@ async function bootstrap() {
     cors({
       origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error(`CORS origin '${origin}' not allowed.`));
+          return callback(null, true);
         }
+        try {
+          const url = new URL(origin);
+          const hostname = url.hostname;
+          // Allow loopback / localhost
+          if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+            return callback(null, true);
+          }
+          // Allow private local network IP ranges: 192.168.x.x, 10.x.x.x, 172.16-31.x.x
+          if (
+            /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+            /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+            /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname)
+          ) {
+            return callback(null, true);
+          }
+        } catch {}
+
+        return callback(new Error(`CORS origin '${origin}' not allowed.`));
       },
       credentials: true,
     })

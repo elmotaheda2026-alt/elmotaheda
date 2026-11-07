@@ -583,13 +583,14 @@ export default function Invoices() {
   const remaining = Math.max(total - paid, 0);
   const firstInstallmentDate = addMonths(invoiceDate, 1);
   const effectiveMonths = paymentMethod === 'installment' ? Math.max(1, installmentMonths) : 0;
-  const monthlyInstallment = effectiveMonths > 0 ? Number((remaining / effectiveMonths).toFixed(2)) : 0;
+  const roundedRemaining = Math.round(remaining);
+  const monthlyInstallment = effectiveMonths > 0 ? Math.round(roundedRemaining / effectiveMonths) : 0;
   const installmentPreview = Array.from({ length: effectiveMonths }, (_, index) => ({
     monthIndex: index + 1,
     dueDate: addMonths(firstInstallmentDate, index),
     amount:
       index === effectiveMonths - 1
-        ? Number((remaining - monthlyInstallment * index).toFixed(2))
+        ? roundedRemaining - (monthlyInstallment * index)
         : monthlyInstallment,
   }));
 

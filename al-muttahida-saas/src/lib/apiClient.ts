@@ -171,7 +171,7 @@ export const api = {
     if (filters.search) params.set('search', filters.search);
     return requestArray<any>(`/sales?${params.toString()}`, 'sales collection');
   },
-  listCollectionDue: (filters: { from?: string; to?: string; search?: string; salesRepId?: string; hideSued?: boolean; includeOverdue?: boolean; strictDate?: boolean } = {}, options: RequestInit = {}) => {
+  listCollectionDue: (filters: { from?: string; to?: string; search?: string; salesRepId?: string; hideSued?: boolean; includeOverdue?: boolean; strictDate?: boolean; statusFilter?: string; dateBasis?: string } = {}, options: RequestInit = {}) => {
     const params = new URLSearchParams();
     if (filters.from) params.set('from', filters.from);
     if (filters.to) params.set('to', filters.to);
@@ -180,9 +180,11 @@ export const api = {
     if (filters.hideSued) params.set('hideSued', 'true');
     if (filters.includeOverdue) params.set('includeOverdue', 'true');
     if (filters.strictDate) params.set('strictDate', 'true');
+    if (filters.statusFilter) params.set('statusFilter', filters.statusFilter);
+    if (filters.dateBasis) params.set('dateBasis', filters.dateBasis);
     return requestArray<any>(`/sales/collection-due?${params.toString()}`, 'collection due');
   },
-  listDues: (filters: { from?: string; to?: string; search?: string; salesRepId?: string; hideSued?: boolean; includeOverdue?: boolean; strictDate?: boolean } = {}, options: RequestInit = {}) => {
+  listDues: (filters: { from?: string; to?: string; search?: string; salesRepId?: string; hideSued?: boolean; includeOverdue?: boolean; strictDate?: boolean; statusFilter?: string; dateBasis?: string } = {}, options: RequestInit = {}) => {
     const params = new URLSearchParams();
     if (filters.from) params.set('from', filters.from);
     if (filters.to) params.set('to', filters.to);
@@ -191,6 +193,8 @@ export const api = {
     if (filters.hideSued) params.set('hideSued', 'true');
     if (filters.includeOverdue) params.set('includeOverdue', 'true');
     if (filters.strictDate) params.set('strictDate', 'true');
+    if (filters.statusFilter) params.set('statusFilter', filters.statusFilter);
+    if (filters.dateBasis) params.set('dateBasis', filters.dateBasis);
     return requestArray<any>(`/dues?${params.toString()}`, 'dues');
   },
   createSale: (payload: any) => request<{ id: string }>('/sales', { method: 'POST', body: JSON.stringify(payload) }),

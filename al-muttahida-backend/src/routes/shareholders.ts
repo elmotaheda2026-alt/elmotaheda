@@ -108,6 +108,10 @@ async function computeShareholdersEngine(
   const totalCapital = roundMoney(
     shareholdersRows.reduce((sum: number, s: any) => sum + Number(s.capital || 0), 0)
   );
+  const totalSharePercentage = shareholdersRows.reduce(
+    (sum: number, s: any) => sum + Number(s.share_percentage || 0),
+    0
+  );
   const systemLiveRoi = totalCapital > 0 ? Number((liveNetProfit / totalCapital).toFixed(4)) : 0;
 
   // Compute time-weighted metrics for each shareholder based on their active window
@@ -153,8 +157,10 @@ async function computeShareholdersEngine(
         .reduce((sum: number, peer: any) => sum + Number(peer.capital || 0), 0)
     );
 
-    // Profit sharing ratio strictly respects each partner's assigned share_percentage
-    const profitShareRatio = Number((sharePercentage / 100).toFixed(6));
+    // Profit sharing ratio: if sum of shares > 100, normalize proportionally to prevent over-distributing profit
+    const profitShareRatio = totalSharePercentage > 100
+      ? Number((sharePercentage / totalSharePercentage).toFixed(6))
+      : Number((sharePercentage / 100).toFixed(6));
     const capitalWeightRatio = activePeersCapital > 0
       ? Number((currentCapital / activePeersCapital).toFixed(6))
       : totalCapital > 0

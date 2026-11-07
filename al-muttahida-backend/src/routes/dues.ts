@@ -24,13 +24,18 @@ export interface DueCollectionRow {
   due_date: string;
   parsed_due_date?: Date | null;
   installment_amount: number;
+  paid_amount?: number;
   remaining_amount: number;
   status: string;
   paid_at?: string;
+  effective_payment_date?: string | Date | null;
   last_payment_date?: string;
   parsed_last_payment_date?: Date | null;
   total_invoice_remaining?: number;
 }
+
+export type CollectionStatusFilter = 'unpaid' | 'paid' | 'all';
+export type CollectionDateBasis = 'actual_payment' | 'due_date';
 
 export async function getCollectionDues(params: {
   from?: string;
@@ -40,6 +45,8 @@ export async function getCollectionDues(params: {
   hideSued?: boolean;
   includeOverdue?: boolean;
   strictDate?: boolean;
+  statusFilter?: CollectionStatusFilter;
+  dateBasis?: CollectionDateBasis;
 }) {
   const db = await dbPromise;
 
@@ -48,13 +55,25 @@ export async function getCollectionDues(params: {
   const search = (params.search || '').trim();
   const salesRepId = (params.salesRepId || '').trim();
   const hideSued = Boolean(params.hideSued);
-  // Default is false: strict period filtering by default, unless includeOverdue is explicitly true
-  const includeOverdue = Boolean(params.includeOverdue) && !params.strictDate;
+  const statusFilter: CollectionStatusFilter = params.statusFilter || 'unpaid';
+  const dateBasis: CollectionDateBasis = params.dateBasis || 'actual_payment';
 
-  // Strictly exclude zero-balance or negligible remaining amounts (exclude rounding dust < 1 EGP)
-  const whereParts: string[] = ['remaining_amount >= 1.0'];
+  // includeOverdue only applies to unpaid/open installments
+  const includeOverdue = Boolean(params.includeOverdue) && !params.strictDate && statusFilter !== 'paid';
+
+  const whereParts: string[] = [];
   const args: any[] = [];
 
+  // 1. Status Filtering
+  if (statusFilter === 'unpaid') {
+    whereParts.push("status <> 'paid'");
+    whereParts.push('remaining_amount >= 1.0');
+  } else if (statusFilter === 'paid') {
+    whereParts.push("(status = 'paid' OR remaining_amount < 1.0)");
+  }
+  // If 'all', do not constrain status
+
+  // 2. Search & Rep & Legal Filtering
   if (search) {
     whereParts.push('(customer_name LIKE ? OR invoice_number LIKE ? OR customer_phone LIKE ? OR customer_address LIKE ?)');
     args.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
@@ -69,24 +88,95 @@ export async function getCollectionDues(params: {
     whereParts.push('ISNULL(is_sued, 0) = 0');
   }
 
-  // Date Filtering:
-  // 1. When includeOverdue is explicitly true: include all active unpaid debts due on or before `to`
-  if (includeOverdue) {
-    if (to) {
-      whereParts.push('(parsed_due_date IS NULL OR parsed_due_date <= ?)');
-      args.push(to);
+  // 3. Date Filtering Logic
+  if (statusFilter === 'unpaid') {
+    if (includeOverdue) {
+      if (to) {
+        whereParts.push('(parsed_due_date IS NULL OR parsed_due_date <= ?)');
+        args.push(to);
+      }
+    } else {
+      if (from && to) {
+        whereParts.push('(parsed_due_date >= ? AND parsed_due_date <= ?)');
+        args.push(from, to);
+      } else if (from) {
+        whereParts.push('(parsed_due_date >= ?)');
+        args.push(from);
+      } else if (to) {
+        whereParts.push('(parsed_due_date <= ?)');
+        args.push(to);
+      }
+    }
+  } else if (statusFilter === 'paid') {
+    if (dateBasis === 'actual_payment') {
+      if (from && to) {
+        whereParts.push('(effective_payment_date >= ? AND effective_payment_date <= ?)');
+        args.push(from, to);
+      } else if (from) {
+        whereParts.push('(effective_payment_date >= ?)');
+        args.push(from);
+      } else if (to) {
+        whereParts.push('(effective_payment_date <= ?)');
+        args.push(to);
+      }
+    } else {
+      // by due date
+      if (from && to) {
+        whereParts.push('(parsed_due_date >= ? AND parsed_due_date <= ?)');
+        args.push(from, to);
+      } else if (from) {
+        whereParts.push('(parsed_due_date >= ?)');
+        args.push(from);
+      } else if (to) {
+        whereParts.push('(parsed_due_date <= ?)');
+        args.push(to);
+      }
     }
   } else {
-    // 2. Default: Strict Period Filtering (only records that actually fall within the range)
-    if (from && to) {
-      whereParts.push('(parsed_due_date >= ? AND parsed_due_date <= ?)');
-      args.push(from, to);
-    } else if (from) {
-      whereParts.push('(parsed_due_date >= ?)');
-      args.push(from);
-    } else if (to) {
-      whereParts.push('(parsed_due_date <= ?)');
-      args.push(to);
+    // statusFilter === 'all':
+    if (dateBasis === 'due_date') {
+      if (includeOverdue) {
+        if (from && to) {
+          whereParts.push('((status = \'paid\' AND parsed_due_date >= ? AND parsed_due_date <= ?) OR (status <> \'paid\' AND (parsed_due_date IS NULL OR parsed_due_date <= ?)))');
+          args.push(from, to, to);
+        } else if (to) {
+          whereParts.push('(parsed_due_date IS NULL OR parsed_due_date <= ?)');
+          args.push(to);
+        }
+      } else {
+        if (from && to) {
+          whereParts.push('(parsed_due_date >= ? AND parsed_due_date <= ?)');
+          args.push(from, to);
+        } else if (from) {
+          whereParts.push('(parsed_due_date >= ?)');
+          args.push(from);
+        } else if (to) {
+          whereParts.push('(parsed_due_date <= ?)');
+          args.push(to);
+        }
+      }
+    } else {
+      // actual_payment: for paid records check effective_payment_date; for unpaid check parsed_due_date
+      if (includeOverdue) {
+        if (from && to) {
+          whereParts.push('((status = \'paid\' AND effective_payment_date >= ? AND effective_payment_date <= ?) OR (status <> \'paid\' AND (parsed_due_date IS NULL OR parsed_due_date <= ?)))');
+          args.push(from, to, to);
+        } else if (to) {
+          whereParts.push('((status = \'paid\' AND effective_payment_date <= ?) OR (status <> \'paid\' AND (parsed_due_date IS NULL OR parsed_due_date <= ?)))');
+          args.push(to, to);
+        }
+      } else {
+        if (from && to) {
+          whereParts.push('((status = \'paid\' AND effective_payment_date >= ? AND effective_payment_date <= ?) OR (status <> \'paid\' AND parsed_due_date >= ? AND parsed_due_date <= ?))');
+          args.push(from, to, from, to);
+        } else if (from) {
+          whereParts.push('((status = \'paid\' AND effective_payment_date >= ?) OR (status <> \'paid\' AND parsed_due_date >= ?))');
+          args.push(from, from);
+        } else if (to) {
+          whereParts.push('((status = \'paid\' AND effective_payment_date <= ?) OR (status <> \'paid\' AND parsed_due_date <= ?))');
+          args.push(to, to);
+        }
+      }
     }
   }
 
@@ -111,9 +201,18 @@ export async function getCollectionDues(params: {
         sch.due_date,
         TRY_CONVERT(date, sch.due_date) AS parsed_due_date,
         sch.amount AS installment_amount,
+        sch.paid_amount AS paid_amount,
         (sch.amount - sch.paid_amount) AS remaining_amount,
         sch.status,
         sch.paid_at,
+        COALESCE(
+          TRY_CONVERT(date, sch.paid_at),
+          TRY_CONVERT(date, p_sale.last_payment_by_sale),
+          TRY_CONVERT(date, p_cust.last_payment_by_customer),
+          TRY_CONVERT(date, sch_paid.last_sch_paid_at),
+          TRY_CONVERT(date, s.installment_start_date),
+          TRY_CONVERT(date, s.date)
+        ) AS effective_payment_date,
         COALESCE(
           p_sale.last_payment_by_sale,
           p_cust.last_payment_by_customer,
@@ -129,30 +228,28 @@ export async function getCollectionDues(params: {
           CASE WHEN s.paid > 0 THEN COALESCE(s.installment_start_date, s.date, s.created_at) ELSE NULL END
         )) AS parsed_last_payment_date,
         s.remaining AS total_invoice_remaining
-      FROM installment_schedules sch
-      INNER JOIN sales s ON s.id = sch.sale_id
-      LEFT JOIN customers c ON c.id = s.customer_id
+      FROM installment_schedules sch WITH (NOLOCK)
+      INNER JOIN sales s WITH (NOLOCK) ON s.id = sch.sale_id
+      LEFT JOIN customers c WITH (NOLOCK) ON c.id = s.customer_id
       LEFT JOIN (
         SELECT sale_id, MAX(paid_at) AS last_sch_paid_at
-        FROM installment_schedules
+        FROM installment_schedules WITH (NOLOCK)
         WHERE status = 'paid' AND paid_at IS NOT NULL
         GROUP BY sale_id
       ) sch_paid ON sch_paid.sale_id = s.id
       LEFT JOIN (
         SELECT sale_id, MAX(date) AS last_payment_by_sale
-        FROM payments
+        FROM payments WITH (NOLOCK)
         WHERE status = 'posted' AND type = 'in' AND sale_id IS NOT NULL
         GROUP BY sale_id
       ) p_sale ON p_sale.sale_id = s.id
       LEFT JOIN (
         SELECT customer_id, MAX(date) AS last_payment_by_customer
-        FROM payments
+        FROM payments WITH (NOLOCK)
         WHERE status = 'posted' AND type = 'in' AND customer_id IS NOT NULL
         GROUP BY customer_id
       ) p_cust ON p_cust.customer_id = s.customer_id
       WHERE s.status <> 'cancelled'
-        AND sch.status <> 'paid'
-        AND (sch.amount - sch.paid_amount) >= 1.0
 
       UNION ALL
 
@@ -179,13 +276,19 @@ export async function getCollectionDues(params: {
           TRY_CONVERT(date, s.created_at)
         ) AS parsed_due_date,
         COALESCE(s.monthly_installment_amount, s.total) AS installment_amount,
+        s.paid AS paid_amount,
         CASE
           WHEN s.monthly_installment_amount > 0 AND s.remaining < s.monthly_installment_amount THEN s.remaining
           WHEN s.monthly_installment_amount > 0 THEN s.monthly_installment_amount
           ELSE s.remaining
         END AS remaining_amount,
-        CASE WHEN s.paid > 0 THEN 'partial' ELSE 'unpaid' END AS status,
+        CASE WHEN s.remaining < 1.0 THEN 'paid' WHEN s.paid > 0 THEN 'partial' ELSE 'unpaid' END AS status,
         NULL AS paid_at,
+        COALESCE(
+          TRY_CONVERT(date, p_sale.last_payment_by_sale),
+          TRY_CONVERT(date, p_cust.last_payment_by_customer),
+          TRY_CONVERT(date, s.date)
+        ) AS effective_payment_date,
         COALESCE(
           p_sale.last_payment_by_sale,
           p_cust.last_payment_by_customer,
@@ -197,29 +300,28 @@ export async function getCollectionDues(params: {
           CASE WHEN s.paid > 0 THEN COALESCE(s.installment_start_date, s.date, s.created_at) ELSE NULL END
         )) AS parsed_last_payment_date,
         s.remaining AS total_invoice_remaining
-      FROM sales s
-      LEFT JOIN customers c ON c.id = s.customer_id
+      FROM sales s WITH (NOLOCK)
+      LEFT JOIN customers c WITH (NOLOCK) ON c.id = s.customer_id
       LEFT JOIN (
         SELECT sale_id, MAX(date) AS last_payment_by_sale
-        FROM payments
+        FROM payments WITH (NOLOCK)
         WHERE status = 'posted' AND type = 'in' AND sale_id IS NOT NULL
         GROUP BY sale_id
       ) p_sale ON p_sale.sale_id = s.id
       LEFT JOIN (
         SELECT customer_id, MAX(date) AS last_payment_by_customer
-        FROM payments
+        FROM payments WITH (NOLOCK)
         WHERE status = 'posted' AND type = 'in' AND customer_id IS NOT NULL
         GROUP BY customer_id
       ) p_cust ON p_cust.customer_id = s.customer_id
       WHERE s.status <> 'cancelled'
-        AND s.remaining >= 1.0
         AND NOT EXISTS (
-          SELECT 1 FROM installment_schedules WHERE sale_id = s.id
+          SELECT 1 FROM installment_schedules WITH (NOLOCK) WHERE sale_id = s.id
         )
     )
     SELECT *
     FROM AllDues
-    WHERE ${whereParts.join(' AND ')}
+    ${whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : ''}
     ORDER BY parsed_due_date ASC, customer_name ASC, month_index ASC
   `;
 
@@ -245,6 +347,12 @@ export async function getCollectionDues(params: {
           : String(row.parsed_last_payment_date).slice(0, 10))
       : row.last_payment_date ? formatDate(row.last_payment_date) : undefined;
 
+    const isoEffectivePaymentDate = row.effective_payment_date
+      ? (row.effective_payment_date instanceof Date
+          ? row.effective_payment_date.toISOString().slice(0, 10)
+          : String(row.effective_payment_date).slice(0, 10))
+      : undefined;
+
     return {
       saleId: row.sale_id,
       invoiceNumber: row.invoice_number,
@@ -257,9 +365,10 @@ export async function getCollectionDues(params: {
       installmentLabel: row.installment_label,
       dueDate: isoDueDate,
       installmentAmount: Number(row.installment_amount),
+      paidAmount: Number(row.paid_amount || (row.status === 'paid' ? row.installment_amount : (row.installment_amount - row.remaining_amount))),
       remainingAmount: Math.max(Number(row.remaining_amount), 0),
       status: row.status,
-      paidAt: row.paid_at || undefined,
+      paidAt: row.paid_at || isoEffectivePaymentDate || undefined,
       guarantors: parsedGuarantors,
       salesRepId: row.sales_rep_id || undefined,
       salesRepName: row.sales_rep_name || undefined,
@@ -280,6 +389,8 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
       hideSued: String(req.query.hideSued) === 'true',
       includeOverdue: String(req.query.includeOverdue) === 'true',
       strictDate: String(req.query.strictDate) === 'true',
+      statusFilter: typeof req.query.statusFilter === 'string' ? (req.query.statusFilter as CollectionStatusFilter) : undefined,
+      dateBasis: typeof req.query.dateBasis === 'string' ? (req.query.dateBasis as CollectionDateBasis) : undefined,
     });
     return res.json(data);
   } catch (error: any) {

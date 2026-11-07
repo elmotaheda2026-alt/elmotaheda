@@ -151,69 +151,82 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
   try {
     const db = await dbPromise;
 
-    // Verify supplier exists
-    const supplier = await db.get('SELECT id FROM suppliers WHERE id = ?', data.supplierId);
-    if (!supplier) {
-      return res.status(400).json({ message: 'المورد المحدد غير موجود في النظام' });
-    }
+    await db.withTransaction(async (txDb) => {
+      // Verify supplier exists
+      const supplier = await txDb.get('SELECT id FROM suppliers WHERE id = ?', data.supplierId);
+      if (!supplier) {
+        throw new Error('المورد المحدد غير موجود في النظام');
+      }
 
-    // Insert purchase invoice
-    await db.run(
-      `INSERT INTO purchases (
-        id, invoice_number, supplier_id, supplier_name, subtotal, discount, tax,
-        total, paid, remaining, status, date, notes, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      data.invoiceNumber,
-      data.supplierId,
-      data.supplierName,
-      data.subtotal,
-      data.discount,
-      data.tax,
-      data.total,
-      data.paid,
-      remaining,
-      status,
-      data.date,
-      data.notes || null,
-      req.user?.name || 'system',
-      now,
-    );
-
-    // Insert purchase items and update product stock
-    for (const item of data.items) {
-      const itemId = uid();
-      await db.run(
-        `INSERT INTO purchase_items (
-          id, purchase_id, product_id, product_name, barcode, quantity, unit_price, discount, tax, total
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        itemId,
+      // Insert purchase invoice
+      await txDb.run(
+        `INSERT INTO purchases (
+          id, invoice_number, supplier_id, supplier_name, subtotal, discount, tax,
+          total, paid, remaining, status, date, notes, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
-        item.productId,
-        item.productName,
-        item.barcode || null,
-        item.quantity,
-        item.unitPrice,
-        item.discount,
-        item.tax,
-        item.total,
+        data.invoiceNumber,
+        data.supplierId,
+        data.supplierName,
+        data.subtotal,
+        data.discount,
+        data.tax,
+        data.total,
+        data.paid,
+        remaining,
+        status,
+        data.date,
+        data.notes || null,
+        req.user?.name || 'system',
+        now,
       );
 
-      // No warehouse/inventory quantity increase
-    }
+      // Insert purchase items
+      for (const item of data.items) {
+        const itemId = uid();
+        // Insert purchase item
+        await txDb.run(
+          `INSERT INTO purchase_items (
+            id, purchase_id, product_id, product_name, barcode, quantity, unit_price, discount, tax, total
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          itemId,
+          id,
+          item.productId,
+          item.productName,
+          item.barcode || null,
+          item.quantity,
+          item.unitPrice,
+          item.discount,
+          item.tax,
+          item.total,
+        );
 
-    // Update supplier balance (add the remaining unpaid amount to their creditor balance)
-    // In our system, supplier balance represents what we owe them.
-    // If we purchase goods and haven't fully paid, our remaining balance to them increases.
-    await db.run(
-      `UPDATE suppliers
-       SET balance = balance + ?,
-           updated_at = ?
-       WHERE id = ?`,
-      remaining,
-      now,
-      data.supplierId,
-    );
+        // Increase product inventory in SQL Server and update purchase price if provided
+        await txDb.run(
+          `UPDATE products
+           SET quantity = quantity + ?,
+               purchase_price = CASE WHEN ? > 0 THEN ? ELSE purchase_price END,
+               updated_at = ?
+           WHERE id = ?`,
+          item.quantity,
+          item.unitPrice,
+          item.unitPrice,
+          now,
+          item.productId,
+        );
+      }
+
+      // Update supplier balance (add the remaining unpaid amount to their creditor balance)
+      await txDb.run(
+        `UPDATE suppliers
+         SET balance = balance + ?,
+             updated_at = ?
+         WHERE id = ?`,
+        remaining,
+        now,
+        data.supplierId,
+      );
+    });
 
     await audit('purchase.create', 'purchase', id, req.user?.name || 'system', {
       id,
@@ -224,6 +237,9 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
 
     return res.status(201).json({ id });
   } catch (error: any) {
+    if (error.message === 'المورد المحدد غير موجود في النظام') {
+      return res.status(400).json({ message: error.message });
+    }
     if (error.message?.includes('UNIQUE') || error.message?.includes('violates UNIQUE constraint')) {
       return res.status(409).json({ message: 'رقم فاتورة الشراء مسجل بالفعل' });
     }

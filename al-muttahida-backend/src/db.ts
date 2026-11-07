@@ -1075,6 +1075,40 @@ export async function initDb(): Promise<void> {
     // eslint-disable-next-line no-console
     console.error('Error refreshing dashboard cache:', err);
   }
+
+  // Enforce foreign key constraints
+  try {
+    await db.run(`
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_sales_customers')
+        ALTER TABLE sales ADD CONSTRAINT FK_sales_customers FOREIGN KEY (customer_id) REFERENCES customers(id);
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_sale_items_sales')
+        ALTER TABLE sale_items ADD CONSTRAINT FK_sale_items_sales FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE;
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_installment_schedules_sales')
+        ALTER TABLE installment_schedules ADD CONSTRAINT FK_installment_schedules_sales FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE;
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_payments_customers')
+        ALTER TABLE payments ADD CONSTRAINT FK_payments_customers FOREIGN KEY (customer_id) REFERENCES customers(id);
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_payments_sales')
+        ALTER TABLE payments ADD CONSTRAINT FK_payments_sales FOREIGN KEY (sale_id) REFERENCES sales(id);
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_purchase_items_purchases')
+        ALTER TABLE purchase_items ADD CONSTRAINT FK_purchase_items_purchases FOREIGN KEY (purchase_id) REFERENCES purchases(id) ON DELETE CASCADE;
+      IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_purchases_suppliers')
+        ALTER TABLE purchases ADD CONSTRAINT FK_purchases_suppliers FOREIGN KEY (supplier_id) REFERENCES suppliers(id);
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error applying foreign key constraints:', err);
+  }
+
+  // Normalize any negative zero rounding artifacts
+  try {
+    await db.run(`
+      UPDATE customers SET balance = 0 WHERE balance < 0 AND balance > -1;
+      UPDATE sales SET remaining = 0 WHERE remaining < 0 AND remaining > -1;
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error normalizing negative rounding balances:', err);
+  }
 }
 
 

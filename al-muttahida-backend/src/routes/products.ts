@@ -119,6 +119,11 @@ router.post('/', requireAnyPermission('inventory:manage', 'sales:write'), async 
   }
 
   const data = parsed.data;
+  if (data.salePrice < data.purchasePrice && data.purchasePrice > 0) {
+    return res.status(400).json({
+      message: `سعر البيع (${data.salePrice} ج) لا يمكن أن يكون أقل من سعر الشراء والتكلفة (${data.purchasePrice} ج). يرجى مراجعة الأسعار لمنع البيع بخسارة.`
+    });
+  }
   const id = uid();
   const now = new Date().toISOString();
   const barcode = data.barcode?.trim() || id;
@@ -167,6 +172,11 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
   }
 
   const data = parsed.data;
+  if (data.salePrice < data.purchasePrice && data.purchasePrice > 0) {
+    return res.status(400).json({
+      message: `سعر البيع (${data.salePrice} ج) لا يمكن أن يكون أقل من سعر الشراء والتكلفة (${data.purchasePrice} ج). يرجى مراجعة الأسعار لمنع البيع بخسارة.`
+    });
+  }
   const now = new Date().toISOString();
 
   try {
@@ -218,6 +228,20 @@ router.delete('/:id', requirePermission('inventory:manage'), requireAdmin, async
     const existing = await db.get('SELECT id FROM products WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Product not found' });
+    }
+
+    const linkedItems = await db.get<{ count: number }>(
+      `SELECT (
+        (SELECT COUNT(*) FROM sale_items WHERE product_id = ?) +
+        (SELECT COUNT(*) FROM purchase_items WHERE product_id = ?)
+      ) as count`,
+      req.params.id,
+      req.params.id
+    );
+    if (linkedItems && Number(linkedItems.count || 0) > 0) {
+      return res.status(400).json({
+        message: 'لا يمكن حذف هذا الصنف لوجود حركات مبيعات أو مشتريات تاريخية مرتبطة به في النظام.'
+      });
     }
 
     await db.run('DELETE FROM products WHERE id = ?', req.params.id);

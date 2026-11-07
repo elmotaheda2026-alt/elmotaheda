@@ -43,6 +43,11 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
     purchases.push(newPurchase);
     setStorage(DB_KEYS.PURCHASES, purchases);
 
+    // Update local product quantities immediately
+    normalizedPurchase.items.forEach((item) => {
+      updateProductQuantity(item.productId, item.quantity);
+    });
+
     return newPurchase;
   }
 

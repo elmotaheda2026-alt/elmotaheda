@@ -94,7 +94,7 @@ const menuGroups: {
     items: [
       { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read', adminOnly: true },
       { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'payments:read', adminOnly: true },
-      { icon: PieChart, label: 'حسابات الشركاء', path: '/shareholders', permission: 'shareholders:manage' },
+      { icon: PieChart, label: 'الشركاء والمساهمين', path: '/shareholders', permission: 'shareholders:manage' },
     ],
   },
   {

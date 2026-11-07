@@ -27,9 +27,7 @@ import {
   getOpeningBalances,
   saveOpeningBalances,
 } from '../lib/storage';
-import { api, isApiMode } from '../lib/apiClient';
-
-const API_BASE = (window as any).__API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
+import { api, isApiMode, API_BASE } from '../lib/apiClient';
 
 async function fetchNetworkInfo(retries = 3, delayMs = 800) {
   for (let attempt = 1; attempt <= retries; attempt++) {

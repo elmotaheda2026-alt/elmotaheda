@@ -6,9 +6,9 @@ import { uid } from '../utils.js';
 import { audit } from '../audit.js';
 
 const router = Router();
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth);
 
-router.post('/close', requirePermission('closing:write'), async (req: AuthedRequest, res) => {
+router.post('/close', requirePermission('closing:write'), requireAdmin, async (req: AuthedRequest, res) => {
   const schema = z.object({
     periodType: z.enum(['daily', 'monthly']),
     periodDate: z.string().min(7),
@@ -45,6 +45,37 @@ router.post('/close', requirePermission('closing:write'), async (req: AuthedRequ
   }
   await audit('period.close', 'closing_period', existing?.id || 'new', req.user?.name || 'system', parsed.data);
   return res.json({ message: 'Closed' });
+});
+
+router.post('/reopen', requirePermission('closing:write'), requireAdmin, async (req: AuthedRequest, res) => {
+  const schema = z.object({
+    periodType: z.enum(['daily', 'monthly']),
+    periodDate: z.string().min(7),
+    reason: z.string().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: 'بيانات غير صالحة' });
+
+  const db = await dbPromise;
+  const existing = await db.get<{ id: string; status: string }>(
+    'SELECT id, status FROM closing_periods WHERE period_type = ? AND period_date = ?',
+    parsed.data.periodType,
+    parsed.data.periodDate,
+  );
+  if (!existing || existing.status !== 'closed') {
+    return res.status(404).json({ message: 'هذه الفترة غير مغلقة حالياً' });
+  }
+
+  await db.run(
+    `UPDATE closing_periods
+     SET status = 'open', closed_by = NULL, closed_at = NULL, notes = ?
+     WHERE id = ?`,
+    parsed.data.reason ? `تم إعادة الفتح بواسطة المدير: ${parsed.data.reason}` : 'تم إعادة الفتح بواسطة المدير العام',
+    existing.id,
+  );
+
+  await audit('period.reopen', 'closing_period', existing.id, req.user?.name || 'system', parsed.data);
+  return res.json({ message: 'تم إعادة فتح الفترة المالية بنجاح' });
 });
 
 router.get('/', requirePermission('reports:read'), async (_req, res) => {

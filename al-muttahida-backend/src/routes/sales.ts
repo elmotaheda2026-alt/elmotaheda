@@ -372,10 +372,9 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
 
     await db.run(
       `UPDATE products
-       SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
+       SET quantity = quantity - ?,
            updated_at = ?
        WHERE id = ? AND fulfillment_type = 'stocked'`,
-      item.quantity,
       item.quantity,
       now,
       item.productId,
@@ -390,12 +389,13 @@ async function insertInstallmentSchedules(db: Awaited<typeof dbPromise>, saleId:
 
   const months = data.financing.installmentMonths;
   const startDate = data.financing.installmentStartDate || data.date;
-  const baseAmount = Number((remaining / months).toFixed(2));
-  let remainingAmount = remaining;
+  const roundedRemaining = Math.round(remaining);
+  const baseAmount = Math.round(roundedRemaining / months);
+  let remainingAmount = roundedRemaining;
 
   for (let index = 0; index < months; index++) {
-    const amount = index === months - 1 ? Number(remainingAmount.toFixed(2)) : baseAmount;
-    remainingAmount = Number((remainingAmount - amount).toFixed(2));
+    const amount = index === months - 1 ? remainingAmount : baseAmount;
+    remainingAmount = remainingAmount - amount;
 
     await db.run(
       `INSERT INTO installment_schedules (id, sale_id, month_index, due_date, amount, paid_amount, status)
@@ -525,12 +525,44 @@ router.get('/collection-due', requirePermission('sales:read'), async (req, res) 
       hideSued: String(req.query.hideSued) === 'true',
       includeOverdue: String(req.query.includeOverdue) === 'true',
       strictDate: String(req.query.strictDate) === 'true',
+      statusFilter: typeof req.query.statusFilter === 'string' ? (req.query.statusFilter as any) : undefined,
+      dateBasis: typeof req.query.dateBasis === 'string' ? (req.query.dateBasis as any) : undefined,
     });
     return res.json(data);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
 });
+async function generateNextSaleInvoiceNumber(db: any): Promise<string> {
+  const settings = await db.get('SELECT TOP 1 invoice_prefix FROM settings');
+  const prefix = settings?.invoice_prefix || 'PB';
+
+  const rows = (await db.all(
+    `SELECT TOP 100 invoice_number FROM sales WHERE invoice_number LIKE ? ORDER BY created_at DESC`,
+    `${prefix}-%`
+  )) as { invoice_number: string }[];
+  let maxNum = 1000;
+  for (const row of rows) {
+    const parts = (row.invoice_number || '').split('-');
+    const lastPart = parts[parts.length - 1];
+    const n = parseInt(lastPart, 10);
+    if (!isNaN(n) && n > maxNum) {
+      maxNum = n;
+    }
+  }
+  return `${prefix}-${maxNum + 1}`;
+}
+
+router.get('/next-invoice-number', requirePermission('sales:read'), async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    const invoiceNumber = await generateNextSaleInvoiceNumber(db);
+    return res.json({ invoiceNumber });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 router.get('/:id', requirePermission('sales:read'), async (req, res) => {
   try {
     const sale = await getMappedSale(req.params.id);
@@ -575,6 +607,12 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
     const customer = await db.get('SELECT id FROM customers WHERE id = ?', data.customerId);
     if (!customer) {
       return res.status(400).json({ message: 'Customer not found' });
+    }
+
+    // Auto-generate next invoice number if missing, empty or colliding with existing record
+    const existingInvoice = await db.get('SELECT 1 FROM sales WHERE invoice_number = ?', data.invoiceNumber);
+    if (existingInvoice || !data.invoiceNumber || !data.invoiceNumber.trim()) {
+      data.invoiceNumber = await generateNextSaleInvoiceNumber(db);
     }
 
     await db.withTransaction(async (txDb: typeof db) => {
