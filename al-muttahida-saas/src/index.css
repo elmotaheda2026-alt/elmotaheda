@@ -325,3 +325,20 @@ section[class*="rounded"], div[class*="rounded-[24px]"], div[class*="rounded-[26
     display: none !important;
   }
 }
+
+/* High-tech indeterminate loading progress animation */
+@keyframes indeterminate-bar {
+  0% {
+    transform: translateX(120%) scaleX(0.2);
+  }
+  50% {
+    transform: translateX(0%) scaleX(0.85);
+  }
+  100% {
+    transform: translateX(-120%) scaleX(0.2);
+  }
+}
+
+.animate-indeterminate-bar {
+  animation: indeterminate-bar 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}

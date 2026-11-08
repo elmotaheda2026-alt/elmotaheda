@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Receipt,
@@ -7,39 +7,20 @@ import {
   Banknote,
   ClipboardList,
   PieChart,
+  Calculator,
   Plus,
   Calendar,
-  CheckCircle2,
-  AlertCircle,
-  Wifi,
-  WifiOff,
   ArrowLeft,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { isAdmin } from '../lib/permissions';
-import { checkBackendHealth } from '../lib/apiClient';
+import CompanyLogo from '../components/CompanyLogo';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user, settings } = useAuth();
   const todayStr = new Date().toISOString().split('T')[0];
-
-  const [isConnected, setIsConnected] = useState<boolean | null>(true);
-
-  useEffect(() => {
-    let active = true;
-    const testConnection = async () => {
-      const ok = await checkBackendHealth();
-      if (active) setIsConnected(ok);
-    };
-    void testConnection();
-    const interval = window.setInterval(testConnection, 10000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, []);
 
   const roleLabel =
     user?.role === 'admin'
@@ -87,29 +68,40 @@ export default function Dashboard() {
       iconBg: 'bg-rose-50 text-rose-600 border-rose-100',
     },
     {
-      title: 'التقارير الشاملة',
-      description: 'عرض تقارير الحركة اليومية',
-      path: '/reports',
-      icon: PieChart,
+      title: 'التقارير والقيود المالية',
+      description: 'متابعة الأرباح والسيولة وميزان المراجعة',
+      path: '/accounts',
+      icon: Calculator,
       iconBg: 'bg-indigo-50 text-indigo-600 border-indigo-100',
       adminOnly: true,
     },
-  ].filter((card) => !card.adminOnly || isAdmin(user));
+  ].filter((card) => !card.adminOnly || isAdmin(user) || user?.role === 'manager');
 
   return (
     <div className="space-y-6 pb-6 animate-fadeIn">
-      {/* 1. Executive Modern Header Card */}
-      <section className="relative overflow-hidden rounded-2xl bg-white p-6 sm:p-7 border border-slate-200/90 shadow-2xs">
+      {/* 1. Executive Branded Hero Section with Ambient Background */}
+      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-slate-900 via-indigo-950 to-blue-950 p-6 sm:p-7 border border-slate-800/80 shadow-md text-white">
+        {/* Atmospheric Ambient Glows */}
+        <div className="absolute -top-24 -left-20 w-80 h-80 rounded-full bg-blue-500/20 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -right-20 w-80 h-80 rounded-full bg-indigo-500/25 blur-3xl pointer-events-none" />
+        {/* Subtle Geometric Dot Pattern */}
+        <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:20px_20px] pointer-events-none" />
+
+        {/* Decorative Brand Emblem Watermark in Background */}
+        <div className="absolute left-6 -bottom-6 opacity-10 pointer-events-none scale-150 rotate-12 select-none hidden md:block">
+          <CompanyLogo size={160} />
+        </div>
+
         <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-2.5 max-w-2xl">
-            <div className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 border border-slate-200">
-              <Calendar size={14} className="text-slate-500" />
+            <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-1 text-xs font-bold text-blue-200 border border-white/15 backdrop-blur-md shadow-xs">
+              <Calendar size={14} className="text-blue-300" />
               <span>{formatDateDisplay(todayStr)}</span>
             </div>
-            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-slate-900">
+            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-white drop-shadow-xs">
               {settings.companyName || 'شركة المتحدة'} لإدارة المبيعات والحسابات
             </h1>
-            <p className="text-sm font-medium text-slate-500 leading-relaxed">
+            <p className="text-sm font-medium text-slate-300 leading-relaxed">
               مرحباً بك، {user?.name || roleLabel} 👋 — بيئة عمل مخصصة لإدارة العمليات والمبيعات اليومية بسرعة وسهولة.
             </p>
           </div>
@@ -118,7 +110,7 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => navigate('/invoices')}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white transition-all hover:bg-blue-700 active:scale-98 shadow-sm shadow-blue-500/20 cursor-pointer"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 px-5 py-3 text-sm font-bold text-white transition-all hover:shadow-lg hover:shadow-blue-500/30 active:scale-98 shadow-sm cursor-pointer border border-white/20"
             >
               <Plus size={18} />
               <span>إصدار فاتورة جديدة</span>
@@ -156,21 +148,6 @@ export default function Dashboard() {
             );
           })}
         </div>
-      </section>
-
-      {/* 3. Connection Status Footer */}
-      <section className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white px-5 py-3 text-xs font-bold shadow-none">
-        {isConnected ? (
-          <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50/80 px-3 py-1.5 rounded-lg border border-emerald-100">
-            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-            <span>النظام متصل — التزامن وقاعدة البيانات نشطة</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-rose-700 bg-rose-50/80 px-3 py-1.5 rounded-lg border border-rose-100">
-            <AlertCircle size={16} className="text-rose-600 shrink-0" />
-            <span>غير متصل بالخادم — تأكد من تشغيل السيرفر</span>
-          </div>
-        )}
       </section>
     </div>
   );

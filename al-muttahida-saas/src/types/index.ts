@@ -58,6 +58,8 @@ export interface Customer {
   balanceType: 'debtor';
   notes?: string;
   image?: string;
+  idCardFront?: string;
+  idCardBack?: string;
   guarantors: [Guarantor | null, Guarantor | null, Guarantor | null];
   isSued?: boolean;
   suedDate?: string;
@@ -91,6 +93,8 @@ export interface Product {
   quantity: number;
   minQuantity: number;
   image?: string;
+  idCardFront?: string;
+  idCardBack?: string;
   description?: string;
   createdAt: string;
   updatedAt: string;
@@ -106,6 +110,7 @@ export interface SaleItem {
   discount: number;
   tax: number;
   total: number;
+  fulfillmentType?: 'stocked' | 'on_demand';
 }
 
 export interface InstallmentSchedule {

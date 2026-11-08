@@ -348,6 +348,12 @@ export async function initDb(): Promise<void> {
       OR sued_date LIKE '%1970%'
       OR sued_date LIKE '0001%'
     );
+
+    -- Ensure id_card_front and id_card_back columns exist
+    IF COL_LENGTH('customers', 'id_card_front') IS NULL
+      ALTER TABLE customers ADD id_card_front NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('customers', 'id_card_back') IS NULL
+      ALTER TABLE customers ADD id_card_back NVARCHAR(MAX) NULL;
   END
 
   -- 3. Suppliers
@@ -489,6 +495,7 @@ export async function initDb(): Promise<void> {
     total DECIMAL(18,2) NOT NULL
   );
   IF COL_LENGTH('sale_items', 'unit_cost') IS NULL ALTER TABLE sale_items ADD unit_cost DECIMAL(18,2) NOT NULL DEFAULT 0;
+  IF COL_LENGTH('sale_items', 'fulfillment_type') IS NULL ALTER TABLE sale_items ADD fulfillment_type NVARCHAR(20) NULL DEFAULT 'on_demand';
   IF COL_LENGTH('sale_items', 'product_name') IS NOT NULL ALTER TABLE sale_items ALTER COLUMN product_name NVARCHAR(MAX);
 
   IF COL_LENGTH('sale_items', 'barcode') IS NOT NULL ALTER TABLE sale_items ALTER COLUMN barcode NVARCHAR(100) NULL;

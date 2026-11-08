@@ -3,11 +3,13 @@ import { Plus, Edit, Trash2, Search, Phone, MapPin, DollarSign, Truck } from 'lu
 import { Supplier } from '../types';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier, syncSuppliers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 
 export default function Suppliers() {
+  const { confirmDialog, showToast } = useDialog();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -18,9 +20,10 @@ export default function Suppliers() {
     phone: '',
     address: '',
     notes: '',
+    balance: 0,
   });
   const { settings, user } = useAuth();
-  const canDelete = isAdmin(user);
+  const canDelete = isAdmin(user) && user?.role !== 'manager';
 
   useEffect(() => {
     loadSuppliers();
@@ -78,28 +81,38 @@ export default function Suppliers() {
       phone: supplier.phone,
       address: supplier.address,
       notes: supplier.notes || '',
+      balance: Number(supplier.balance || 0),
     });
     setShowModal(true);
   };
 
   const handleDelete = async (supplier: Supplier) => {
     if (Number(supplier.balance || 0) !== 0) {
-      alert('لا يمكن حذف المورد قبل تصفية رصيد حساب المورد.');
+      showToast('لا يمكن حذف المورد قبل تصفية رصيد حسابه.', 'warning');
       return;
     }
 
-    if (!confirm('هل أنت متأكد من حذف هذا المورد؟ سيتم حذف المشتريات والمدفوعات المرتبطة به من النظام.')) return;
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد حذف المورد',
+      message: `هل أنت متأكد من حذف المورد "${supplier.name}"؟`,
+      subMessage: 'سيتم حذف المشتريات والمدفوعات المرتبطة به من النظام نهائياً.',
+      confirmText: 'نعم، حذف المورد',
+      cancelText: 'إلغاء',
+      type: 'danger',
+    });
+    if (!isConfirmed) return;
 
     try {
       await deleteSupplier(supplier.id);
       await loadSuppliers();
+      showToast('تم حذف المورد بنجاح', 'success');
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء حذف المورد.');
+      showToast(err.message || 'حدث خطأ أثناء حذف المورد.', 'error');
     }
   };
 
   const resetForm = () => {
-    setFormData({ name: '', phone: '', address: '', notes: '' });
+    setFormData({ name: '', phone: '', address: '', notes: '', balance: 0 });
   };
 
   const filteredSuppliers = suppliers.filter(supplier =>
@@ -129,13 +142,15 @@ export default function Suppliers() {
             />
           </div>
         </div>
-        <button
-          onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs"
-        >
-          <Plus size={15} />
-          <span>+ إضافة مورد</span>
-        </button>
+        {user?.role !== 'manager' && (
+          <button
+            onClick={() => { resetForm(); setShowModal(true); }}
+            className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+          >
+            <Plus size={15} />
+            <span>+ إضافة مورد</span>
+          </button>
+        )}
       </div>
 
       {/* Suppliers High-Density Table */}
@@ -160,8 +175,8 @@ export default function Suppliers() {
                 filteredSuppliers.map(supplier => (
                   <tr
                     key={supplier.id}
-                    onDoubleClick={() => hasPermission(user, 'sales:write') && handleEdit(supplier)}
-                    title="انقر مرتين للتعديل"
+                    onDoubleClick={() => hasPermission(user, 'sales:write') && user?.role !== 'manager' && handleEdit(supplier)}
+                    title={user?.role !== 'manager' ? 'انقر مرتين للتعديل' : ''}
                     className="group cursor-pointer hover:bg-slate-50 transition-colors"
                   >
                     <td className="py-2.5 px-4 font-bold text-slate-900 text-xs md:text-sm">{supplier.name}</td>
@@ -174,7 +189,7 @@ export default function Suppliers() {
                     </td>
                     <td className="py-2.5 px-4 text-center">
                       <div className="erp-icon-actions">
-                        {hasPermission(user, 'sales:write') && (
+                        {hasPermission(user, 'sales:write') && user?.role !== 'manager' && (
                           <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="تعديل">
                             <Edit size={15} />
                           </button>
@@ -183,6 +198,9 @@ export default function Suppliers() {
                           <button onClick={() => handleDelete(supplier)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors" title="حذف">
                             <Trash2 size={15} />
                           </button>
+                        )}
+                        {user?.role === 'manager' && (
+                          <span className="text-xs text-slate-400 font-bold">—</span>
                         )}
                       </div>
                     </td>
@@ -236,6 +254,21 @@ export default function Suppliers() {
                   onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                   className="input-ui text-xs h-9 w-full"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">
+                  الرصيد الافتتاحي (المستحق للمورد حالياً إن وُجد)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={formData.balance || ''}
+                  onChange={(e) => setFormData({ ...formData, balance: Number(e.target.value) || 0 })}
+                  className="input-ui text-xs h-9 w-full font-bold"
+                  placeholder="0.00"
+                />
+                <p className="text-[10px] text-slate-400 mt-0.5">المبلغ المستحق لهذا المورد من حسابات الفترة السابقة</p>
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">ملاحظات</label>

@@ -4,11 +4,13 @@ import { SalesRep } from '../types';
 import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSalesReps } from '../lib/storage';
 import { isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { isAdmin } from '../lib/permissions';
 
 export default function SalesReps() {
   const { user } = useAuth();
-  const canDelete = isAdmin(user);
+  const { confirmDialog, showToast } = useDialog();
+  const canDelete = isAdmin(user) && user?.role !== 'manager';
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingRep, setEditingRep] = useState<SalesRep | null>(null);
@@ -88,10 +90,18 @@ export default function SalesReps() {
     setShowModal(true);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('هل أنت متأكد من حذف هذا المندوب؟')) {
+  const handleDelete = async (id: string) => {
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد حذف المندوب',
+      message: 'هل أنت متأكد من حذف هذا المندوب؟',
+      confirmText: 'نعم، حذف المندوب',
+      cancelText: 'إلغاء',
+      type: 'danger',
+    });
+    if (isConfirmed) {
       deleteSalesRep(id);
       setReps(getSalesReps());
+      showToast('تم حذف المندوب بنجاح', 'success');
     }
   };
 
@@ -124,13 +134,15 @@ export default function SalesReps() {
             />
           </div>
         </div>
-        <button
-          onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs shrink-0 cursor-pointer"
-        >
-          <Plus size={16} />
-          <span>إضافة مندوب</span>
-        </button>
+        {user?.role !== 'manager' && (
+          <button
+            onClick={() => { resetForm(); setShowModal(true); }}
+            className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs shrink-0 cursor-pointer"
+          >
+            <Plus size={16} />
+            <span>إضافة مندوب</span>
+          </button>
+        )}
       </div>
 
       {/* Reps Table */}
@@ -158,7 +170,12 @@ export default function SalesReps() {
                 filteredReps.map(rep => {
                   const percentage = rep.target > 0 ? Math.min((rep.achieved / rep.target) * 100, 100) : 0;
                   return (
-                    <tr key={rep.id} onDoubleClick={() => handleEdit(rep)} className="group cursor-default hover:bg-slate-50/50 transition-colors">
+                    <tr
+                      key={rep.id}
+                      onDoubleClick={() => user?.role !== 'manager' && handleEdit(rep)}
+                      title={user?.role !== 'manager' ? 'انقر مرتين للتعديل' : ''}
+                      className="group cursor-default hover:bg-slate-50/50 transition-colors"
+                    >
                       <td className="px-5 py-3">
                         <span className="font-bold text-slate-900 text-sm">{rep.name}</span>
                       </td>
@@ -181,13 +198,18 @@ export default function SalesReps() {
                       </td>
                       <td className="px-5 py-3 text-center">
                         <div className="erp-icon-actions">
-                          <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="تعديل">
-                            <Edit size={15} />
-                          </button>
+                          {user?.role !== 'manager' && (
+                            <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="تعديل">
+                              <Edit size={15} />
+                            </button>
+                          )}
                           {canDelete && (
-                            <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="حذف">
+                            <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer" title="حذف">
                               <Trash2 size={15} />
                             </button>
+                          )}
+                          {user?.role === 'manager' && (
+                            <span className="text-xs text-slate-400 font-bold">—</span>
                           )}
                         </div>
                       </td>

@@ -1,4 +1,4 @@
-import { Customer } from '../../types';
+import { Customer, Sale } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
 import { api, isApiMode } from '../apiClient';
 
@@ -100,9 +100,19 @@ export async function updateCustomer(id: string, updates: Partial<Customer>): Pr
 }
 
 export async function deleteCustomer(id: string): Promise<boolean> {
+  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+  const target = customers.find(c => c.id === id);
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const activeSales = sales.filter(s =>
+    s.status !== 'cancelled' &&
+    (s.customerId === id || (target && s.customerName?.trim() === target.name?.trim()))
+  );
+  if (activeSales.length > 0) {
+    throw new Error(`لا يمكن حذف هذا العميل لوجود (${activeSales.length}) فاتورة/تعاقد ساري مسجل باسمه في النظام.`);
+  }
+
   if (isApiMode()) {
     await api.deleteCustomer(id);
-    const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
     const filtered = customers.filter(c => c.id !== id);
     if (filtered.length !== customers.length) {
       setStorage(DB_KEYS.CUSTOMERS, filtered);
@@ -111,7 +121,6 @@ export async function deleteCustomer(id: string): Promise<boolean> {
     return false;
   }
 
-  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
   const filtered = customers.filter(c => c.id !== id);
   if (filtered.length !== customers.length) {
     setStorage(DB_KEYS.CUSTOMERS, filtered);

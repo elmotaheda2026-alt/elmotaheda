@@ -177,8 +177,8 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
   transactions.push(newTx);
   setStorage(DB_KEYS.SHAREHOLDER_TRANSACTIONS, transactions);
   
-  // Integrate with Treasury (Payments)
-  if (data.type === 'capital_deposit' || data.type === 'capital_withdrawal' || data.type === 'profit_withdrawal') {
+  // Integrate with Treasury (Payments) if affectsTreasury is true
+  if ((data as any).affectsTreasury !== false && (data.type === 'capital_deposit' || data.type === 'capital_withdrawal' || data.type === 'profit_withdrawal')) {
     const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
     const treasuryTx: Payment = {
       id: generateId(),

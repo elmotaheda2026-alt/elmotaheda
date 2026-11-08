@@ -6,10 +6,13 @@ echo ============================================
 echo.
 
 :: Get the local IP address
-for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
-    set IP=%%a
+for /f "usebackq tokens=*" %%i in (`node -e "const os=require('os');const ifaces=os.networkInterfaces();let ip='127.0.0.1';for(let k in ifaces){if(/vEthernet|Virtual|WSL|Loopback|Tailscale|Docker/i.test(k))continue;for(let a of ifaces[k]){if(a.family==='IPv4'&&!a.internal){ip=a.address;break;}}}console.log(ip);"` ) do set IP=%%i
+if "%IP%"=="" (
+    for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
+        set IP=%%a
+    )
+    set IP=%IP: =%
 )
-set IP=%IP: =%
 
 echo [INFO] Machine IP: %IP%
 echo.

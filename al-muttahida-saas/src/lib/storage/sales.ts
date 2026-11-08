@@ -1,7 +1,7 @@
 import { Customer, InstallmentCollectionTask, Payment, Purchase, RescheduleRequest, Sale, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId, addMonths, buildInstallmentSchedule, syncSalePaymentStatus, createAuditLog } from './core';
 import { getSettings } from './settings';
-import { updateProductQuantity } from './products';
+import { updateProductQuantity, syncProducts } from './products';
 import { api, isApiMode } from '../apiClient';
 
 type SaleDraft = Omit<Sale, 'id' | 'invoiceNumber' | 'createdAt'>;
@@ -118,6 +118,7 @@ function buildSaleApiPayload(sale: SaleDraft, invoiceNumber: string, financing: 
       discount: Number(item.discount || 0),
       tax: Number(item.tax || 0),
       total: Number(item.total),
+      fulfillmentType: item.fulfillmentType || (item as any).sourceType,
     })),
     subtotal: Number(sale.subtotal),
     discount: Number(sale.discount || 0),
@@ -149,6 +150,7 @@ export async function createSale(sale: SaleDraft): Promise<Sale> {
     };
     sales.push(syncSalePaymentStatus(newSale));
     setStorage(DB_KEYS.SALES, sales);
+    await syncProducts();
     return newSale;
   }
 
@@ -169,6 +171,10 @@ export async function createSale(sale: SaleDraft): Promise<Sale> {
   sale.items.forEach((item) => {
     updateProductQuantity(item.productId, -item.quantity);
   });
+
+  const localProds = getStorage<any>(DB_KEYS.PRODUCTS);
+  const remainingProds = localProds.filter((p: any) => !(p.fulfillmentType === 'stocked' && p.quantity <= 0));
+  setStorage(DB_KEYS.PRODUCTS, remainingProds);
 
   const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
   const customerIndex = customers.findIndex((c) => c.id === sale.customerId);

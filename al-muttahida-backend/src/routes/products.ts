@@ -126,10 +126,21 @@ router.post('/', requireAnyPermission('inventory:manage', 'sales:write'), async 
   }
   const id = uid();
   const now = new Date().toISOString();
-  const barcode = data.barcode?.trim() || id;
 
   try {
     const db = await dbPromise;
+
+    let barcode = data.barcode?.trim();
+    if (!barcode) {
+      const maxRow = await db.get<{ max_code: string | number }>(`
+        SELECT MAX(CAST(barcode AS BIGINT)) as max_code
+        FROM products
+        WHERE ISNUMERIC(barcode) = 1 AND barcode LIKE '10000%'
+      `);
+      const nextNum = Math.max(10000000, Number(maxRow?.max_code || 0)) + 1;
+      barcode = String(nextNum);
+    }
+
     await db.run(
       `INSERT INTO products (
         id, name, barcode, category, fulfillment_type, unit, purchase_price,
@@ -154,8 +165,8 @@ router.post('/', requireAnyPermission('inventory:manage', 'sales:write'), async 
       now,
     );
 
-    await audit('product.create', 'product', id, req.user?.name || 'system', data);
-    return res.status(201).json({ id });
+    await audit('product.create', 'product', id, req.user?.name || 'system', { ...data, barcode });
+    return res.status(201).json({ id, barcode });
   } catch (error: any) {
     if (error.message?.includes('UNIQUE') || error.message?.includes('violates UNIQUE constraint')) {
       return res.status(409).json({ message: 'الباركود مسجل بالفعل لمنتج آخر' });
@@ -181,12 +192,12 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
 
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM products WHERE id = ?', req.params.id);
+    const existing = await db.get<{ id: string; barcode: string }>('SELECT id, barcode FROM products WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const barcode = data.barcode?.trim() || req.params.id;
+    const barcode = data.barcode?.trim() || existing.barcode || req.params.id;
 
     await db.run(
       `UPDATE products
@@ -225,22 +236,39 @@ router.put('/:id', requirePermission('inventory:manage'), async (req: AuthedRequ
 router.delete('/:id', requirePermission('inventory:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM products WHERE id = ?', req.params.id);
-    if (!existing) {
+    const productRow = await db.get<{ id: string; name: string }>('SELECT id, name FROM products WHERE id = ?', req.params.id);
+    if (!productRow) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const linkedItems = await db.get<{ count: number }>(
-      `SELECT (
-        (SELECT COUNT(*) FROM sale_items WHERE product_id = ?) +
-        (SELECT COUNT(*) FROM purchase_items WHERE product_id = ?)
-      ) as count`,
+    const linkedSales = await db.get<{ count: number }>(
+      `SELECT COUNT(DISTINCT s.id) as count
+       FROM sales s
+       JOIN sale_items si ON si.sale_id = s.id
+       WHERE (si.product_id = ? OR si.product_name = ?)
+         AND s.status != 'cancelled'`,
       req.params.id,
-      req.params.id
+      productRow.name
     );
-    if (linkedItems && Number(linkedItems.count || 0) > 0) {
+
+    if (linkedSales && Number(linkedSales.count || 0) > 0) {
       return res.status(400).json({
-        message: 'لا يمكن حذف هذا الصنف لوجود حركات مبيعات أو مشتريات تاريخية مرتبطة به في النظام.'
+        message: `لا يمكن حذف هذا الصنف لوجود ${linkedSales.count} فاتورة مبيعات سارية تتضمن هذا الصنف.`
+      });
+    }
+
+    const linkedPurchases = await db.get<{ count: number }>(
+      `SELECT COUNT(DISTINCT p.id) as count
+       FROM purchases p
+       JOIN purchase_items pi ON pi.purchase_id = p.id
+       WHERE (pi.product_id = ? OR pi.product_name = ?)`,
+      req.params.id,
+      productRow.name
+    );
+
+    if (linkedPurchases && Number(linkedPurchases.count || 0) > 0) {
+      return res.status(400).json({
+        message: `لا يمكن حذف هذا الصنف لوجود ${linkedPurchases.count} فاتورة مشتريات وتوريد مرتبطة به.`
       });
     }
 

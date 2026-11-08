@@ -1,5 +1,7 @@
 {
   "name": "al-muttahida-erp",
+  "description": "Al-Muttahida ERP System",
+  "author": "Al-Muttahida",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -15,6 +17,7 @@
     "electron:dev": "cross-env NODE_ENV=development electron .",
     "electron:build": "pnpm build && cross-env NODE_ENV=production electron .",
     "build:backend": "cd ../al-muttahida-backend && pnpm build",
+    "generate:icons": "node scripts/create-all-icons.cjs",
     "build:exe": "pnpm build && pnpm build:backend && electron-builder --win --x64 --ia32",
     "build:exe-only": "electron-builder --win --x64 --ia32",
     "build:exe:ia32": "pnpm build && pnpm build:backend && electron-builder --win --ia32",
@@ -135,6 +138,7 @@
       }
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -159,6 +163,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Al-Muttahida ERP",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
       "allowElevation": true,
       "differentialPackage": false,
       "artifactName": "AlMuttahida-ERP-${arch}-Setup-${version}.${ext}",
@@ -166,7 +173,7 @@
     },
     "portable": {
       "artifactName": "AlMuttahida-ERP-${arch}-Portable-${version}.${ext}",
-      "requestExecutionLevel": "asInvoker"
+      "requestExecutionLevel": "user"
     }
   }
 }

@@ -8,6 +8,7 @@ import { DatePicker } from '../components/DatePicker';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
+import LoadingState from '../components/LoadingState';
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
@@ -316,14 +317,7 @@ export default function Sales() {
                 </tr>
               ))}
               {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-16 text-center text-xs font-bold text-slate-500">
-                    <div className="flex flex-col items-center justify-center min-h-[200px] gap-2">
-                      <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-sm font-bold text-slate-700">جاري تحميل بيانات المبيعات والأرباح من قاعدة البيانات...</p>
-                    </div>
-                  </td>
-                </tr>
+                <LoadingState variant="table" colSpan={6} />
               ) : loadError ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-16 text-center text-xs font-bold text-rose-600">

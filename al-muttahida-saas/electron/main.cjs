@@ -91,11 +91,14 @@ function showSetupWindow() {
   }
 
   setupWindow = new BrowserWindow({
-    width: 560,
-    height: 520,
-    resizable: false,
+    width: 640,
+    height: 700,
+    resizable: true,
+    minWidth: 550,
+    minHeight: 600,
     frame: false,
     transparent: false,
+    icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -146,6 +149,7 @@ function createMainWindow(apiBaseUrl) {
     minHeight: 700,
     show: false,
     backgroundColor: '#f8fafc',
+    icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -192,6 +196,151 @@ function createMainWindow(apiBaseUrl) {
     mainWindow = null;
   });
 }
+
+// ── IPC: Setup Window Helpers ────────────────────────────────────
+
+ipcMain.on('close-setup-window', () => {
+  if (setupWindow) setupWindow.close();
+  if (!mainWindow) app.quit();
+});
+
+ipcMain.handle('open-external-url', async (_event, url) => {
+  const { shell } = require('electron');
+  if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+    await shell.openExternal(url);
+  }
+});
+
+ipcMain.handle('run-firewall-setup', async () => {
+  return new Promise((resolve) => {
+    ensureFirewallRules();
+    resolve({ success: true });
+  });
+});
+
+ipcMain.handle('check-sql-status', async () => {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const socket = new net.Socket();
+    let resolved = false;
+    socket.setTimeout(1800);
+    socket.on('connect', () => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        resolve({ running: true, port: 1433 });
+      }
+    });
+    socket.on('timeout', () => {
+      if (!resolved) {
+        resolved = true;
+        socket.destroy();
+        resolve({ running: false, error: 'انتهت مهلة محاولة الاتصال بالبورت 1433' });
+      }
+    });
+    socket.on('error', (err) => {
+      if (!resolved) {
+        resolved = true;
+        resolve({ running: false, error: err.message });
+      }
+    });
+    socket.connect(1433, '127.0.0.1');
+  });
+});
+
+ipcMain.handle('test-server-ip', async (_event, ip) => {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const cleanIp = String(ip || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').split(':')[0];
+    if (!cleanIp) return resolve({ ok: false, error: 'عنوان IP غير صالح' });
+
+    const req = http.get(`http://${cleanIp}:4000/health`, { timeout: 2500 }, (res) => {
+      let body = '';
+      res.on('data', (c) => body += c);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          resolve({ ok: res.statusCode === 200, data: parsed });
+        } catch {
+          resolve({ ok: res.statusCode === 200 });
+        }
+      });
+    });
+    req.on('error', (err) => resolve({ ok: false, error: err.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'انتهت مهلة الاتصال' }); });
+  });
+});
+
+ipcMain.handle('scan-network', async () => {
+  return new Promise(async (resolve) => {
+    const dgram = require('dgram');
+    const http = require('http');
+    const os = require('os');
+    let finished = false;
+
+    const udpClient = dgram.createSocket('udp4');
+    const finish = (ip) => {
+      if (!finished) {
+        finished = true;
+        try { udpClient.close(); } catch (_) {}
+        resolve(ip);
+      }
+    };
+
+    udpClient.on('error', () => {});
+    udpClient.on('message', (msg, rinfo) => {
+      try {
+        const data = JSON.parse(msg.toString());
+        if (data.service === 'al-muttahida-backend' || data.serverIp) {
+          finish(data.serverIp || rinfo.address);
+        }
+      } catch (_) {}
+    });
+
+    try {
+      udpClient.bind(() => {
+        try {
+          udpClient.setBroadcast(true);
+          const msg = Buffer.from('ALMUTTAHIDA_DISCOVERY_PING');
+          udpClient.send(msg, 0, msg.length, 4001, '255.255.255.255');
+        } catch (_) {}
+      });
+    } catch (_) {}
+
+    const probe = (targetIp) => new Promise((res) => {
+      const req = http.get(`http://${targetIp}:4000/health`, { timeout: 800 }, (r) => {
+        if (r.statusCode === 200) res(targetIp);
+        else res(null);
+      });
+      req.on('error', () => res(null));
+      req.on('timeout', () => { req.destroy(); res(null); });
+    });
+
+    const localHit = await probe('127.0.0.1');
+    if (localHit) return finish('127.0.0.1');
+
+    const ifaces = os.networkInterfaces();
+    const subnets = new Set(['192.168.1', '192.168.0', '192.168.100', '10.0.0']);
+    for (const key of Object.keys(ifaces)) {
+      for (const iface of ifaces[key] || []) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          const parts = iface.address.split('.');
+          if (parts.length === 4) subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+        }
+      }
+    }
+
+    for (const s of subnets) {
+      for (let i = 1; i <= 254; i++) {
+        probe(`${s}.${i}`).then((ip) => { if (ip) finish(ip); });
+      }
+    }
+
+    setTimeout(() => {
+      finish(null);
+    }, 2800);
+  });
+});
 
 // ── IPC: Handle setup choices ───────────────────────────────────
 

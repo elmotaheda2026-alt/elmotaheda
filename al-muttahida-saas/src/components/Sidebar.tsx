@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Permission } from '../types';
 import { hasPermission as userHasPermission, isAdmin } from '../lib/permissions';
+import CompanyLogo from './CompanyLogo';
 import {
   Banknote,
   Bell,
@@ -176,7 +177,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
           isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
         } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
-        {/* Header / Branding */}
+        {/* Header / Branding with Custom Corporate Logo */}
         <div className={`flex items-center justify-between border-b border-slate-200 ${isExpanded ? 'px-3.5 py-3.5' : 'px-2 py-3.5 justify-center'}`}>
           <button
             type="button"
@@ -185,20 +186,15 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
               setIsHovered(false);
               if (window.innerWidth < 1024) onClose();
             }}
-            className="flex items-center gap-3 overflow-hidden text-right transition-opacity hover:opacity-85 cursor-pointer"
+            className="flex items-center gap-2.5 overflow-hidden text-right transition-opacity hover:opacity-85 cursor-pointer"
             title={settings.companyName || 'شركة المتحدة'}
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-xs">
-              <Warehouse size={20} />
-            </div>
-            {isExpanded && (
-              <div className="flex flex-col truncate">
-                <h1 className="truncate text-sm font-black tracking-tight text-slate-900 leading-tight">
-                  {settings.companyName || 'شركة المتحدة'}
-                </h1>
-                <span className="text-[11px] font-medium text-slate-500 mt-0.5">نظام ERP المتكامل</span>
-              </div>
-            )}
+            <CompanyLogo
+              size={38}
+              variant={isExpanded ? 'full' : 'emblem'}
+              companyName={settings.companyName || 'شركة المتحدة'}
+              subTitle="نظام ERP المتكامل"
+            />
           </button>
         </div>
 
@@ -206,7 +202,9 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
         <nav className={`flex-1 overflow-y-auto py-3 custom-scrollbar ${isExpanded ? 'px-2.5' : 'px-2'}`}>
           <div className="space-y-3">
             {menuGroups.map((group) => {
-              const allowedItems = group.items.filter((item) => (!item.adminOnly || isAdmin(user)) && hasPermission(item.permission));
+              const allowedItems = group.items.filter(
+                (item) => (!item.adminOnly || isAdmin(user) || user?.role === 'manager') && hasPermission(item.permission)
+              );
               if (allowedItems.length === 0) return null;
 
               return (

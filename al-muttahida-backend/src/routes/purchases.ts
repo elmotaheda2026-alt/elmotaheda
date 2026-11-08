@@ -201,10 +201,10 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
           item.total,
         );
 
-        // Increase product inventory in SQL Server and update purchase price if provided
+        // Increase product inventory in SQL Server (only for stocked warehouse products) and update purchase price
         await txDb.run(
           `UPDATE products
-           SET quantity = quantity + ?,
+           SET quantity = CASE WHEN fulfillment_type = 'stocked' THEN quantity + ? ELSE quantity END,
                purchase_price = CASE WHEN ? > 0 THEN ? ELSE purchase_price END,
                updated_at = ?
            WHERE id = ?`,

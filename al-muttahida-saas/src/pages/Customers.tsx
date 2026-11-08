@@ -6,8 +6,9 @@ import {
   Grid, List, TrendingUp, UserCheck, Coins, Eye
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
-import { getCustomers, createCustomer, updateCustomer, toggleCustomerSued, deleteCustomer } from '../lib/storage';
+import { getCustomers, createCustomer, updateCustomer, toggleCustomerSued, deleteCustomer, getSales } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { isAdmin } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
@@ -22,6 +23,38 @@ const initialGuarantor: Guarantor = {
   nationalId: '',
   phone: '',
   relationship: ''
+};
+
+const compressImageFile = (file: File, maxWidth = 1280, maxHeight = 960, quality = 0.82): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(maxWidth / width, maxHeight / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 };
 
 const calculateAgeFromDate = (dateOfBirth: string): number => {
@@ -62,6 +95,7 @@ const getBirthDateFromEgyptianNationalId = (nationalId: string): string => {
 };
 
 export default function Customers() {
+  const { confirmDialog, showToast } = useDialog();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -97,11 +131,25 @@ export default function Customers() {
     guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null],
     isSued: false,
     suedDate: '',
+    idCardFront: '',
+    idCardBack: '',
   };
 
   const [formData, setFormData] = useState(emptyForm);
   const { settings, user } = useAuth();
   const canDelete = isAdmin(user);
+  const canModify = user?.role !== 'manager';
+
+  const frontFileInputRef = useRef<HTMLInputElement>(null);
+  const backFileInputRef = useRef<HTMLInputElement>(null);
+  const frontCameraInputRef = useRef<HTMLInputElement>(null);
+  const backCameraInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+
+  const [webcamSide, setWebcamSide] = useState<'front' | 'back' | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
+  const [, setIsProcessingImage] = useState(false);
 
   useEffect(() => {
     if (didLoadRef.current) return;
@@ -126,6 +174,17 @@ export default function Customers() {
   useEffect(() => {
     searchInputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (previewImage) setPreviewImage(null);
+        if (webcamSide) stopWebcam();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImage, webcamSide]);
 
   const loadCustomers = async () => {
     console.time('Customers.totalLoad');
@@ -182,6 +241,9 @@ export default function Customers() {
       balance: isEditing && selectedCustomer ? selectedCustomer.balance : 0,
       balanceType: 'debtor' as 'debtor',
       notes: formData.notes || undefined,
+      idCardFront: formData.idCardFront || undefined,
+      idCardBack: formData.idCardBack || undefined,
+      image: undefined,
       guarantors: formData.guarantors,
       isSued: formData.isSued,
       suedDate: formData.isSued ? (formData.suedDate || new Date().toISOString()) : undefined
@@ -230,6 +292,8 @@ export default function Customers() {
       guarantors: fullCustomer.guarantors || [null, null, null],
       isSued: fullCustomer.isSued || false,
       suedDate: fullCustomer.suedDate || '',
+      idCardFront: fullCustomer.idCardFront || '',
+      idCardBack: fullCustomer.idCardBack || '',
     });
     setIsEditing(true);
     setShowForm(true);
@@ -238,10 +302,15 @@ export default function Customers() {
 
   const handleToggleSued = async (customer: Customer) => {
     const nextState = !customer.isSued;
-    const confirmMsg = nextState
-      ? `هل أنت متأكد من تحويل العميل "${customer.name}" للشئون القانونية (النزاعات)؟`
-      : `هل أنت متأكد من إلغاء تحويل العميل "${customer.name}" من الشئون القانونية؟`;
-    if (!confirm(confirmMsg)) return;
+    const isConfirmed = await confirmDialog({
+      title: nextState ? 'تحويل للشئون القانونية' : 'إلغاء الإحالة القضائية',
+      message: nextState
+        ? `هل أنت متأكد من تحويل العميل "${customer.name}" للشئون القانونية (النزاعات)؟`
+        : `هل أنت متأكد من إلغاء تحويل العميل "${customer.name}" من الشئون القانونية؟`,
+      confirmText: nextState ? 'تحويل للقضاء' : 'إلغاء النزاع',
+      type: nextState ? 'warning' : 'info',
+    });
+    if (!isConfirmed) return;
 
     const now = new Date().toISOString();
     // Optimistic update
@@ -258,6 +327,7 @@ export default function Customers() {
         await toggleCustomerSued(customer.id, nextState, nextState ? now : undefined);
       }
       await loadCustomers();
+      showToast(nextState ? 'تم تحويل العميل للشئون القانونية بنجاح' : 'تم إلغاء النزاع عن العميل', 'success');
     } catch (err: any) {
       // Rollback on failure
       setCustomers(prev => prev.map(c =>
@@ -265,28 +335,159 @@ export default function Customers() {
           ? { ...c, isSued: customer.isSued, suedDate: customer.suedDate, updatedAt: customer.updatedAt }
           : c
       ));
-      alert(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.');
+      showToast(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.', 'error');
     }
   };
 
+  const customerIdsWithActiveSales = useMemo(() => {
+    const allSales = getSales();
+    const idSet = new Set<string>();
+    const nameSet = new Set<string>();
+    for (const s of allSales) {
+      if (s.status !== 'cancelled') {
+        if (s.customerId) idSet.add(s.customerId);
+        if (s.customerName) nameSet.add(s.customerName.trim());
+      }
+    }
+    return { idSet, nameSet };
+  }, [customers]);
+
   const handleDelete = async (id: string) => {
-    if (confirm('هل أنت متأكد من حذف هذا العميل؟')) {
+    const customer = customers.find(c => c.id === id);
+    const allSales = getSales();
+    const linkedSales = allSales.filter(
+      (s) =>
+        s.status !== 'cancelled' &&
+        (s.customerId === id || (customer && s.customerName?.trim() === customer.name?.trim()))
+    );
+
+    if (linkedSales.length > 0) {
+      const activeDebts = linkedSales.reduce((sum, s) => sum + (Number(s.remaining) || 0), 0);
+      await confirmDialog({
+        title: 'لا يمكن حذف العميل',
+        message: `لا يمكن حذف هذا العميل لوجود (${linkedSales.length}) فاتورة/تعاقد ساري مسجل باسمه في النظام.`,
+        subMessage: activeDebts > 0
+          ? `إجمالي المستحقات المتبقية على العميل: ${formatWholeCurrency(activeDebts)} ج.م. لحذف العميل يجب تسوية أو إلغاء العقود السارية أولاً.`
+          : 'لحذف العميل، يجب إلغاء أو حذف الفواتير السارية المرتبطة بحسابه أولاً للحفاظ على سلامة الحسابات.',
+        confirmText: 'حسناً، فهمت',
+        type: 'danger',
+      });
+      return;
+    }
+
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد حذف العميل',
+      message: 'هل أنت متأكد من حذف هذا العميل؟',
+      subMessage: 'سيتم حذف بيانات العميل ولا يمكن التراجع عن هذا الإجراء.',
+      confirmText: 'نعم، حذف العميل',
+      cancelText: 'إلغاء',
+      type: 'danger',
+    });
+    if (isConfirmed) {
       try {
         await deleteCustomer(id);
         await loadCustomers();
         handleClose();
+        showToast('تم حذف العميل بنجاح', 'success');
       } catch (err: any) {
-        alert(err.message || 'حدث خطأ أثناء حذف العميل.');
+        showToast(err.message || 'حدث خطأ أثناء حذف العميل.', 'error');
       }
     }
   };
 
   const handleClose = () => {
+    stopWebcam();
     setShowForm(false);
     setIsEditing(false);
     setSelectedCustomer(null);
     setFormData(emptyForm);
     setError(null);
+  };
+
+  const startWebcam = async (side: 'front' | 'back') => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        if (side === 'front') frontCameraInputRef.current?.click();
+        else backCameraInputRef.current?.click();
+        return;
+      }
+      setWebcamSide(side);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Webcam error, falling back to camera input:', err);
+      stopWebcam();
+      if (side === 'front') frontCameraInputRef.current?.click();
+      else backCameraInputRef.current?.click();
+    }
+  };
+
+  const stopWebcam = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setWebcamSide(null);
+  };
+
+  const captureWebcam = (side: 'front' | 'back') => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+      setFormData((prev) => ({
+        ...prev,
+        [side === 'front' ? 'idCardFront' : 'idCardBack']: dataUrl,
+      }));
+      showToast(side === 'front' ? 'تم التقاط صورة وجه البطاقة بنجاح' : 'تم التقاط صورة ظهر البطاقة بنجاح', 'success');
+    }
+    stopWebcam();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, side: 'front' | 'back') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsProcessingImage(true);
+      const dataUrl = await compressImageFile(file, 1280, 960, 0.82);
+      setFormData((prev) => ({
+        ...prev,
+        [side === 'front' ? 'idCardFront' : 'idCardBack']: dataUrl,
+      }));
+      showToast(side === 'front' ? 'تم إدراج صورة وجه البطاقة بنجاح' : 'تم إدراج صورة ظهر البطاقة بنجاح', 'success');
+    } catch (err: any) {
+      showToast('تعذر معالجة الصورة، يرجى تجربة صورة أخرى.', 'error');
+    } finally {
+      setIsProcessingImage(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleDeleteCardPhoto = (side: 'front' | 'back') => {
+    setFormData((prev) => ({
+      ...prev,
+      [side === 'front' ? 'idCardFront' : 'idCardBack']: '',
+    }));
+    showToast(side === 'front' ? 'تم حذف صورة وجه البطاقة' : 'تم حذف صورة ظهر البطاقة', 'info');
   };
 
   const handleNew = () => {
@@ -308,14 +509,28 @@ export default function Customers() {
         void loadCustomers();
       }
       if (event.key === 'Escape') {
-        if (searchModal) setSearchModal(false);
-        if (showForm) handleClose();
+        if (previewImage) {
+          setPreviewImage(null);
+          return;
+        }
+        if (webcamSide) {
+          stopWebcam();
+          return;
+        }
+        if (searchModal) {
+          setSearchModal(false);
+          return;
+        }
+        if (showForm) {
+          handleClose();
+          return;
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [searchModal, showForm]);
+  }, [previewImage, webcamSide, searchModal, showForm]);
 
   const updateGuarantor = (index: number, field: keyof Guarantor, value: string) => {
     const cleanedValue = (field === 'phone' || field === 'nationalId') ? value.replace(/\D/g, '') : value;
@@ -444,18 +659,20 @@ export default function Customers() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleNew}
-            className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs"
-          >
-            <Plus size={15} />
-            <span>+ عميل جديد</span>
-          </button>
+          {canModify && (
+            <button
+              onClick={handleNew}
+              className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+            >
+              <Plus size={15} />
+              <span>+ عميل جديد</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Tier 2: Fixed Height KPI Cards Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
+      <div className={`grid grid-cols-2 ${user?.role === 'accountant' ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-3 shrink-0`}>
         <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
           <div className="min-w-0">
             <span className="text-xs font-bold text-slate-500 block truncate">إجمالي العملاء</span>
@@ -486,15 +703,17 @@ export default function Customers() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
-          <div className="min-w-0">
-            <span className="text-xs font-bold text-slate-500 block truncate">إجمالي المديونيات</span>
-            <span className="text-lg font-black text-rose-700 tabular-nums truncate">{formatCurrency(totalDebt)}</span>
+        {user?.role !== 'accountant' && (
+          <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs h-20 flex items-center justify-between">
+            <div className="min-w-0">
+              <span className="text-xs font-bold text-slate-500 block truncate">إجمالي المستحقات</span>
+              <span className="text-lg font-black text-rose-700 tabular-nums truncate">{formatCurrency(totalDebt)}</span>
+            </div>
+            <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 shrink-0 border border-amber-100">
+              <Coins size={20} />
+            </div>
           </div>
-          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 shrink-0 border border-amber-100">
-            <Coins size={20} />
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Tier 3: Flexible & Scrollable Customers Table */}
@@ -540,8 +759,12 @@ export default function Customers() {
                       </td>
                       <td className="py-2.5 px-4">
                         <div className="flex items-center gap-2.5">
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                            {customer.isSued ? <Gavel size={14} /> : <User size={14} />}
+                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border overflow-hidden ${customer.isSued ? 'bg-red-50 text-red-600 border-red-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                            {customer.isSued ? (
+                              <Gavel size={14} />
+                            ) : (
+                              <User size={14} />
+                            )}
                           </div>
                           <div className="flex flex-col">
                             <span className={`font-bold text-xs md:text-sm ${customer.isSued ? 'text-red-600 line-through' : 'text-slate-800'}`}>{customer.name}</span>
@@ -558,28 +781,40 @@ export default function Customers() {
                       </td>
                       <td className="py-2.5 px-4">
                         <div className="erp-icon-actions">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); void handleToggleSued(customer); }}
-                            className={`p-1.5 rounded-md transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                            title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
-                          >
-                            <Gavel size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleEdit(customer)}
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                            title="تعديل"
-                          >
-                            <Edit size={15} />
-                          </button>
+                          {canModify && (
+                            <>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); void handleToggleSued(customer); }}
+                                className={`p-1.5 rounded-md transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
+                                title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
+                              >
+                                <Gavel size={15} />
+                              </button>
+                              <button
+                                onClick={() => handleEdit(customer)}
+                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                                title="تعديل"
+                              >
+                                <Edit size={15} />
+                              </button>
+                            </>
+                          )}
                           {canDelete && (
-                          <button
-                            onClick={() => handleDelete(customer.id)}
-                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
-                            title="حذف"
-                          >
-                            <Trash2 size={15} />
-                          </button>
+                            <button
+                              onClick={() => handleDelete(customer.id)}
+                              className={`p-1.5 rounded-md transition-colors ${
+                                customerIdsWithActiveSales.idSet.has(customer.id) || customerIdsWithActiveSales.nameSet.has(customer.name.trim())
+                                  ? 'text-slate-400 hover:text-rose-600 hover:bg-slate-100'
+                                  : 'text-rose-600 hover:bg-rose-50'
+                              }`}
+                              title={
+                                customerIdsWithActiveSales.idSet.has(customer.id) || customerIdsWithActiveSales.nameSet.has(customer.name.trim())
+                                  ? 'مرتبط بفواتير سارية (لا يمكن الحذف)'
+                                  : 'حذف العميل'
+                              }
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           )}
                         </div>
                       </td>
@@ -603,7 +838,9 @@ export default function Customers() {
           {/* Sticky Summary Footer Bar */}
           <div className="erp-status-bar shrink-0">
             <span className="font-bold text-slate-700">إجمالي السجلات: <span className="text-blue-700 font-extrabold">{filteredCustomers.length}</span> (المعروض: {visibleCustomers.length})</span>
-            <span className="font-bold text-slate-700">إجمالي المديونيات: <span className="text-rose-700 font-extrabold">{formatCurrency(totalDebt)}</span></span>
+            {user?.role !== 'accountant' && (
+              <span className="font-bold text-slate-700">إجمالي المستحقات: <span className="text-rose-700 font-extrabold">{formatCurrency(totalDebt)}</span></span>
+            )}
           </div>
         </div>
       ) : (
@@ -621,8 +858,12 @@ export default function Customers() {
                   {/* Card Header */}
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-sm border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
-                        {customer.isSued ? <Gavel size={18} /> : <User size={18} />}
+                      <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-sm border overflow-hidden ${customer.isSued ? 'bg-red-50 text-red-600 border-red-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
+                        {customer.isSued ? (
+                          <Gavel size={18} />
+                        ) : (
+                          <User size={18} />
+                        )}
                       </div>
                       <div className="flex flex-col">
                         <span className="inline-flex w-fit px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-100/30 font-mono mb-1">
@@ -641,28 +882,40 @@ export default function Customers() {
 
                     {/* Actions Dropdown / Icons */}
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => handleToggleSued(customer)}
-                        className={`p-1.5 rounded-lg transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                        title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
-                      >
-                        <Gavel size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleEdit(customer)}
-                        className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
-                        title="تعديل"
-                      >
-                        <Edit size={14} />
-                      </button>
+                      {canModify && (
+                        <>
+                          <button
+                            onClick={() => handleToggleSued(customer)}
+                            className={`p-1.5 rounded-lg transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
+                            title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
+                          >
+                            <Gavel size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleEdit(customer)}
+                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                            title="تعديل"
+                          >
+                            <Edit size={14} />
+                          </button>
+                        </>
+                      )}
                       {canDelete && (
-                      <button
-                        onClick={() => handleDelete(customer.id)}
-                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
-                        title="حذف"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                        <button
+                          onClick={() => handleDelete(customer.id)}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            customerIdsWithActiveSales.idSet.has(customer.id) || customerIdsWithActiveSales.nameSet.has(customer.name.trim())
+                              ? 'text-slate-400 hover:text-red-500 hover:bg-slate-100'
+                              : 'text-red-500 hover:bg-red-50'
+                          }`}
+                          title={
+                            customerIdsWithActiveSales.idSet.has(customer.id) || customerIdsWithActiveSales.nameSet.has(customer.name.trim())
+                              ? 'مرتبط بفواتير سارية (لا يمكن الحذف)'
+                              : 'حذف العميل'
+                          }
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       )}
                     </div>
                   </div>
@@ -723,7 +976,16 @@ export default function Customers() {
                   <button
                     type="button"
                     onClick={() => handleDelete(selectedCustomer!.id)}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium"
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
+                      selectedCustomer && (customerIdsWithActiveSales.idSet.has(selectedCustomer.id) || customerIdsWithActiveSales.nameSet.has(selectedCustomer.name.trim()))
+                        ? 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                        : 'bg-red-500 hover:bg-red-600 text-white'
+                    }`}
+                    title={
+                      selectedCustomer && (customerIdsWithActiveSales.idSet.has(selectedCustomer.id) || customerIdsWithActiveSales.nameSet.has(selectedCustomer.name.trim()))
+                        ? 'مرتبط بفواتير سارية'
+                        : 'حذف العميل'
+                    }
                   >
                     <Trash2 size={15} />
                     <span>حذف</span>
@@ -747,32 +1009,221 @@ export default function Customers() {
                 </div>
               )}
               <div className="flex flex-col lg:flex-row gap-6">
-                {/* Right Side - Photo placeholder */}
-                <div className="w-full lg:w-40 shrink-0">
-                  <div className="border-2 border-dashed border-indigo-200 rounded-xl p-4 text-center bg-indigo-50">
-                    <div className="w-full aspect-square bg-gradient-to-br from-indigo-100 to-indigo-200 rounded-lg flex items-center justify-center mb-3">
-                      <User size={48} className="text-indigo-400" />
+                {/* Right Side - National ID Card Photos (Front & Back) */}
+                <div className="w-full lg:w-52 shrink-0 space-y-4">
+                  {/* Header Title */}
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                    <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                      <CreditCard size={15} className="text-indigo-600" />
+                      بطاقة الرقم القومي
+                    </span>
+                    {formData.idCardFront && formData.idCardBack ? (
+                      <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        مكتملة ✓
+                      </span>
+                    ) : formData.idCardFront || formData.idCardBack ? (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
+                        وجه واحد
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Hidden File & Camera Inputs */}
+                  <input
+                    ref={frontFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileChange(e, 'front')}
+                  />
+                  <input
+                    ref={backFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleFileChange(e, 'back')}
+                  />
+                  <input
+                    ref={frontCameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => handleFileChange(e, 'front')}
+                  />
+                  <input
+                    ref={backCameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => handleFileChange(e, 'back')}
+                  />
+
+                  {/* 1. FRONT CARD PHOTO */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                      <span>وجه البطاقة (الأمامي)</span>
+                      {formData.idCardFront && (
+                        <span className="text-[10px] font-bold text-emerald-600">تم الحفظ ✓</span>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      className="w-full px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 mb-2"
+
+                    {/* Preview box */}
+                    <div
+                      onClick={() => formData.idCardFront && setPreviewImage({ src: formData.idCardFront, title: 'وجه بطاقة الرقم القومي (أمامي)' })}
+                      className={`w-full aspect-[1.6/1] rounded-lg border-2 ${
+                        formData.idCardFront
+                          ? 'border-indigo-200 bg-indigo-50/30 cursor-pointer hover:border-indigo-400 group relative overflow-hidden'
+                          : 'border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-400'
+                      } transition-all`}
                     >
-                      من ملف
-                    </button>
-                    <button
-                      type="button"
-                      className="w-full px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 mb-2"
+                      {formData.idCardFront ? (
+                        <>
+                          <img
+                            src={formData.idCardFront}
+                            alt="وجه البطاقة"
+                            className="w-full h-full object-cover rounded-md"
+                          />
+                          <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-xs font-bold gap-1">
+                            <Eye size={14} />
+                            <span>تكبير</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center p-2 text-center select-none">
+                          <CreditCard size={24} className="text-slate-300 mb-1" />
+                          <span className="text-[11px] font-bold text-slate-500">لا توجد صورة</span>
+                          <span className="text-[9px] text-slate-400">وجه البطاقة</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => frontFileInputRef.current?.click()}
+                        className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors cursor-pointer"
+                        title="اختيار صورة من الجهاز"
+                      >
+                        <Upload size={12} />
+                        <span>من ملف</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startWebcam('front')}
+                        className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg transition-colors cursor-pointer"
+                        title="التقاط بالكاميرا"
+                      >
+                        <Camera size={12} />
+                        <span>الكاميرا</span>
+                      </button>
+                    </div>
+
+                    {formData.idCardFront && (
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewImage({ src: formData.idCardFront!, title: 'وجه بطاقة الرقم القومي (أمامي)' })}
+                          className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1"
+                        >
+                          <Eye size={12} />
+                          <span>معاينة</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCardPhoto('front')}
+                          className="text-[11px] font-bold text-rose-600 hover:underline flex items-center gap-1"
+                        >
+                          <Trash2 size={12} />
+                          <span>حذف</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. BACK CARD PHOTO */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                      <span>ظهر البطاقة (الخلفي)</span>
+                      {formData.idCardBack && (
+                        <span className="text-[10px] font-bold text-emerald-600">تم الحفظ ✓</span>
+                      )}
+                    </div>
+
+                    {/* Preview box */}
+                    <div
+                      onClick={() => formData.idCardBack && setPreviewImage({ src: formData.idCardBack, title: 'ظهر بطاقة الرقم القومي (خلفي)' })}
+                      className={`w-full aspect-[1.6/1] rounded-lg border-2 ${
+                        formData.idCardBack
+                          ? 'border-indigo-200 bg-indigo-50/30 cursor-pointer hover:border-indigo-400 group relative overflow-hidden'
+                          : 'border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-400'
+                      } transition-all`}
                     >
-                      حذف
-                    </button>
-                    <div className="text-xs text-gray-400 my-2">أو</div>
-                    <button
-                      type="button"
-                      className="w-full px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold transition-colors"
-                    >
-                      <Camera size={14} className="inline ml-1" />
-                      الكاميرا
-                    </button>
+                      {formData.idCardBack ? (
+                        <>
+                          <img
+                            src={formData.idCardBack}
+                            alt="ظهر البطاقة"
+                            className="w-full h-full object-cover rounded-md"
+                          />
+                          <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-xs font-bold gap-1">
+                            <Eye size={14} />
+                            <span>تكبير</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center p-2 text-center select-none">
+                          <CreditCard size={24} className="text-slate-300 mb-1" />
+                          <span className="text-[11px] font-bold text-slate-500">لا توجد صورة</span>
+                          <span className="text-[9px] text-slate-400">ظهر البطاقة</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => backFileInputRef.current?.click()}
+                        className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors cursor-pointer"
+                        title="اختيار صورة من الجهاز"
+                      >
+                        <Upload size={12} />
+                        <span>من ملف</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startWebcam('back')}
+                        className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg transition-colors cursor-pointer"
+                        title="التقاط بالكاميرا"
+                      >
+                        <Camera size={12} />
+                        <span>الكاميرا</span>
+                      </button>
+                    </div>
+
+                    {formData.idCardBack && (
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewImage({ src: formData.idCardBack!, title: 'ظهر بطاقة الرقم القومي (خلفي)' })}
+                          className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1"
+                        >
+                          <Eye size={12} />
+                          <span>معاينة</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCardPhoto('back')}
+                          className="text-[11px] font-bold text-rose-600 hover:underline flex items-center gap-1"
+                        >
+                          <Trash2 size={12} />
+                          <span>حذف</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1185,6 +1636,107 @@ export default function Customers() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Webcam Modal */}
+      {webcamSide && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col text-white">
+            <div className="p-4 bg-slate-800 flex items-center justify-between border-b border-slate-700">
+              <div className="flex items-center gap-2">
+                <Camera size={18} className="text-blue-400" />
+                <h3 className="font-bold text-sm">
+                  {webcamSide === 'front' ? 'التقاط صورة وجه البطاقة (الأمامي)' : 'التقاط صورة ظهر البطاقة (الخلفي)'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={stopWebcam}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="relative aspect-[16/10] bg-black flex items-center justify-center overflow-hidden">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover"
+              />
+              {/* ID Card Guide Outline */}
+              <div className="absolute inset-8 border-2 border-dashed border-white/60 rounded-xl pointer-events-none flex items-center justify-center">
+                <span className="text-[11px] font-bold bg-black/60 px-2 py-1 rounded-md text-white/90">
+                  ضع البطاقة داخل الإطار
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-800 flex items-center justify-between gap-3 border-t border-slate-700">
+              <button
+                type="button"
+                onClick={stopWebcam}
+                className="px-4 py-2 text-xs font-bold bg-slate-700 hover:bg-slate-600 rounded-xl transition-colors cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => captureWebcam(webcamSide)}
+                className="flex items-center gap-2 px-6 py-2.5 text-xs font-black bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg transition-transform active:scale-95 cursor-pointer"
+              >
+                <Camera size={16} />
+                <span>التقاط الصورة الآن</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Preview Lightbox Modal */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl flex flex-col relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CreditCard size={18} className="text-blue-400" />
+                <h3 className="font-bold text-sm">{previewImage.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                title="إغلاق المعاينة"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-4 bg-slate-100 flex items-center justify-center max-h-[75vh] overflow-auto">
+              <img
+                src={previewImage.src}
+                alt={previewImage.title}
+                className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-md border border-slate-200"
+              />
+            </div>
+            <div className="p-3 bg-white border-t border-slate-200 flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-semibold">اضغط Esc أو في أي مكان بالخارج للإغلاق</span>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="px-5 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition-colors cursor-pointer"
+              >
+                إغلاق المعاينة
+              </button>
             </div>
           </div>
         </div>

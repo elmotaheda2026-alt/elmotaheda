@@ -34,6 +34,8 @@ const customerSchema = z.object({
   balanceType: z.literal('debtor').default('debtor'),
   notes: z.string().optional().nullable(),
   image: z.string().optional().nullable(),
+  idCardFront: z.string().optional().nullable(),
+  idCardBack: z.string().optional().nullable(),
   guarantors: z.array(guarantorSchema).length(3).optional().nullable(),
   isSued: z.boolean().optional().default(false),
   suedDate: z.string().optional().nullable(),
@@ -47,7 +49,7 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
     const rows = await db.all(`
       SELECT id, customer_number, name, phone, email, address, gender,
              city, governorate, region, date_of_birth, national_id, age,
-             pension_date, balance, balance_type, notes, image, guarantors,
+             pension_date, balance, balance_type, notes, image, id_card_front, id_card_back, guarantors,
              is_sued, sued_date, created_at, updated_at
       FROM customers
       ORDER BY created_at DESC
@@ -67,6 +69,8 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
       region: row.region || '',
       notes: row.notes || null,
       image: row.image || null,
+      idCardFront: row.id_card_front || null,
+      idCardBack: row.id_card_back || null,
       age: Number(row.age || 0),
       balance: Number(row.balance || 0),
       isSued: row.is_sued === 1 || row.is_sued === true,
@@ -109,6 +113,9 @@ router.get('/:id', requirePermission('sales:read'), async (req, res) => {
       governorate: row.governorate,
       region: row.region,
       notes: row.notes,
+      image: row.image || null,
+      idCardFront: row.id_card_front || null,
+      idCardBack: row.id_card_back || null,
       age: Number(row.age),
       balance: Number(row.balance),
       isSued: row.is_sued === 1 || row.is_sued === true,
@@ -176,8 +183,8 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
       `INSERT INTO customers (
         id, customer_number, name, phone, email, address, gender, city, governorate, region,
         date_of_birth, national_id, age, pension_date, balance, balance_type,
-        notes, image, guarantors, is_sued, sued_date, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        notes, image, id_card_front, id_card_back, guarantors, is_sued, sued_date, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       data.customerNumber,
       data.name,
@@ -196,6 +203,8 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
       data.balanceType,
       data.notes || null,
       data.image || null,
+      data.idCardFront || null,
+      data.idCardBack || null,
       data.guarantors ? JSON.stringify(data.guarantors) : null,
       data.isSued ? 1 : 0,
       finalSuedDate,
@@ -275,7 +284,7 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
        SET customer_number = ?, name = ?, phone = ?, email = ?, address = ?, gender = ?,
            city = ?, governorate = ?, region = ?, date_of_birth = ?, national_id = ?, age = ?,
            pension_date = ?, balance = ?, balance_type = ?, notes = ?,
-           image = ?, guarantors = ?, is_sued = ?, sued_date = ?, updated_at = ?
+           image = ?, id_card_front = ?, id_card_back = ?, guarantors = ?, is_sued = ?, sued_date = ?, updated_at = ?
        WHERE id = ?`,
       data.customerNumber,
       data.name,
@@ -294,6 +303,8 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       data.balanceType,
       data.notes || null,
       data.image || null,
+      data.idCardFront !== undefined ? (data.idCardFront || null) : (existing.id_card_front || null),
+      data.idCardBack !== undefined ? (data.idCardBack || null) : (existing.id_card_back || null),
       data.guarantors ? JSON.stringify(data.guarantors) : null,
       data.isSued ? 1 : 0,
       finalSuedDate,
@@ -378,19 +389,20 @@ router.patch('/:id/toggle-sued', requirePermission('sales:write'), async (req: A
 router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM customers WHERE id = ?', req.params.id);
-    if (!existing) {
+    const customerRow = await db.get<{ id: string; name: string }>('SELECT id, name FROM customers WHERE id = ?', req.params.id);
+    if (!customerRow) {
       return res.status(404).json({ message: 'Customer not found' });
     }
 
     const activeSales = await db.get<{ count: number; total_debt: number }>(
       `SELECT COUNT(*) as count, COALESCE(SUM(remaining), 0) as total_debt
-       FROM sales WHERE customer_id = ?`,
-      req.params.id
+       FROM sales WHERE (customer_id = ? OR customer_name = ?) AND status != 'cancelled'`,
+      req.params.id,
+      customerRow.name
     );
     if (activeSales && activeSales.count > 0) {
       return res.status(400).json({
-        message: `لا يمكن حذف العميل لوجود ${activeSales.count} فاتورة/معاملة بيع مرتبطة بحسابه.`
+        message: `لا يمكن حذف هذا العميل لوجود ${activeSales.count} فاتورة/تعاقد ساري مسجل باسمه في النظام.`
       });
     }
 

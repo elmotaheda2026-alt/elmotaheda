@@ -3,11 +3,13 @@ import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-rea
 import { User, UserPermissions } from '../types';
 import { getUsers, createUser, updateUser, deleteUser, syncUsers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
 
 export default function Users() {
   const { user: currentUser } = useAuth();
-  const canDelete = isAdmin(currentUser);
+  const { confirmDialog, showToast } = useDialog();
+  const canDelete = isAdmin(currentUser) && currentUser?.role !== 'manager';
   const [users, setUsers] = useState<User[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -89,9 +91,18 @@ export default function Users() {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('هل أنت متأكد من حذف هذا المستخدم؟')) {
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد حذف المستخدم',
+      message: 'هل أنت متأكد من حذف هذا المستخدم؟',
+      subMessage: 'لن يتمكن هذا المستخدم من الدخول للنظام مرة أخرى.',
+      confirmText: 'نعم، حذف المستخدم',
+      cancelText: 'إلغاء',
+      type: 'danger',
+    });
+    if (isConfirmed) {
       await deleteUser(id);
       await loadUsers();
+      showToast('تم حذف المستخدم بنجاح', 'success');
     }
   };
 
@@ -123,13 +134,15 @@ export default function Users() {
       {/* Header */}
       <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
         <h2 className="text-xl font-black text-slate-900">المستخدمين</h2>
-        <button
-          onClick={() => { resetForm(); setShowModal(true); }}
-          className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs cursor-pointer"
-        >
-          <Plus size={16} />
-          <span>إضافة مستخدم</span>
-        </button>
+        {currentUser?.role !== 'manager' && (
+          <button
+            onClick={() => { resetForm(); setShowModal(true); }}
+            className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs cursor-pointer"
+          >
+            <Plus size={16} />
+            <span>إضافة مستخدم</span>
+          </button>
+        )}
       </div>
 
       {/* Toolbar / Search */}
@@ -175,32 +188,40 @@ export default function Users() {
                   </td>
                   <td className="px-5 py-3 text-sm text-slate-700 font-mono">{user.username}</td>
                   <td className="px-5 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                      user.role === 'admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
-                      user.role === 'manager' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-                      user.role === 'accountant' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                      'bg-slate-100 text-slate-700'
-                    }`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${user.role === 'admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                        user.role === 'manager' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                          user.role === 'accountant' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                            'bg-slate-100 text-slate-700'
+                      }`}>
                       {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : user.role === 'accountant' ? 'محاسب' : 'مستخدم'}
                     </span>
                   </td>
                   <td className="px-5 py-3">
-                    <button
-                      onClick={() => toggleUserStatus(user)}
-                      className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold ${
-                        user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
-                      }`}
-                    >
-                      {user.isActive ? <UserCheck size={13} /> : <UserX size={13} />}
-                      {user.isActive ? 'نشط' : 'غير نشط'}
-                    </button>
+                    {currentUser?.role !== 'manager' ? (
+                      <button
+                        onClick={() => toggleUserStatus(user)}
+                        className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold cursor-pointer ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+                          }`}
+                      >
+                        {user.isActive ? <UserCheck size={13} /> : <UserX size={13} />}
+                        {user.isActive ? 'نشط' : 'غير نشط'}
+                      </button>
+                    ) : (
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+                          }`}
+                      >
+                        {user.isActive ? <UserCheck size={13} /> : <UserX size={13} />}
+                        {user.isActive ? 'نشط' : 'غير نشط'}
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
-                      {hasPermission(currentUser, 'users:manage') && (
+                      {hasPermission(currentUser, 'users:manage') && currentUser?.role !== 'manager' && (
                         <button
                           onClick={() => handleEdit(user)}
-                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                           title="تعديل"
                         >
                           <Edit size={15} />
@@ -209,11 +230,14 @@ export default function Users() {
                       {canDelete && currentUser?.id !== user.id && (
                         <button
                           onClick={() => handleDelete(user.id)}
-                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
                           title="حذف"
                         >
                           <Trash2 size={15} />
                         </button>
+                      )}
+                      {currentUser?.role === 'manager' && (
+                        <span className="text-xs text-slate-400 font-bold">—</span>
                       )}
                     </div>
                   </td>
@@ -240,157 +264,157 @@ export default function Users() {
                     {errorMsg}
                   </div>
                 )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">الاسم</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">اسم المستخدم</label>
-                <input
-                  type="text"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">كلمة المرور</label>
-                <input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  required={!editingUser}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">رقم الهاتف</label>
-                <input
-                  type="tel"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">الدور</label>
-                <select
-                  value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                >
-                  <option value="user">مستخدم</option>
-                  <option value="accountant">محاسب</option>
-                  <option value="manager">مشرف</option>
-                  <option value="admin">مدير</option>
-                </select>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">الاسم</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">اسم المستخدم</label>
+                  <input
+                    type="text"
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">كلمة المرور</label>
+                  <input
+                    type="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    required={!editingUser}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">رقم الهاتف</label>
+                  <input
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">الدور</label>
+                  <select
+                    value={formData.role}
+                    onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  >
+                    <option value="user">مستخدم</option>
+                    <option value="accountant">محاسب</option>
+                    <option value="manager">مشرف</option>
+                    <option value="admin">مدير</option>
+                  </select>
+                </div>
+
+                {formData.role !== 'admin' && (
+                  <div className="border-t border-slate-100 pt-4 mt-4">
+                    <h4 className="font-bold text-slate-800 mb-3 text-sm flex items-center gap-2">
+                      <Shield size={16} className="text-indigo-600" />
+                      تخصيص صلاحيات المستخدم الدقيقة
+                    </h4>
+                    <div className="grid grid-cols-1 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                      {/* المبيعات والعملاء */}
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions['sales:read'] && formData.permissions['sales:write'] && formData.permissions['sales:reschedule']}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setFormData({
+                              ...formData,
+                              permissions: {
+                                ...formData.permissions,
+                                'sales:read': checked,
+                                'sales:write': checked,
+                                'sales:reschedule': checked,
+                                'inventory:manage': checked,
+                                'purchases:manage': checked,
+                              },
+                            });
+                          }}
+                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-sm font-medium text-slate-700">المبيعات والعملاء</span>
+                      </label>
+                      {/* الخزينة والتحصيل */}
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions['payments:read'] && formData.permissions['payments:write'] && formData.permissions['payments:reverse']}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setFormData({
+                              ...formData,
+                              permissions: {
+                                ...formData.permissions,
+                                'payments:read': checked,
+                                'payments:write': checked,
+                                'payments:reverse': checked,
+                                'closing:write': checked,
+                              },
+                            });
+                          }}
+                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-sm font-medium text-slate-700">الخزينة والتحصيل</span>
+                      </label>
+                      {/* التقارير والمالية */}
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions['reports:read'] && formData.permissions['closing:write']}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setFormData({
+                              ...formData,
+                              permissions: {
+                                ...formData.permissions,
+                                'reports:read': checked,
+                                'closing:write': checked,
+                              },
+                            });
+                          }}
+                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-sm font-medium text-slate-700">التقارير والمالية</span>
+                      </label>
+                      {/* الإدارة */}
+                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions['users:manage']}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            const allPermissions = Object.keys(formData.permissions).reduce((acc, key) => {
+                              acc[key as keyof typeof formData.permissions] = checked;
+                              return acc;
+                            }, {} as typeof formData.permissions);
+                            setFormData({
+                              ...formData,
+                              permissions: allPermissions,
+                            });
+                          }}
+                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-sm font-medium text-slate-700">الإدارة</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
               </div>
 
-              {formData.role !== 'admin' && (
-  <div className="border-t border-slate-100 pt-4 mt-4">
-    <h4 className="font-bold text-slate-800 mb-3 text-sm flex items-center gap-2">
-      <Shield size={16} className="text-indigo-600" />
-      تخصيص صلاحيات المستخدم الدقيقة
-    </h4>
-    <div className="grid grid-cols-1 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
-      {/* المبيعات والعملاء */}
-      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-        <input
-          type="checkbox"
-          checked={formData.permissions['sales:read'] && formData.permissions['sales:write'] && formData.permissions['sales:reschedule']}
-          onChange={(e) => {
-            const checked = e.target.checked;
-            setFormData({
-              ...formData,
-              permissions: {
-                ...formData.permissions,
-                'sales:read': checked,
-                'sales:write': checked,
-                'sales:reschedule': checked,
-                'inventory:manage': checked,
-                'purchases:manage': checked,
-              },
-            });
-          }}
-          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-        />
-        <span className="text-sm font-medium text-slate-700">المبيعات والعملاء</span>
-      </label>
-      {/* الخزينة والتحصيل */}
-      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-        <input
-          type="checkbox"
-          checked={formData.permissions['payments:read'] && formData.permissions['payments:write'] && formData.permissions['payments:reverse']}
-          onChange={(e) => {
-            const checked = e.target.checked;
-            setFormData({
-              ...formData,
-              permissions: {
-                ...formData.permissions,
-                'payments:read': checked,
-                'payments:write': checked,
-                'payments:reverse': checked,
-                'closing:write': checked,
-              },
-            });
-          }}
-          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-        />
-        <span className="text-sm font-medium text-slate-700">الخزينة والتحصيل</span>
-      </label>
-      {/* التقارير والمالية */}
-      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-        <input
-          type="checkbox"
-          checked={formData.permissions['reports:read'] && formData.permissions['closing:write']}
-          onChange={(e) => {
-            const checked = e.target.checked;
-            setFormData({
-              ...formData,
-              permissions: {
-                ...formData.permissions,
-                'reports:read': checked,
-                'closing:write': checked,
-              },
-            });
-          }}
-          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-        />
-        <span className="text-sm font-medium text-slate-700">التقارير والمالية</span>
-      </label>
-      {/* الإدارة */}
-      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-        <input
-          type="checkbox"
-          checked={formData.permissions['users:manage']}
-          onChange={(e) => {
-            const checked = e.target.checked;
-            const allPermissions = Object.keys(formData.permissions).reduce((acc, key) => {
-              acc[key as keyof typeof formData.permissions] = checked;
-              return acc;
-            }, {} as typeof formData.permissions);
-            setFormData({
-              ...formData,
-              permissions: allPermissions,
-            });
-          }}
-          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-        />
-        <span className="text-sm font-medium text-slate-700">الإدارة</span>
-      </label>
-    </div>
-  </div>
-)}
-
-              </div>
-              
               <div className="p-6 border-t border-slate-100 shrink-0 flex gap-3 bg-slate-50/50 rounded-b-2xl">
                 <button
                   type="button"

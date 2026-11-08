@@ -1,7 +1,7 @@
 import { Purchase, Supplier } from '../../types';
 import { DB_KEYS, getStorage, setStorage, generateId } from './core';
 import { getSettings } from './settings';
-import { updateProductQuantity } from './products';
+import { updateProductQuantity, getProducts } from './products';
 import { api, isApiMode } from '../apiClient';
 
 export function getPurchases(): Purchase[] {
@@ -43,9 +43,13 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
     purchases.push(newPurchase);
     setStorage(DB_KEYS.PURCHASES, purchases);
 
-    // Update local product quantities immediately
+    // Update local product quantities immediately for stocked products
+    const localProducts = getProducts();
     normalizedPurchase.items.forEach((item) => {
-      updateProductQuantity(item.productId, item.quantity);
+      const p = localProducts.find((prod) => prod.id === item.productId);
+      if (p?.fulfillmentType === 'stocked') {
+        updateProductQuantity(item.productId, item.quantity);
+      }
     });
 
     return newPurchase;
@@ -67,9 +71,13 @@ export async function createPurchase(purchase: Omit<Purchase, 'id' | 'invoiceNum
   purchases.push(newPurchase);
   setStorage(DB_KEYS.PURCHASES, purchases);
 
-  // Update product quantities
+  // Update product quantities for stocked products
+  const localProductsFallback = getProducts();
   normalizedPurchase.items.forEach((item) => {
-    updateProductQuantity(item.productId, item.quantity);
+    const p = localProductsFallback.find((prod) => prod.id === item.productId);
+    if (p?.fulfillmentType === 'stocked') {
+      updateProductQuantity(item.productId, item.quantity);
+    }
   });
 
   // Update supplier balance

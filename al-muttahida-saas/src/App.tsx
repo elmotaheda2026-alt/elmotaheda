@@ -1,6 +1,7 @@
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { DialogProvider } from './context/DialogContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -12,7 +13,6 @@ import Invoices from './pages/Invoices';
 import Payments from './pages/Payments';
 import Expenses from './pages/Expenses';
 import Accounts from './pages/Accounts';
-import Reports from './pages/Reports';
 
 import Settings from './pages/Settings';
 import Notifications from './pages/Notifications';
@@ -24,6 +24,7 @@ import OnboardingWizard from './pages/OnboardingWizard';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import WhatsappReminderRunner from './components/WhatsappReminderRunner';
+import LoadingState from './components/LoadingState';
 
 function AppRoutes() {
   const { isAuthenticated, settings, isLoading } = useAuth();
@@ -31,12 +32,8 @@ function AppRoutes() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center select-none" dir="rtl">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 mb-4 animate-bounce">
-          <span className="text-2xl font-black">المتحدة</span>
-        </div>
-        <h2 className="text-base font-bold text-slate-800">جاري تشغيل النظام...</h2>
-        <p className="text-xs text-slate-400 mt-1">برجاء الانتظار قليلاً</p>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6" dir="rtl">
+        <LoadingState size="lg" />
       </div>
     );
   }
@@ -45,10 +42,10 @@ function AppRoutes() {
     <>
       <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
       <Routes>
-        <Route path="/onboarding" element={<ProtectedRoute permission="settings:manage"><OnboardingWizard /></ProtectedRoute>} />
-        <Route path="/login" element={isAuthenticated ? (isConfigured ? <Navigate to="/" /> : <Navigate to="/onboarding" />) : <Login />} />
+        <Route path="/onboarding" element={<ProtectedRoute permission="settings:manage"><Navigate to="/settings?tab=balances" replace /></ProtectedRoute>} />
+        <Route path="/login" element={isAuthenticated ? (isConfigured ? <Navigate to="/" /> : <Navigate to="/settings?tab=balances" />) : <Login />} />
 
-        <Route path="/" element={<ProtectedRoute>{!isConfigured ? <Navigate to="/onboarding" replace /> : <Layout />}</ProtectedRoute>}>
+        <Route path="/" element={<ProtectedRoute>{!isConfigured ? <Navigate to="/settings?tab=balances" replace /> : <Layout />}</ProtectedRoute>}>
           <Route index element={<ProtectedRoute permission="dashboard:view"><Dashboard /></ProtectedRoute>} />
           <Route path="users" element={<ProtectedRoute permission="users:manage"><Users /></ProtectedRoute>} />
           <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
@@ -59,7 +56,7 @@ function AppRoutes() {
           <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
           <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
           <Route path="accounts" element={<ProtectedRoute adminOnly><Accounts /></ProtectedRoute>} />
-          <Route path="reports" element={<ProtectedRoute adminOnly><Reports /></ProtectedRoute>} />
+          <Route path="reports" element={<Navigate to="/accounts" replace />} />
 
           <Route path="settings" element={<ProtectedRoute permission="settings:manage"><Settings /></ProtectedRoute>} />
           <Route path="notifications" element={<ProtectedRoute permission="notifications:read"><Notifications /></ProtectedRoute>} />
@@ -75,9 +72,11 @@ function AppRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <HashRouter>
-        <AppRoutes />
-      </HashRouter>
+      <DialogProvider>
+        <HashRouter>
+          <AppRoutes />
+        </HashRouter>
+      </DialogProvider>
     </AuthProvider>
   );
 }

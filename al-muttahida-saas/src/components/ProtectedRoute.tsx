@@ -10,10 +10,10 @@ export default function ProtectedRoute({ children, permission, adminOnly }: { ch
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-  if (adminOnly && !isAdmin(user)) {
+  if (adminOnly && !isAdmin(user) && user?.role !== 'manager') {
     return (
-      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700">
-        ظ„ط§ طھظ…ظ„ظƒ طµظ„ط§ط­ظٹط© ط§ظ„ظˆطµظˆظ„ ظ„ظ‡ط°ظ‡ ط§ظ„طµظپط­ط©.
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700 font-bold text-center">
+        لا تملك صلاحية الوصول لهذه الصفحة.
       </div>
     );
   }

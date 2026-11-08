@@ -2,6 +2,20 @@
  * Fast LAN Scanner to locate active Al-Muttahida Backend server instances on local subnets.
  */
 export async function scanLanForServer(port = 4000, timeoutMs = 800): Promise<string | null> {
+  // Quick check 1: current hostname if running on LAN
+  if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    try {
+      const res = await fetch(`http://${window.location.hostname}:${port}/health`, { signal: AbortSignal.timeout(500) });
+      if (res.ok) return `http://${window.location.hostname}:${port}`;
+    } catch (_) {}
+  }
+
+  // Quick check 2: localhost
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(300) });
+    if (res.ok) return `http://127.0.0.1:${port}`;
+  } catch (_) {}
+
   const candidateSubnets = ['192.168.1', '192.168.0', '192.168.100', '10.0.0'];
 
   // Probe candidates in parallel batches

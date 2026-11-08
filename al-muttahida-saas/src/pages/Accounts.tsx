@@ -13,12 +13,14 @@ import {
   BarChart3,
   CalendarDays,
   RefreshCw,
+  Package,
 } from 'lucide-react';
 import { api, isApiMode } from '../lib/apiClient';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { calculateTotalCashBalance } from '../lib/accounting';
 import { getSettings, getPayments, getExpenses, getOpeningBalances } from '../lib/storage';
+import LoadingState from '../components/LoadingState';
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -28,6 +30,7 @@ type DashboardMetrics = {
   totalCustomersBalance: number;
   totalSuppliersBalance: number;
   periodSales: number;
+  warehouseProfit: number;
   realizedProfits: number;
   periodExpenses: number;
   monthlyAverageExpenses: number;
@@ -98,6 +101,7 @@ function normalizeMetrics(
     totalCustomersBalance: toNumber(data?.totalCustomersBalance),
     totalSuppliersBalance: toNumber(data?.totalSuppliersBalance),
     periodSales: toNumber(data?.periodSales),
+    warehouseProfit: toNumber(data?.warehouseProfit),
     realizedProfits: toNumber(data?.realizedProfits),
     periodExpenses: toNumber(data?.periodExpenses),
     monthlyAverageExpenses: toNumber(data?.monthlyAverageExpenses),
@@ -195,6 +199,7 @@ export default function Accounts() {
   const m = metrics;
 
   const sales = m ? toNumber(m.periodSales) : 0;
+  const warehouseProfit = m ? toNumber(m.warehouseProfit) : 0;
   const expenses = m ? toNumber(m.periodExpenses) : 0;
   const rawRealizedProfits = m ? toNumber(m.realizedProfits) : 0;
   const receivables = m ? toNumber(m.totalCustomersBalance) : 0;
@@ -218,21 +223,14 @@ export default function Accounts() {
   // ═══════════════════════════════════════════════════════════════
   // PERIOD BREAKDOWN BAR — used for the visual summary at bottom
   // ═══════════════════════════════════════════════════════════════
-  const barTotal = Math.max(sales, expenses, 1); // prevent division by zero
+  const barTotal = Math.max(sales, expenses, warehouseProfit, 1); // prevent division by zero
   const salesPct = Math.min((sales / barTotal) * 100, 100);
+  const warehouseProfitPct = Math.min((warehouseProfit / barTotal) * 100, 100);
   const expensesPct = Math.min((expenses / barTotal) * 100, 100);
 
   // ───── Loading State ─────
   if (loading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center p-6">
-        <div className="rounded-xl border border-slate-200 bg-white px-8 py-6 text-center shadow-none">
-          <RefreshCw size={28} className="mx-auto mb-3 animate-spin text-blue-600" />
-          <p className="font-bold text-slate-700">جاري تحميل البيانات المالية…</p>
-          <p className="mt-1 text-xs text-slate-400">يتم تحديث المؤشرات حسب الفترة المحددة</p>
-        </div>
-      </div>
-    );
+    return <LoadingState size="lg" />;
   }
 
   return (
@@ -384,7 +382,7 @@ export default function Accounts() {
                 الأداء المالي للفترة {periodLabel}
               </h3>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <KPICard
                 title="إجمالي المبيعات"
                 formula="مجموع الفواتير المصدرة خلال الفترة"
@@ -392,6 +390,15 @@ export default function Accounts() {
                 icon={ShoppingBag}
                 iconTone="bg-blue-50 text-blue-600 border-blue-100"
                 valueColor="text-blue-700"
+                onClick={() => navigate('/sales')}
+              />
+              <KPICard
+                title="أرباح مبيعات المخزن"
+                formula="هامش ربح بضاعة المخزن (سعر البيع − تكلفة الشراء)"
+                value={formatCurrency(warehouseProfit)}
+                icon={Package}
+                iconTone="bg-teal-50 text-teal-600 border-teal-100"
+                valueColor="text-teal-700"
                 onClick={() => navigate('/sales')}
               />
               <KPICard
@@ -439,6 +446,22 @@ export default function Accounts() {
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3">
                     <span className="text-xs font-black tabular-nums text-blue-700">
                       {formatCurrency(sales)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Warehouse Profit Row */}
+              <div className="flex items-center gap-4">
+                <span className="w-36 shrink-0 text-xs font-bold text-slate-500">أرباح بضاعة المخزن</span>
+                <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
+                  <div
+                    className="absolute inset-y-0 right-0 rounded-lg bg-teal-500/20 transition-all duration-500"
+                    style={{ width: `${warehouseProfitPct}%` }}
+                  />
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                    <span className="text-xs font-black tabular-nums text-teal-700">
+                      {formatCurrency(warehouseProfit)}
                     </span>
                   </div>
                 </div>

@@ -20,6 +20,7 @@ import { formatDateDisplay } from '../lib/dateUtils';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { calculateTotalCashBalance } from '../lib/accounting';
+import LoadingState from '../components/LoadingState';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -1201,36 +1202,38 @@ export default function Payments() {
             حركة اليوم: {todayPayments.length} معاملة
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => openModal('in')}
-            className="flex items-center gap-1.5 bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold shadow-xs"
-          >
-            <Plus size={15} />
-            <span>+ سداد عميل</span>
-          </button>
-          <button
-            onClick={() => openModal('out')}
-            className="flex items-center gap-1.5 bg-rose-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-rose-700 transition-colors text-xs font-bold shadow-xs"
-          >
-            <Plus size={15} />
-            <span>+ دفعة مورد</span>
-          </button>
-          {hasPermission(user, 'closing:write') && (
+        {user?.role !== 'manager' && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                setClosingDate(today());
-                setClosedPeriodDateFilter(today());
-                setClosingNotes('');
-                setShowClosingModal(true);
-              }}
-              className="flex items-center gap-1.5 bg-slate-800 text-white px-3.5 py-1.5 rounded-lg hover:bg-slate-900 transition-colors text-xs font-bold shadow-xs"
+              onClick={() => openModal('in')}
+              className="flex items-center gap-1.5 bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
             >
-              <Lock size={15} />
-              <span>إغلاق اليومية</span>
+              <Plus size={15} />
+              <span>+ سداد عميل</span>
             </button>
-          )}
-        </div>
+            <button
+              onClick={() => openModal('out')}
+              className="flex items-center gap-1.5 bg-rose-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-rose-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+            >
+              <Plus size={15} />
+              <span>+ دفعة مورد</span>
+            </button>
+            {hasPermission(user, 'closing:write') && (
+              <button
+                onClick={() => {
+                  setClosingDate(today());
+                  setClosedPeriodDateFilter(today());
+                  setClosingNotes('');
+                  setShowClosingModal(true);
+                }}
+                className="flex items-center gap-1.5 bg-slate-800 text-white px-3.5 py-1.5 rounded-lg hover:bg-slate-900 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+              >
+                <Lock size={15} />
+                <span>إغلاق اليومية</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {message && (
@@ -1289,14 +1292,7 @@ export default function Payments() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr>
-                  <td colSpan={6} className="py-16 px-4 text-center text-slate-400">
-                    <div className="flex flex-col items-center justify-center gap-2 min-h-[220px]">
-                      <span className="animate-spin text-2xl text-blue-600">⏳</span>
-                      <span className="text-xs font-bold text-slate-600">جاري تحميل الحركات المالية...</span>
-                    </div>
-                  </td>
-                </tr>
+                <LoadingState variant="table" colSpan={6} />
               ) : todayPayments.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-16 px-4 text-center text-slate-400">

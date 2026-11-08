@@ -37,21 +37,27 @@ import {
   syncSalesReps,
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { isAdmin } from '../lib/permissions';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
+import LoadingState from '../components/LoadingState';
 import { api, isApiMode } from '../lib/apiClient';
 
 type PaymentMethod = 'cash' | 'card' | 'transfer' | 'installment';
 
 interface DraftItem {
   productId: string;
+  productName?: string;
   quantity: number;
   unitPrice: number;
   discount: number;
   tax: number;
+  supplierId?: string;
+  sourceType?: 'warehouse' | 'on_demand';
+  cost?: number;
 }
 
 interface QuickProductForm {
@@ -120,7 +126,8 @@ const normalizeArabic = (str: string): string => {
 
 export default function Invoices() {
   const { settings, user } = useAuth();
-  const canDelete = isAdmin(user);
+  const { confirmDialog, showToast } = useDialog();
+  const canDelete = isAdmin(user) && user?.role !== 'manager';
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -230,6 +237,42 @@ export default function Invoices() {
       setQuickSupplierSearchTerm('');
     }
   }, [quickProduct.supplierId, showQuickSupplierSuggestions, quickSupplierSearchTerm]);
+
+  // Dual-mode item addition (Warehouse vs On-Demand)
+  const [itemSourceMode, setItemSourceMode] = useState<'warehouse' | 'on_demand'>('warehouse');
+
+  // Warehouse item state
+  const [warehouseSearchTerm, setWarehouseSearchTerm] = useState('');
+  const [showWarehouseSuggestions, setShowWarehouseSuggestions] = useState(false);
+  const [selectedWarehouseProductId, setSelectedWarehouseProductId] = useState('');
+  const [warehouseQuantity, setWarehouseQuantity] = useState<number | ''>(1);
+  const [warehouseDiscount, setWarehouseDiscount] = useState<number | ''>('');
+  const [warehouseTax, setWarehouseTax] = useState<number | ''>('');
+  const [warehouseSalePrice, setWarehouseSalePrice] = useState<number | ''>('');
+  const warehouseSearchContainerRef = useRef<HTMLDivElement>(null);
+
+  // On-demand item state
+  const [onDemandName, setOnDemandName] = useState('');
+  const [onDemandPurchasePrice, setOnDemandPurchasePrice] = useState<number | ''>('');
+  const [onDemandSalePrice, setOnDemandSalePrice] = useState<number | ''>('');
+  const [onDemandSupplierId, setOnDemandSupplierId] = useState('');
+  const [onDemandQuantity, setOnDemandQuantity] = useState<number | ''>(1);
+  const [onDemandDiscount, setOnDemandDiscount] = useState<number | ''>('');
+  const [onDemandTax, setOnDemandTax] = useState<number | ''>('');
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        warehouseSearchContainerRef.current &&
+        !warehouseSearchContainerRef.current.contains(event.target as Node)
+      ) {
+        setShowWarehouseSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [paymentDate, setPaymentDate] = useState(today());
@@ -370,10 +413,15 @@ export default function Invoices() {
   };
 
   const handleDeleteContract = async (sale: Sale) => {
-    const confirmed = window.confirm(
-      `هل أنت متأكد من حذف التعاقد رقم ${sale.invoiceNumber}؟\nسيتم حذف التعاقد والأقساط والمدفوعات والحسابات المرتبطة به من النظام.`,
-    );
-    if (!confirmed) return;
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد حذف التعاقد',
+      message: `هل أنت متأكد من حذف التعاقد رقم ${sale.invoiceNumber}؟`,
+      subMessage: 'سيتم حذف التعاقد والأقساط والمدفوعات والحسابات المرتبطة به من النظام نهائياً.',
+      confirmText: 'نعم، حذف التعاقد',
+      cancelText: 'إلغاء',
+      type: 'danger',
+    });
+    if (!isConfirmed) return;
 
     try {
       await deleteSale(sale.id, user?.name || 'system');
@@ -522,6 +570,36 @@ export default function Invoices() {
   const selectedProcurementSupplier =
     suppliers.find((supplier) => supplier.id === procurementSupplierId) || null;
 
+  const stockedProducts = useMemo(() => {
+    return products.filter((p) => p.fulfillmentType === 'stocked');
+  }, [products]);
+
+  const warehouseSuggestions = useMemo(() => {
+    const term = normalizeArabic(warehouseSearchTerm);
+    if (!term) return stockedProducts.slice(0, 15);
+    return stockedProducts
+      .filter(
+        (p) =>
+          normalizeArabic(p.name).includes(term) ||
+          (p.barcode && normalizeArabic(p.barcode).includes(term))
+      )
+      .slice(0, 15);
+  }, [stockedProducts, warehouseSearchTerm]);
+
+  const selectedWarehouseProduct = useMemo(() => {
+    return products.find((p) => p.id === selectedWarehouseProductId) || null;
+  }, [products, selectedWarehouseProductId]);
+
+  const handleSelectWarehouseProduct = (product: Product) => {
+    setSelectedWarehouseProductId(product.id);
+    setWarehouseSearchTerm(product.name);
+    setShowWarehouseSuggestions(false);
+    setWarehouseQuantity(1);
+    setWarehouseDiscount('');
+    setWarehouseTax(product.tax || settings.taxRate || '');
+    setWarehouseSalePrice(product.salePrice > 0 ? product.salePrice : product.purchasePrice);
+  };
+
   const rawSubtotal = draftItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
   const rawDiscountAmount = draftItems.reduce(
     (sum, item) => sum + (item.quantity * item.unitPrice * item.discount) / 100,
@@ -533,6 +611,8 @@ export default function Invoices() {
   const draftRows = useMemo(() => {
     return draftItems.map((item) => {
       const product = products.find((entry) => entry.id === item.productId);
+      const rowSupplierId = item.supplierId || procurementSupplierId;
+      const supplier = suppliers.find((entry) => entry.id === rowSupplierId);
       const subtotal = item.unitPrice * item.quantity;
       const discountValue = (subtotal * item.discount) / 100;
       const amountBeforeTax = subtotal - discountValue;
@@ -540,27 +620,27 @@ export default function Invoices() {
       const taxableAmount = Math.max(amountBeforeTax - paidShare, 0);
       const taxValue = (taxableAmount * item.tax) / 100;
       const availableStock = product?.quantity || 0;
-      const needsProcurement =
-        !!product && (product.fulfillmentType === 'on_demand' || item.quantity > availableStock);
-      const shortageQuantity = !product
-        ? 0
-        : product.fulfillmentType === 'on_demand'
-          ? item.quantity
-          : Math.max(item.quantity - availableStock, 0);
+      const isStocked = item.sourceType === 'warehouse' || product?.fulfillmentType === 'stocked';
+      const needsProcurement = !isStocked;
+      const shortageQuantity = needsProcurement
+        ? item.quantity
+        : Math.max(item.quantity - availableStock, 0);
 
       return {
         ...item,
         product,
-        productName: product?.name || 'صنف غير معروف',
+        productName: item.productName || product?.name || 'صنف غير معروف',
         barcode: product?.barcode || '',
-        fulfillmentType: product?.fulfillmentType || 'stocked',
+        fulfillmentType: isStocked ? ('stocked' as const) : ('on_demand' as const),
+        supplierId: rowSupplierId,
+        supplierName: supplier?.name || '',
         availableStock,
         needsProcurement,
         shortageQuantity,
         total: amountBeforeTax + taxValue,
       };
     });
-  }, [draftItems, products, preTaxTotal, upfrontAgainstItems]);
+  }, [draftItems, products, suppliers, procurementSupplierId, preTaxTotal, upfrontAgainstItems]);
 
   const items: SaleItem[] = draftRows.map((item) => ({
     productId: item.productId,
@@ -568,7 +648,7 @@ export default function Invoices() {
     barcode: item.barcode,
     quantity: item.quantity,
     unitPrice: item.unitPrice,
-    unitCost: Number(item.product?.purchasePrice || 0),
+    unitCost: item.cost || Number(item.product?.purchasePrice || item.unitPrice || 0),
     discount: item.discount,
     tax: item.tax,
     total: item.total,
@@ -629,6 +709,151 @@ export default function Invoices() {
       supplierId: '',
     });
     setQuickSupplierSearchTerm('');
+    setSelectedWarehouseProductId('');
+    setWarehouseSearchTerm('');
+    setShowWarehouseSuggestions(false);
+    setWarehouseQuantity(1);
+    setWarehouseDiscount('');
+    setWarehouseTax('');
+    setWarehouseSalePrice('');
+    setOnDemandName('');
+    setOnDemandPurchasePrice('');
+    setOnDemandSalePrice('');
+    setOnDemandQuantity(1);
+    setOnDemandDiscount('');
+    setOnDemandTax('');
+  };
+
+  const addWarehouseItem = async () => {
+    if (!selectedWarehouseProduct) {
+      setMessage({ type: 'error', text: 'يرجى اختيار صنف من بضاعة المخزن أولاً.' });
+      return;
+    }
+
+    const qty = Number(warehouseQuantity) || 0;
+    if (qty <= 0) {
+      setMessage({ type: 'error', text: 'الكمية يجب أن تكون أكبر من صفر.' });
+      return;
+    }
+
+    const availableStock = selectedWarehouseProduct.quantity || 0;
+    if (qty > availableStock) {
+      const confirmExceed = await confirmDialog({
+        title: 'تجاوز رصيد المخزن',
+        message: `الكمية المطلوبة (${qty}) تتجاوز الرصيد المتوفر في المخزن (${availableStock}).`,
+        subMessage: 'هل تريد المتابعة وإضافة الصنف على أية حال؟',
+        confirmText: 'متابعة وإضافة',
+        cancelText: 'إلغاء',
+        type: 'warning',
+      });
+      if (!confirmExceed) return;
+    }
+
+    const unitPrice =
+      Number(warehouseSalePrice) > 0
+        ? Number(warehouseSalePrice)
+        : selectedWarehouseProduct.salePrice > 0
+        ? selectedWarehouseProduct.salePrice
+        : selectedWarehouseProduct.purchasePrice;
+    const discount = Number(warehouseDiscount) || 0;
+    const tax = Number(warehouseTax) || 0;
+
+    setDraftItems((current) => {
+      const existingIndex = current.findIndex(
+        (item) => item.productId === selectedWarehouseProduct.id && item.sourceType === 'warehouse'
+      );
+      if (existingIndex !== -1) {
+        return current.map((item, index) =>
+          index === existingIndex
+            ? {
+                ...item,
+                quantity: item.quantity + qty,
+                unitPrice,
+                discount,
+                tax,
+              }
+            : item
+        );
+      }
+
+      return [
+        ...current,
+        {
+          productId: selectedWarehouseProduct.id,
+          quantity: qty,
+          unitPrice,
+          discount,
+          tax,
+          sourceType: 'warehouse',
+        },
+      ];
+    });
+
+    setSelectedWarehouseProductId('');
+    setWarehouseSearchTerm('');
+    setShowWarehouseSuggestions(false);
+    setWarehouseQuantity(1);
+    setWarehouseDiscount('');
+    setWarehouseTax('');
+    setWarehouseSalePrice('');
+    setMessage({
+      type: 'success',
+      text: `تمت إضافة الصنف "${selectedWarehouseProduct.name}" من المخزن بنجاح.`,
+    });
+  };
+
+  const addOnDemandItem = () => {
+    if (!onDemandName.trim()) {
+      setMessage({ type: 'error', text: 'يرجى إدخال اسم الصنف.' });
+      return;
+    }
+    const cost = Number(onDemandPurchasePrice) || 0;
+    if (cost <= 0) {
+      setMessage({ type: 'error', text: 'يرجى إدخال سعر الشراء.' });
+      return;
+    }
+    if (!onDemandSupplierId || !onDemandSupplierId.trim()) {
+      setMessage({ type: 'error', text: 'يجب تحديد المورد أولاً قبل إضافة الصنف.' });
+      return;
+    }
+    const qty = Number(onDemandQuantity) || 1;
+    if (qty <= 0) {
+      setMessage({ type: 'error', text: 'الكمية يجب أن تكون 1 أو أكثر.' });
+      return;
+    }
+
+    const tempId = `temp_ondemand_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const sup = suppliers.find((s) => s.id === onDemandSupplierId);
+
+    setDraftItems((current) => [
+      ...current,
+      {
+        productId: tempId,
+        productName: onDemandName.trim(),
+        quantity: qty,
+        unitPrice: cost,
+        cost: cost,
+        discount: 0,
+        tax: Number(onDemandTax) || 0,
+        supplierId: onDemandSupplierId,
+        sourceType: 'on_demand',
+      },
+    ]);
+
+    setProcurementSupplierId(onDemandSupplierId);
+
+    setOnDemandName('');
+    setOnDemandPurchasePrice('');
+    setOnDemandSalePrice('');
+    setOnDemandQuantity(1);
+    setOnDemandDiscount('');
+    setOnDemandTax(settings.taxRate || '');
+    setOnDemandSupplierId('');
+
+    setMessage({
+      type: 'success',
+      text: `تمت إضافة الصنف "${onDemandName.trim()}" إلى الفاتورة، وسيتم حفظه وربط مديونية المورد ${sup ? sup.name : ''} عند حفظ الفاتورة.`,
+    });
   };
 
   const addLine = () => {
@@ -804,18 +1029,60 @@ export default function Invoices() {
       return;
     }
 
-    if (autoProcureEnabled && procurementRows.length > 0 && !selectedProcurementSupplier) {
-      setMessage({ type: 'error', text: 'اختر المورد لإنشاء شراء تلقائي للأصناف غير المتوفرة، أو قم بإلغاء تفعيل الشراء التلقائي لحفظ الفاتورة مباشرة.' });
+    const missingSupplierRows = procurementRows.filter((r) => !r.supplierId);
+    if (missingSupplierRows.length > 0) {
+      setMessage({ type: 'error', text: 'لا يمكن إتمام العملية: يجب تحديد المورد لكل صنف حسب الطلب.' });
       return;
     }
 
     try {
       let autoPurchaseNumber = '';
 
+      // 1. Create on-demand products in database NOW upon saving invoice
+      const idMap = new Map<string, string>();
+      for (const dItem of draftItems) {
+        if (dItem.sourceType === 'on_demand' && dItem.productId.startsWith('temp_ondemand_')) {
+          const cost = dItem.cost || dItem.unitPrice;
+          const created = await createProduct({
+            name: dItem.productName || 'صنف حسب الطلب',
+            barcode: null,
+            category: 'حسب الطلب',
+            fulfillmentType: 'on_demand',
+            unit: 'قطعة',
+            purchasePrice: cost,
+            salePrice: dItem.unitPrice,
+            discount: 0,
+            tax: dItem.tax,
+            quantity: 0,
+            minQuantity: 0,
+            description: 'صنف حسب الطلب',
+          });
+          idMap.set(dItem.productId, created.id);
+        }
+      }
+
+      // Map sale items with new real product IDs
+      const finalSaleItems: SaleItem[] = draftRows.map((item) => {
+        const realProductId = idMap.get(item.productId) || item.productId;
+        const prod = products.find((p) => p.id === realProductId);
+        return {
+          productId: realProductId,
+          productName: item.productName,
+          barcode: prod?.barcode || '',
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          unitCost: item.cost || Number(prod?.purchasePrice || item.unitPrice || 0),
+          discount: item.discount,
+          tax: item.tax,
+          total: item.total,
+          fulfillmentType: item.sourceType === 'warehouse' ? 'stocked' : 'on_demand',
+        };
+      });
+
       const createdSale = await createSale({
         customerId: selectedCustomer.id,
         customerName: selectedCustomer.name,
-        items,
+        items: finalSaleItems,
         subtotal,
         discount: discountAmount,
         tax: taxAmount,
@@ -837,50 +1104,70 @@ export default function Invoices() {
         },
       });
 
-      if (autoProcureEnabled && procurementRows.length > 0 && selectedProcurementSupplier) {
-        const purchaseItems: PurchaseItem[] = procurementRows.map((item) => {
-          const unitPrice = item.product?.purchasePrice || 0;
-          const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
+      if (autoProcureEnabled && procurementRows.length > 0) {
+        // Group by supplierId
+        const supplierGroups = new Map<string, typeof procurementRows>();
+        for (const row of procurementRows) {
+          const sId = row.supplierId || procurementSupplierId || selectedProcurementSupplier?.id;
+          if (!sId) continue;
+          const group = supplierGroups.get(sId) || [];
+          group.push(row);
+          supplierGroups.set(sId, group);
+        }
 
-          return {
-            productId: item.productId,
-            productName: item.productName,
-            barcode: item.barcode,
-            quantity: item.shortageQuantity,
-            unitPrice,
+        if (supplierGroups.size === 0 && selectedProcurementSupplier) {
+          supplierGroups.set(selectedProcurementSupplier.id, procurementRows);
+        }
+
+        for (const [sId, groupRows] of supplierGroups.entries()) {
+          const targetSupplier = suppliers.find((s) => s.id === sId) || selectedProcurementSupplier;
+          if (!targetSupplier) continue;
+
+          const purchaseItems: PurchaseItem[] = groupRows.map((item) => {
+            const realProductId = idMap.get(item.productId) || item.productId;
+            const unitPrice = item.product?.purchasePrice || item.unitPrice || 0;
+            const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
+
+            return {
+              productId: realProductId,
+              productName: item.productName,
+              barcode: item.barcode,
+              quantity: item.shortageQuantity,
+              unitPrice,
+              discount: 0,
+              tax: taxPerUnit,
+              total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
+            };
+          });
+
+          const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+          const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
+          const purchaseTotal = purchaseSubtotal + purchaseTax;
+
+          const createdPurchase = await createPurchase({
+            supplierId: targetSupplier.id,
+            supplierName: targetSupplier.name,
+            items: purchaseItems,
+            subtotal: purchaseSubtotal,
             discount: 0,
-            tax: taxPerUnit,
-            total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
-          };
-        });
+            tax: purchaseTax,
+            total: purchaseTotal,
+            paid: 0,
+            remaining: purchaseTotal,
+            status: 'pending',
+            date: invoiceDate,
+            notes: `شراء تلقائي مرتبط بالفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
+            createdBy: user?.name || 'مدير النظام',
+          });
 
-        const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-        const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
-        const purchaseTotal = purchaseSubtotal + purchaseTax;
+          autoPurchaseNumber = createdPurchase.invoiceNumber;
 
-        const createdPurchase = await createPurchase({
-          supplierId: selectedProcurementSupplier.id,
-          supplierName: selectedProcurementSupplier.name,
-          items: purchaseItems,
-          subtotal: purchaseSubtotal,
-          discount: 0,
-          tax: purchaseTax,
-          total: purchaseTotal,
-          paid: 0,
-          remaining: purchaseTotal,
-          status: 'pending',
-          date: invoiceDate,
-          notes: `شراء تلقائي مرتبط بالفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
-          createdBy: user?.name || 'مدير النظام',
-        });
-
-        autoPurchaseNumber = createdPurchase.invoiceNumber;
-
-        createNotification({
-          type: 'info',
-          title: 'شراء تلقائي',
-          message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} تلقائيًا لتجهيز طلب العميل ${selectedCustomer.name}`,
-        });
+          createNotification({
+            type: 'info',
+            title: 'شراء تلقائي وتحديث مديونية المورد',
+            message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} وتحديث مديونية المورد ${targetSupplier.name} بمبلغ ${formatCurrency(purchaseTotal)}`,
+          });
+        }
       }
 
       if (paid > 0) {
@@ -922,6 +1209,7 @@ export default function Invoices() {
             : `تم حفظ الفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
       });
 
+      await syncProducts();
       const refreshedProducts = getProducts();
       setProducts(refreshedProducts);
 
@@ -1152,249 +1440,349 @@ export default function Invoices() {
           </Panel>
 
           <Panel title="2. إضافة الأصناف" icon={<Package size={18} className="text-sky-600" />}>
-            <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_110px_110px_110px_auto]">
-                <Field label="الصنف">
-                  <select
-                    ref={productSelectRef}
-                    value={lineProductId}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        quantityInputRef.current?.focus();
-                      }
-                    }}
-                    onChange={(e) => {
-                      const product = products.find((entry) => entry.id === e.target.value);
-                      setLineProductId(e.target.value);
-                      setLineTax(product?.tax || '');
-                    }}
-                    className="input-ui"
-                  >
-                    <option value="">اختر الصنف</option>
-                    {products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name} - {product.barcode}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+            {/* Dual Mode Switch (Warehouse vs On-Demand) */}
+            <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 rounded-2xl w-fit mb-5 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setItemSourceMode('warehouse')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-black transition-all ${
+                  itemSourceMode === 'warehouse'
+                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                }`}
+              >
+                <Package size={17} />
+                من المخزن
+              </button>
+              <button
+                type="button"
+                onClick={() => setItemSourceMode('on_demand')}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-black transition-all ${
+                  itemSourceMode === 'on_demand'
+                    ? 'bg-white text-amber-700 shadow-sm border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                }`}
+              >
+                <ShoppingCart size={17} />
+                على حسب الطلب
+              </button>
+            </div>
 
-                <Field label="الكمية">
-                  <input
-                    ref={quantityInputRef}
-                    type="number"
-                    min="1"
-                    value={lineQuantity}
-                    onChange={(e) => setLineQuantity(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="input-ui"
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-'].includes(e.key)) e.preventDefault();
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        addLineButtonRef.current?.focus();
-                      }
-                    }}
-                  />
-                </Field>
+            {/* Mode 1: Warehouse Stocked Items */}
+            {itemSourceMode === 'warehouse' && (
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/20 p-4 space-y-4">
+                <div ref={warehouseSearchContainerRef} className="relative">
+                  <Field label="البحث في بضاعة المخزن (بالاسم أو الكود)">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="اكتب اسم الصنف أو كود الباركود للبحث في بضاعة المخزن..."
+                        value={warehouseSearchTerm}
+                        onChange={(e) => {
+                          setWarehouseSearchTerm(e.target.value);
+                          setShowWarehouseSuggestions(true);
+                        }}
+                        onFocus={() => setShowWarehouseSuggestions(true)}
+                        className="input-ui pr-10 font-bold text-slate-800"
+                      />
+                      <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                    </div>
+                  </Field>
 
-                <Field label="الخصم %">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    value={lineDiscount}
-                    onChange={(e) => setLineDiscount(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="input-ui"
-                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                  />
-                </Field>
-
-                <Field label="الضريبة %">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    value={lineTax}
-                    onChange={(e) => setLineTax(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="input-ui"
-                    onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                  />
-                </Field>
-
-                <div className="flex items-end">
-                  <button
-                    ref={addLineButtonRef}
-                    onClick={addLine}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        addLine();
-                        productSelectRef.current?.focus();
-                      }
-                    }}
-                    className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 font-bold text-white hover:bg-blue-700 transition-colors shadow-2xs"
-                  >
-                    <Plus size={18} />
-                    إضافة
-                  </button>
+                  {/* Autocomplete Dropdown */}
+                  {showWarehouseSuggestions && (
+                    <div className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+                      {warehouseSuggestions.length === 0 ? (
+                        <div className="px-4 py-3 text-center text-xs text-slate-500 font-medium">
+                          {stockedProducts.length === 0
+                            ? 'لا توجد أصناف مسجلة في المخزن حاليًا.'
+                            : 'لا توجد نتائج مطابقة لبحثك في المخزن.'}
+                        </div>
+                      ) : (
+                        warehouseSuggestions.map((prod) => (
+                          <button
+                            key={prod.id}
+                            type="button"
+                            onClick={() => handleSelectWarehouseProduct(prod)}
+                            className="w-full flex items-center justify-between p-2.5 rounded-lg hover:bg-blue-50 text-right transition-colors"
+                          >
+                            <div>
+                              <p className="font-bold text-slate-800 text-sm">{prod.name}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">كود: {prod.barcode || 'تلقائي'}</p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                                المتوفر: {prod.quantity || 0} {prod.unit || 'قطعة'}
+                              </span>
+                              <span className="font-bold text-slate-700 text-xs">
+                                {formatCurrency(prod.salePrice)}
+                              </span>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
 
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowQuickProduct((current) => !current)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
-                >
-                  <Plus size={15} className="text-blue-600" />
-                  <span>{showQuickProduct ? 'إخفاء صنف حسب الطلب' : 'إضافة صنف حسب الطلب'}</span>
-                </button>
-                <span className="text-xs text-slate-500 font-medium">
-                  إذا الصنف غير موجود، أنشئه هنا وسيتم اعتباره حسب الطلب تلقائيًا.
-                </span>
-              </div>
+                {/* Selected warehouse product details and add row */}
+                {selectedWarehouseProduct ? (
+                  <div className="bg-white p-4 rounded-xl border border-blue-200 shadow-2xs space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                        <span className="font-black text-slate-800 text-base">{selectedWarehouseProduct.name}</span>
+                        {selectedWarehouseProduct.barcode && (
+                          <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                            {selectedWarehouseProduct.barcode}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                          الرصيد بالمخزن: {selectedWarehouseProduct.quantity || 0} {selectedWarehouseProduct.unit || 'قطعة'}
+                        </span>
+                      </div>
+                    </div>
 
-              {showQuickProduct && (
-                <div className="mt-4 rounded-xl border border-dashed border-blue-300 bg-blue-50/20 p-4">
-                  <div className="mb-4">
-                    <h4 className="font-bold text-slate-800">إدخال صنف حسب الطلب</h4>
-                    <p className="mt-1 text-sm text-slate-500">
-                      مناسب لحالة حضور العميل وطلب صنف جديد، بدون فتح شاشة الأصناف أو المشتريات.
-                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 items-end">
+                      <Field label="الكمية المطلوبة">
+                        <input
+                          type="number"
+                          min="1"
+                          value={warehouseQuantity}
+                          onChange={(e) => setWarehouseQuantity(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
+                          className="input-ui font-black text-slate-800"
+                        />
+                      </Field>
+
+                      <Field label="سعر البيع الكاش">
+                        <input
+                          type="number"
+                          min="0"
+                          value={warehouseSalePrice}
+                          onChange={(e) => setWarehouseSalePrice(e.target.value === '' ? '' : Number(e.target.value))}
+                          className="input-ui font-bold text-emerald-700"
+                        />
+                      </Field>
+
+                      <Field label="الخصم %">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={warehouseDiscount}
+                          onChange={(e) => setWarehouseDiscount(e.target.value === '' ? '' : Number(e.target.value))}
+                          className="input-ui font-semibold text-slate-700"
+                        />
+                      </Field>
+
+                      <Field label="الضريبة %">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={warehouseTax}
+                          onChange={(e) => setWarehouseTax(e.target.value === '' ? '' : Number(e.target.value))}
+                          className="input-ui font-semibold text-slate-700"
+                        />
+                      </Field>
+
+                      <div>
+                        <button
+                          type="button"
+                          onClick={addWarehouseItem}
+                          className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 font-black text-white hover:bg-blue-700 transition-colors shadow-2xs"
+                        >
+                          <Plus size={18} />
+                          إضافة للفاتورة
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-5">
+                ) : (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-white p-3.5 text-center text-xs text-slate-500 font-semibold">
+                    {stockedProducts.length === 0
+                      ? 'لا توجد بضاعة مسجلة بالمخزن حالياً. يمكنك تسجيل أصناف المخزن من شاشة الأصناف والمخزون، أو التبديل إلى "على حسب الطلب".'
+                      : 'اختر صنفاً من قائمة البحث أعلاه لإضافته إلى الفاتورة.'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Mode 2: On-Demand Items */}
+            {itemSourceMode === 'on_demand' && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/20 p-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12 items-end">
+                  <div className="lg:col-span-4">
                     <Field label="اسم الصنف">
                       <input
                         type="text"
-                        value={quickProduct.name}
-                        onChange={(e) => setQuickProduct((current) => ({ ...current, name: e.target.value }))}
-                        className="input-ui"
+                        placeholder="اكتب اسم الصنف..."
+                        value={onDemandName}
+                        onChange={(e) => setOnDemandName(e.target.value)}
+                        className="input-ui font-bold text-slate-800"
                       />
                     </Field>
-                    {/* barcode field removed from quick-add */}
+                  </div>
+
+                  <div className="lg:col-span-2">
                     <Field label="سعر الشراء">
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
-                        value={quickProduct.purchasePrice === 0 ? '' : quickProduct.purchasePrice}
-                        onChange={(e) =>
-                          setQuickProduct((current) => ({ ...current, purchasePrice: Number(e.target.value) || 0 }))
-                        }
-                        className="input-ui"
-                        onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
+                        placeholder="0"
+                        value={onDemandPurchasePrice}
+                        onChange={(e) => setOnDemandPurchasePrice(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="input-ui font-black text-slate-800"
                       />
                     </Field>
-                    {/* sale price removed for on_demand quick products */}
-                    <Field label="المورد المتوقع">
+                  </div>
+
+                  <div className="lg:col-span-3">
+                    <Field label="المورد *">
                       <select
-                        value={quickProduct.supplierId}
-                        onChange={(e) => {
-                          const sid = e.target.value;
-                          setQuickProduct((current) => ({ ...current, supplierId: sid }));
-                          const s = suppliers.find((entry) => entry.id === sid);
-                          setQuickSupplierSearchTerm(s ? s.name : '');
-                        }}
-                        className="input-ui"
+                        value={onDemandSupplierId}
+                        onChange={(e) => setOnDemandSupplierId(e.target.value)}
+                        className="input-ui font-bold text-slate-800"
                       >
                         <option value="">-- اختر المورد --</option>
                         {suppliers.map((s) => (
                           <option key={s.id} value={s.id}>
-                            {s.name} {s.phone ? `(${s.phone})` : ''}
+                            {s.name}
                           </option>
                         ))}
                       </select>
                     </Field>
                   </div>
 
-                  <div className="mt-4 flex justify-end">
+                  <div className="lg:col-span-1">
+                    <Field label="الكمية">
+                      <input
+                        type="number"
+                        min="1"
+                        value={onDemandQuantity}
+                        onChange={(e) => setOnDemandQuantity(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
+                        className="input-ui font-black text-slate-800"
+                      />
+                    </Field>
+                  </div>
+
+                  <div className="lg:col-span-2">
                     <button
                       type="button"
-                      onClick={handleQuickProductSave}
-                      className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2 font-bold text-white hover:bg-slate-800"
+                      onClick={addOnDemandItem}
+                      className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 font-black text-white hover:bg-amber-700 transition-colors shadow-2xs"
                     >
-                      <Plus size={16} />
-                      حفظ الصنف
+                      <Plus size={18} />
+                      إضافة الصنف
                     </button>
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
+            {/* Draft Items Table */}
             <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 shadow-xs">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[850px] bg-white">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الصنف</th>
-                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">النوع</th>
-                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الكمية</th>
-                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">المتاح بالمخزن</th>
-                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">حالة التوريد</th>
-                      <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الإجمالي</th>
-                      <th className="py-2.5 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">الصنف</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">المصدر / النوع</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">الكمية</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">المتاح بالمخزن</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">حالة التوريد والمديونية</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">سعر البيع</th>
+                      <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">الإجمالي</th>
+                      <th className="py-2.5 px-4 text-center text-xs font-black text-slate-700 tracking-wider">إجراءات</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {draftRows.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
-                          لا توجد أصناف مضافة بعد.
+                        <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500 font-bold">
+                          لا توجد أصناف مضافة بعد. اختر صنفاً من المخزن أو أضف صنفاً حسب الطلب أعلاه.
                         </td>
                       </tr>
                     ) : (
-                      draftRows.map((item, index) => (
-                        <tr key={`${item.productId}-${index}`} className="hover:bg-slate-50">
-                          <td className="px-4 py-4">
-                            <p className="font-semibold text-slate-800">{item.productName}</p>
-                            <p className="mt-1 text-xs text-slate-500">{item.barcode || '-'}</p>
-                          </td>
-                          <td className="px-4 py-4">
-                            <StatusPill
-                              label={item.fulfillmentType === 'on_demand' ? 'حسب الطلب' : 'مخزني'}
-                              tone={item.fulfillmentType === 'on_demand' ? 'amber' : 'slate'}
-                            />
-                          </td>
-                          <td className="px-4 py-4">
-                            <input
-                              type="number"
-                              min="1"
-                              value={item.quantity === 0 ? '' : item.quantity}
-                              onChange={(e) =>
-                                updateLine(index, { quantity: Math.max(1, Number(e.target.value) || 1) })
-                              }
-                              className="w-24 rounded-xl border border-slate-200 px-3 py-2"
-                              onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
-                            />
-                          </td>
-                          <td className="px-4 py-4 text-sm text-slate-600">{item.availableStock}</td>
-                          <td className="px-4 py-4">
-                            {item.needsProcurement ? (
-                              <div className="space-y-1">
-                                <StatusPill label={`شراء تلقائي ${item.shortageQuantity}`} tone="rose" />
-                                <p className="text-xs text-slate-500">سيُنشأ شراء تلقائي عند الحفظ</p>
-                              </div>
-                            ) : (
-                              <StatusPill label="جاهز من المخزون" tone="green" />
-                            )}
-                          </td>
-                          <td className="px-4 py-4 font-bold text-emerald-700">{formatCurrency(item.total)}</td>
-                          <td className="px-4 py-4">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setDraftItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                              }
-                              className="inline-flex items-center rounded-xl bg-rose-50 p-2 text-rose-600 hover:bg-rose-100"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))
+                      draftRows.map((item, index) => {
+                        const isStocked = item.fulfillmentType === 'stocked';
+                        return (
+                          <tr key={`${item.productId}-${index}`} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="px-4 py-3.5">
+                              <p className="font-black text-slate-900 text-sm">{item.productName}</p>
+                              <p className="mt-0.5 text-xs text-slate-500">{item.barcode ? `كود: ${item.barcode}` : 'صنف مباشر'}</p>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {isStocked ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-blue-50 text-blue-800 border border-blue-200">
+                                  من المخزن
+                                </span>
+                              ) : (
+                                <div>
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-amber-50 text-amber-800 border border-amber-200">
+                                    حسب الطلب
+                                  </span>
+                                  {item.supplierName && (
+                                    <p className="text-[11px] font-bold text-slate-600 mt-1">
+                                      المورد: {item.supplierName}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <input
+                                type="number"
+                                min="1"
+                                value={item.quantity === 0 ? '' : item.quantity}
+                                onChange={(e) =>
+                                  updateLine(index, { quantity: Math.max(1, Number(e.target.value) || 1) })
+                                }
+                                className="w-20 rounded-xl border border-slate-300 px-3 py-1.5 text-center font-black text-slate-800"
+                              />
+                            </td>
+                            <td className="px-4 py-3.5 text-xs font-bold text-slate-700">
+                              {isStocked ? `${item.availableStock} قطعة` : 'غير مخزني'}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {isStocked ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  جاهز من المخزون
+                                </span>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-black bg-amber-50 text-amber-800 border border-amber-200">
+                                    مديونية للمورد
+                                  </span>
+                                  <p className="text-[11px] text-slate-600 font-semibold">
+                                    {item.supplierName ? `يضاف لحساب ${item.supplierName}` : 'شراء فوري'}
+                                  </p>
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5 font-bold text-slate-800 text-sm">
+                              {formatCurrency(item.unitPrice)}
+                            </td>
+                            <td className="px-4 py-3.5 font-black text-emerald-700 text-sm">
+                              {formatCurrency(item.total)}
+                            </td>
+                            <td className="px-4 py-3.5 text-center">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDraftItems((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                                }
+                                className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-700 transition-colors"
+                                title="حذف البند"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1493,7 +1881,7 @@ export default function Invoices() {
 
           {procurementRows.length > 0 && (
             <Panel
-              title="3. شراء تلقائي من نفس الشاشة (للأصناف غير المتوفرة بالمخزن)"
+              title="3. مديونيات المشتريات المرتبطة بالموردين (للأصناف حسب الطلب)"
               icon={<ShoppingCart size={18} className="text-amber-600" />}
               action={
                 <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 select-none">
@@ -1503,62 +1891,47 @@ export default function Invoices() {
                     onChange={(e) => setAutoProcureEnabled(e.target.checked)}
                     className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
                   />
-                  <span>تفعيل إنشاء فاتورة شراء تلقائية للمورد</span>
+                  <span>تفعيل إثبات المديونية وإنشاء فواتير الشراء تلقائيًا</span>
                 </label>
               }
             >
               {autoProcureEnabled ? (
-                <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-                  <div className="space-y-4">
-                    <Field label="المورد الذي سيُنشأ له الشراء">
-                      <select
-                        value={procurementSupplierId}
-                        onChange={(e) => {
-                          const sid = e.target.value;
-                          setProcurementSupplierId(sid);
-                          const found = suppliers.find((s) => s.id === sid);
-                          setSupplierSearchTerm(found ? found.name : '');
-                        }}
-                        className="input-ui font-bold text-slate-800"
-                      >
-                        <option value="">-- اختر المورد من القائمة --</option>
-                        {suppliers.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name} {s.phone ? `(${s.phone})` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800 leading-relaxed">
-                      💡 تم تفعيل هذا القسم لأن الصنف المطلوب رصيده 0 في المخزن. عند الحفظ، سيقوم النظام تلقائياً بإنشاء فاتورة شراء من المورد وإدخال الصنف ثم بيعه للعميل.
-                    </div>
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 leading-relaxed font-semibold">
+                    إثبات مديونيات الموردين: عند حفظ الفاتورة، سيقوم النظام تلقائياً بإنشاء فواتير شراء للأصناف حسب الطلب وإضافة قيمتها كمديونية مستحقة للمورد المحدد.
                   </div>
 
-                  <div className="overflow-hidden rounded-[24px] border border-slate-200">
+                  <div className="overflow-hidden rounded-xl border border-slate-200 shadow-2xs">
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[620px]">
-                        <thead className="bg-slate-50 text-slate-700">
+                      <table className="w-full min-w-[620px] bg-white">
+                        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200 text-xs">
                           <tr>
-                            <th className="px-4 py-3 text-right">الصنف</th>
-                            <th className="px-4 py-3 text-right">الكمية المطلوب شراؤها</th>
-                            <th className="px-4 py-3 text-right">سعر الشراء</th>
-                            <th className="px-4 py-3 text-right">الإجمالي التقريبي</th>
+                            <th className="px-4 py-2.5 text-right font-black">الصنف</th>
+                            <th className="px-4 py-2.5 text-right font-black">المورد المستحق له المديونية</th>
+                            <th className="px-4 py-2.5 text-right font-black">الكمية</th>
+                            <th className="px-4 py-2.5 text-right font-black">تكلفة الشراء</th>
+                            <th className="px-4 py-2.5 text-right font-black">إجمالي مديونية المورد</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 bg-white">
-                          {procurementRows.map((item) => (
-                            <tr key={`procurement-${item.productId}`}>
-                              <td className="px-4 py-3 font-semibold text-slate-800">{item.productName}</td>
-                              <td className="px-4 py-3 font-bold text-amber-700">{item.shortageQuantity}</td>
-                              <td className="px-4 py-3 text-slate-700">
-                                {formatCurrency(item.product?.purchasePrice || 0)}
-                              </td>
-                              <td className="px-4 py-3 font-bold text-amber-700">
-                                {formatCurrency(item.shortageQuantity * (item.product?.purchasePrice || 0))}
-                              </td>
-                            </tr>
-                          ))}
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {procurementRows.map((item, idx) => {
+                            const unitCost = item.product?.purchasePrice || item.unitPrice || 0;
+                            return (
+                              <tr key={`procurement-${item.productId}-${idx}`} className="hover:bg-slate-50">
+                                <td className="px-4 py-3 font-black text-slate-800">{item.productName}</td>
+                                <td className="px-4 py-3 font-bold text-slate-700">
+                                  {item.supplierName || 'المورد الافتراضي'}
+                                </td>
+                                <td className="px-4 py-3 font-bold text-slate-800">{item.shortageQuantity}</td>
+                                <td className="px-4 py-3 font-bold text-slate-700">
+                                  {formatCurrency(unitCost)}
+                                </td>
+                                <td className="px-4 py-3 font-black text-amber-700">
+                                  {formatCurrency(item.shortageQuantity * unitCost)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1566,7 +1939,7 @@ export default function Invoices() {
                 </div>
               ) : (
                 <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600 leading-relaxed font-medium">
-                  تم إلغاء الشراء التلقائي. سيتم بيع الأصناف للعميل مباشرة دون قيد فاتورة شراء جديدة على حساب مورد.
+                  تم إلغاء الشراء التلقائي. لن يتم قيد مديونيات على حساب الموردين عند حفظ هذه الفاتورة.
                 </div>
               )}
             </Panel>
@@ -1587,14 +1960,20 @@ export default function Invoices() {
             </div>
 
             <div className="mt-5 grid gap-3">
-              <button
-                onClick={saveInvoice}
-                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all ${editingSaleId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
-                  }`}
-              >
-                <Save size={18} />
-                {editingSaleId ? 'تعديل وحفظ التغييرات' : 'حفظ الفاتورة'}
-              </button>
+              {user?.role === 'manager' ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold text-center">
+                  حساب المشرف: وضع المتابعة والعرض فقط (لا يمكن إصدار أو تعديل الفواتير)
+                </div>
+              ) : (
+                <button
+                  onClick={saveInvoice}
+                  className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all cursor-pointer ${editingSaleId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
+                >
+                  <Save size={18} />
+                  {editingSaleId ? 'تعديل وحفظ التغييرات' : 'حفظ الفاتورة'}
+                </button>
+              )}
               {editingSaleId ? (
                 <button
                   type="button"
@@ -1615,7 +1994,8 @@ export default function Invoices() {
             </div>
           </Panel>
 
-          {paymentMethod === 'installment' && (
+          {/* Installment Plan Preview (Displayed only when creating a new contract, to avoid duplicating the active management table in edit mode) */}
+          {paymentMethod === 'installment' && !editingSale && (
             <Panel title="خطة الأقساط" icon={<CalendarDays size={18} className="text-violet-600" />}>
               <div className="space-y-3">
                 {installmentPreview.map((entry) => {
@@ -1742,10 +2122,7 @@ export default function Invoices() {
               {/* List of Results */}
               <div className={`space-y-2.5 flex-1 min-h-0 overflow-y-auto pr-0.5 transition-opacity duration-150 ${modalSearchLoading && modalContracts.length > 0 ? 'opacity-70' : 'opacity-100'}`}>
                 {modalSearchLoading && modalContracts.length === 0 ? (
-                  <div className="py-16 text-center text-slate-400 font-bold flex flex-col items-center justify-center gap-2">
-                    <Loader2 size={28} className="animate-spin text-blue-600" />
-                    <span className="text-xs">جاري تحميل سجل التعاقدات...</span>
-                  </div>
+                  <LoadingState size="sm" minHeight="140px" />
                 ) : modalContracts.length === 0 ? (
                   <div className="py-16 text-center text-slate-400 font-bold text-xs">
                     لا توجد تعاقدات سابقة مسجلة أو مطابقة لبحثك الحالي.
@@ -1777,17 +2154,19 @@ export default function Invoices() {
 
                       {/* Actions */}
                       <div className="flex items-center gap-1.5 shrink-0 justify-end sm:justify-start flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleLoadForEdit(sale);
-                            setShowSearchModal(false);
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
-                        >
-                          <Edit3 size={12} className="text-amber-600" />
-                          <span>تعديل البيانات</span>
-                        </button>
+                        {user?.role !== 'manager' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleLoadForEdit(sale);
+                              setShowSearchModal(false);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                          >
+                            <Edit3 size={12} className="text-amber-600" />
+                            <span>تعديل البيانات</span>
+                          </button>
+                        )}
                         {canDelete && (
                           <button
                             type="button"
@@ -2058,7 +2437,7 @@ export default function Invoices() {
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white font-bold text-sm transition-all"
                     >
                       {deferLoading ? (
-                        <span className="animate-spin">&#8987;</span>
+                        <Loader2 size={16} className="animate-spin" />
                       ) : (
                         <CalendarCheck size={16} />
                       )}

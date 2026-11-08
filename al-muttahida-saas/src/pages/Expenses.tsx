@@ -3,10 +3,12 @@ import { Plus, Trash2, Search, AlertCircle, RefreshCw, Printer } from 'lucide-re
 import { Expense } from '../types';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 import { getExpenses } from '../lib/storage';
+import LoadingState from '../components/LoadingState';
 
 type PresetKey = 'all' | 'year' | 'quarter' | 'month' | 'today' | 'custom';
 
@@ -65,7 +67,8 @@ const toYMD = (dateVal?: string | Date | null): string => {
 };
 
 export default function Expenses() {
-  const { settings } = useAuth();
+  const { settings, user } = useAuth();
+  const { confirmDialog, showToast } = useDialog();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const initialMonthRange = useMemo(() => getPresetRange('month'), []);
@@ -186,18 +189,24 @@ export default function Expenses() {
   };
 
   const handleDelete = async (id: string, description: string) => {
-    if (!window.confirm(`هل أنت متأكد من حذف سند الصرف: "${description}" نهائياً من قاعدة البيانات؟`)) {
-      return;
-    }
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد حذف سند الصرف',
+      message: `هل أنت متأكد من حذف سند الصرف: "${description}" نهائياً من قاعدة البيانات؟`,
+      confirmText: 'نعم، حذف السند',
+      cancelText: 'إلغاء',
+      type: 'danger',
+    });
+    if (!isConfirmed) return;
 
     try {
       if (isApiMode()) {
         await api.deleteExpense(id);
         await loadData();
+        showToast('تم حذف سند الصرف بنجاح', 'success');
       }
     } catch (err: any) {
       console.error('Failed to delete expense:', err);
-      alert(err.message || 'فشل حذف سند الصرف من قاعدة البيانات');
+      showToast(err.message || 'فشل حذف سند الصرف من قاعدة البيانات', 'error');
     }
   };
 
@@ -383,23 +392,15 @@ export default function Expenses() {
             <span>طباعة</span>
           </button>
 
-          <button
-            onClick={() => void loadData()}
-            disabled={isLoading}
-            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg transition-colors text-xs font-bold border border-slate-200"
-            title="تحديث البيانات من السيرفر (F5)"
-          >
-            <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
-            <span>تحديث</span>
-          </button>
-
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs whitespace-nowrap"
-          >
-            <Plus size={15} />
-            <span>+ إضافة سند صرف</span>
-          </button>
+          {user?.role !== 'manager' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs whitespace-nowrap cursor-pointer"
+            >
+              <Plus size={15} />
+              <span>+ إضافة سند صرف</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -453,14 +454,7 @@ export default function Expenses() {
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-200">
               {isLoading ? (
-                <tr>
-                  <td colSpan={5} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
-                    <div className="flex items-center justify-center gap-2">
-                      <RefreshCw size={16} className="animate-spin text-blue-600" />
-                      <span>جاري جلب المصروفات من قاعدة البيانات...</span>
-                    </div>
-                  </td>
-                </tr>
+                <LoadingState variant="table" colSpan={5} />
               ) : filteredExpenses.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
@@ -477,13 +471,15 @@ export default function Expenses() {
                     <td className="py-2.5 px-4 text-xs md:text-sm text-slate-800 font-bold">{expense.description}</td>
                     <td className="py-2.5 px-4 text-xs md:text-sm font-bold text-rose-700 font-mono">{formatCurrency(expense.amount)}</td>
                     <td className="py-2.5 px-4 text-center no-print print:hidden">
-                      <button
-                        onClick={() => handleDelete(expense.id, expense.description)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="حذف سند الصرف"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {user?.role !== 'manager' && (
+                        <button
+                          onClick={() => handleDelete(expense.id, expense.description)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          title="حذف سند الصرف"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

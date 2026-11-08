@@ -71,6 +71,7 @@ const saleItemSchema = z.preprocess((value) => {
     productName: item.productName ?? item.product_name,
     unitPrice: item.unitPrice ?? item.unit_price,
     unitCost: item.unitCost ?? item.unit_cost,
+    fulfillmentType: item.fulfillmentType ?? item.fulfillment_type ?? (item.sourceType === 'warehouse' ? 'stocked' : item.sourceType),
   };
 }, z.object({
   productId: z.string().min(1),
@@ -82,6 +83,7 @@ const saleItemSchema = z.preprocess((value) => {
   discount: z.number().nonnegative().default(0),
   tax: z.number().nonnegative().default(0),
   total: z.number().nonnegative(),
+  fulfillmentType: z.string().optional().nullable(),
 }));
 
 const saleFinancingSchema = z.preprocess((value) => {
@@ -233,6 +235,7 @@ type SaleItemRow = {
   discount: number;
   tax: number;
   total: number;
+  fulfillment_type?: string | null;
 };
 
 type ScheduleRow = {
@@ -282,6 +285,7 @@ function mapSaleItems(items: SaleItemRow[]) {
     discount: Number(item.discount),
     tax: Number(item.tax),
     total: Number(item.total),
+    fulfillmentType: item.fulfillment_type || undefined,
   }));
 }
 
@@ -340,23 +344,29 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
 }
 
 async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, saleId: string, items: SaleInput['items'], now: string) {
-  const itemsMissingUnitCost = items.filter((item) => !item.unitCost);
-  const productIds = Array.from(new Set(itemsMissingUnitCost.map((item) => item.productId)));
-  const purchasePriceByProduct = new Map<string, number>();
+  const productIds = Array.from(new Set(items.map((item) => item.productId)));
+  const productInfoById = new Map<string, { purchase_price: number; fulfillment_type: string }>();
 
   if (productIds.length) {
-    const rows = await db.all<{ id: string; purchase_price: number }>(
-      `SELECT id, purchase_price FROM products WHERE id IN (${productIds.map(() => '?').join(',')})`,
+    const rows = await db.all<{ id: string; purchase_price: number; fulfillment_type: string }>(
+      `SELECT id, purchase_price, fulfillment_type FROM products WHERE id IN (${productIds.map(() => '?').join(',')})`,
       ...productIds,
     );
-    rows.forEach((row) => purchasePriceByProduct.set(row.id, Number(row.purchase_price || 0)));
+    rows.forEach((row) => productInfoById.set(row.id, {
+      purchase_price: Number(row.purchase_price || 0),
+      fulfillment_type: row.fulfillment_type || 'on_demand',
+    }));
   }
 
   for (const item of items) {
+    const prodInfo = productInfoById.get(item.productId);
+    const cost = item.unitCost || prodInfo?.purchase_price || 0;
+    const fulfillmentType = item.fulfillmentType || prodInfo?.fulfillment_type || (item.unitPrice > cost && cost > 0 ? 'stocked' : 'on_demand');
+
     await db.run(
       `INSERT INTO sale_items (
-        id, sale_id, product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, sale_id, product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total, fulfillment_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       uid(),
       saleId,
       item.productId,
@@ -364,19 +374,28 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
       item.barcode || null,
       item.quantity,
       item.unitPrice,
-      item.unitCost || purchasePriceByProduct.get(item.productId) || 0,
+      cost,
       item.discount,
       item.tax,
       item.total,
+      fulfillmentType,
     );
 
     await db.run(
       `UPDATE products
-       SET quantity = quantity - ?,
+       SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
            updated_at = ?
        WHERE id = ? AND fulfillment_type = 'stocked'`,
       item.quantity,
+      item.quantity,
       now,
+      item.productId,
+    );
+
+    // Remove sold-out stocked products from warehouse inventory
+    await db.run(
+      `DELETE FROM products
+       WHERE id = ? AND fulfillment_type = 'stocked' AND quantity <= 0`,
       item.productId,
     );
   }

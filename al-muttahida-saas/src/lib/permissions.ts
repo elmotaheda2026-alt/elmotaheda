@@ -48,8 +48,26 @@ const rolePermissions: Record<User['role'], Permission[]> = {
     'shareholders:manage',
     'notifications:read',
   ],
-  manager: ['dashboard:view', 'sales:read', 'sales:write', 'payments:read', 'reports:read', 'notifications:read'],
-  accountant: ['dashboard:view', 'sales:read', 'payments:read', 'payments:write', 'notifications:read'],
+  manager: [
+    'dashboard:view',
+    'sales:read',
+    'payments:read',
+    'reports:read',
+    'notifications:read',
+    'inventory:manage',
+    'purchases:manage',
+    'shareholders:manage',
+    'users:manage',
+    'settings:manage',
+  ],
+  accountant: [
+    'dashboard:view',
+    'sales:read',
+    'payments:read',
+    'payments:write',
+    'inventory:manage',
+    'notifications:read',
+  ],
   user: ['dashboard:view', 'sales:read', 'payments:read', 'notifications:read'],
   collector: ['dashboard:view', 'payments:read', 'payments:write', 'notifications:read'],
   reviewer: ['dashboard:view', 'sales:read', 'payments:read', 'reports:read', 'sales:reschedule', 'notifications:read'],
@@ -57,6 +75,9 @@ const rolePermissions: Record<User['role'], Permission[]> = {
 };
 
 export const isAdmin = (user: User | null): boolean => user?.role === 'admin';
+export const isSupervisor = (user: User | null): boolean => user?.role === 'manager';
+export const isReadOnlyUser = (user: User | null): boolean => user?.role === 'manager';
+export const canModify = (user: User | null): boolean => Boolean(user && user.role !== 'manager');
 
 /**
  * Checks if the current authenticated user has the given permission.

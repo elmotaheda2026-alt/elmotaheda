@@ -27,13 +27,63 @@ const DATA_MODE = import.meta.env.VITE_DATA_MODE === 'local' ? 'local' : 'api';
 const API_USER_KEY = 'api_user';
 const FORCE_LOCAL_RESTORE_KEY = 'almuttahida_force_local_restore';
 
-export async function checkBackendHealth(): Promise<boolean> {
+export function setServerApiUrl(url: string): string {
+  let cleanUrl = url.trim().replace(/\/+$/, '');
+  if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+    cleanUrl = `http://${cleanUrl}`;
+  }
   try {
-    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    const parsed = new URL(cleanUrl);
+    if (!parsed.port) {
+      parsed.port = '4000';
+      cleanUrl = parsed.origin;
+    }
+  } catch {
+    if (!cleanUrl.includes(':', 6)) {
+      cleanUrl = `${cleanUrl}:4000`;
+    }
+  }
+  localStorage.setItem('server_api_url', cleanUrl);
+  return cleanUrl;
+}
+
+export function clearServerApiUrl(): void {
+  localStorage.removeItem('server_api_url');
+}
+
+export function getServerApiUrl(): string {
+  return resolveApiBaseUrl();
+}
+
+export async function testServerUrl(url: string, timeoutMs = 3000): Promise<{ ok: boolean; message?: string }> {
+  let cleanUrl = url.trim().replace(/\/+$/, '');
+  if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+    cleanUrl = `http://${cleanUrl}`;
+  }
+  if (!cleanUrl.includes(':', 6)) {
+    cleanUrl = `${cleanUrl}:4000`;
+  }
+  try {
+    const res = await fetch(`${cleanUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok) return { ok: true };
+  } catch (_) {}
+
+  try {
+    const res2 = await fetch(`${cleanUrl}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res2.ok) return { ok: true };
+  } catch (_) {}
+
+  return { ok: false, message: 'تعذر الوصول إلى الخادم على هذا العنوان' };
+}
+
+export async function checkBackendHealth(targetUrl?: string): Promise<boolean> {
+  const base = targetUrl || resolveApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
     return res.ok;
   } catch {
     try {
-      const res2 = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(3000) });
+      const res2 = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
       return res2.ok;
     } catch {
       return false;

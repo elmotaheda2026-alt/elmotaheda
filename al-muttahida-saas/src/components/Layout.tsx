@@ -23,12 +23,12 @@ export default function Layout() {
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} onToggle={toggleSidebar} />
       </div>
 
-      <div className={`h-screen flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-60' : 'lg:mr-16'} print:m-0 overflow-hidden`}>
-        <div className="print:hidden shrink-0 z-30">
+      <div className={`h-screen max-h-screen flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-60' : 'lg:mr-16'} print:m-0 overflow-hidden relative`}>
+        <div className="print:hidden shrink-0 z-30 sticky top-0">
           <Header onMenuClick={toggleSidebar} />
         </div>
 
-        <main className="flex-1 min-h-0 flex flex-col overflow-hidden p-2.5 sm:p-3 md:p-3.5 print:h-auto print:overflow-visible print:p-0">
+        <main className="flex-1 min-h-0 flex flex-col overflow-y-auto custom-scrollbar p-2 sm:p-2.5 md:p-3 print:h-auto print:overflow-visible print:p-0">
           <Outlet />
         </main>
       </div>

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Save,
   Building,
@@ -17,8 +18,15 @@ import {
   Clock,
   Folder,
   Play,
+  Search,
+  ExternalLink,
+  RotateCcw,
+  ShieldCheck,
+  Users,
+  Plus,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { Setting, OpeningBalances } from '../types';
 import {
   clearAllData,
@@ -26,22 +34,37 @@ import {
   restoreDatabaseBackup,
   getOpeningBalances,
   saveOpeningBalances,
+  createShareholder,
+  updateShareholder,
 } from '../lib/storage';
-import { api, isApiMode, API_BASE } from '../lib/apiClient';
+import {
+  api,
+  isApiMode,
+  API_BASE,
+  setServerApiUrl,
+  clearServerApiUrl,
+  getServerApiUrl,
+  testServerUrl,
+} from '../lib/apiClient';
+import { scanLanForServer } from '../lib/lanDiscovery';
 
-async function fetchNetworkInfo(retries = 3, delayMs = 800) {
+async function fetchNetworkInfo(retries = 2, delayMs = 600) {
+  const currentBase = getServerApiUrl();
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      let res = await fetch(`${API_BASE}/system/network-info`);
+      let res = await fetch(`${currentBase}/system/network-info`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) {
-        res = await fetch(`${API_BASE}/api/system/network-info`);
+        res = await fetch(`${currentBase}/api/system/network-info`, { signal: AbortSignal.timeout(3000) });
       }
       if (res.ok) {
         return (await res.json()) as {
           ok: boolean;
+          mode?: 'server' | 'client';
           localIp: string;
           hostname: string;
-          dbConfig: { mode?: string; db?: { host: string; port: number; database: string } };
+          frontendUrl?: string;
+          apiUrl?: string;
+          dbConfig?: { mode?: string; host?: string; db?: { host: string; port: number; database: string } };
         };
       }
     } catch (e) {
@@ -58,13 +81,14 @@ async function saveDbConfig(payload: {
   database: string;
   mode: 'server' | 'client';
 }) {
-  let res = await fetch(`${API_BASE}/system/db-config`, {
+  const currentBase = getServerApiUrl();
+  let res = await fetch(`${currentBase}/system/db-config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    res = await fetch(`${API_BASE}/api/system/db-config`, {
+    res = await fetch(`${currentBase}/api/system/db-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -88,7 +112,8 @@ async function testConnection(ip: string) {
 }
 
 export default function Settings() {
-  const { settings, updateSettings } = useAuth();
+  const { settings, updateSettings, user } = useAuth();
+  const { confirmDialog, showToast } = useDialog();
   const [formData, setFormData] = useState<Setting>(settings);
   const [saved, setSaved] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -105,18 +130,165 @@ export default function Settings() {
     };
   });
   const [obSaved, setObSaved] = useState(false);
+  const [obLoading, setObLoading] = useState(false);
+  const [obSubmitting, setObSubmitting] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'company' | 'network' | 'backup' | 'balances' | 'danger'>('company');
-  const [networkInfo, setNetworkInfo] = useState<{ localIp: string; hostname: string } | null>(null);
+  interface FoundingPartnerRow {
+    id: string;
+    name: string;
+    phone: string;
+    isFounder: boolean;
+    sharePercentage: number;
+    capital: number;
+    notes?: string;
+  }
+
+  const [partners, setPartners] = useState<FoundingPartnerRow[]>([]);
+
+  const loadOpeningBalancesAndPartners = async () => {
+    setObLoading(true);
+    try {
+      if (isApiMode()) {
+        const [backendOb, backendShareholders] = await Promise.allSettled([
+          api.getOpeningBalances(),
+          api.listShareholders(),
+        ]);
+
+        if (backendOb.status === 'fulfilled' && backendOb.value) {
+          setObData({
+            startingCashBalance: Number(backendOb.value.startingCashBalance || 0),
+            startingReceivables: Number(backendOb.value.startingReceivables || 0),
+            startingPayables: Number(backendOb.value.startingPayables || 0),
+            startingInventoryValue: Number(backendOb.value.startingInventoryValue || 0),
+          });
+        }
+
+        if (
+          backendShareholders.status === 'fulfilled' &&
+          Array.isArray(backendShareholders.value) &&
+          backendShareholders.value.length > 0
+        ) {
+          setPartners(
+            backendShareholders.value.map((sh: any, index: number) => ({
+              id: sh.id || `partner-${index}`,
+              name: sh.name || '',
+              phone: sh.phone || '',
+              isFounder: sh.isFounder !== false,
+              sharePercentage: Number(sh.sharePercentage || 0),
+              capital: Number(sh.capital || 0),
+              notes: sh.notes || 'شريك تأسيسي',
+            }))
+          );
+        } else {
+          setPartners([
+            {
+              id: 'init-1',
+              name: '',
+              phone: '',
+              isFounder: true,
+              sharePercentage: 100,
+              capital: 0,
+              notes: 'شريك تأسيسي',
+            },
+          ]);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load opening balances or partners in Settings:', e);
+    } finally {
+      setObLoading(false);
+    }
+  };
+
+  const founders = partners.filter((p) => p.isFounder);
+  const investors = partners.filter((p) => !p.isFounder);
+
+  const foundersTotalCapital = founders.reduce((sum, p) => sum + (Number(p.capital) || 0), 0);
+  const foundersTotalShare = Number(
+    founders.reduce((sum, p) => sum + (Number(p.sharePercentage) || 0), 0).toFixed(2)
+  );
+
+  const investorsTotalCapital = investors.reduce((sum, p) => sum + (Number(p.capital) || 0), 0);
+  const totalCompanyCapital = foundersTotalCapital + investorsTotalCapital;
+
+  const addFounderRow = () => {
+    const remainingShare = Math.max(0, Number((100 - foundersTotalShare).toFixed(2)));
+    setPartners([
+      ...partners,
+      {
+        id: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: '',
+        phone: '',
+        isFounder: true,
+        sharePercentage: remainingShare,
+        capital: 0,
+        notes: 'شريك أساسي',
+      },
+    ]);
+  };
+
+  const addInvestorRow = () => {
+    setPartners([
+      ...partners,
+      {
+        id: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: '',
+        phone: '',
+        isFounder: false,
+        sharePercentage: 20,
+        capital: 0,
+        notes: 'مساهم بالتمويل',
+      },
+    ]);
+  };
+
+  const removePartnerRow = (id: string) => {
+    setPartners(partners.filter((p) => p.id !== id));
+  };
+
+  const updatePartnerField = (id: string, field: keyof FoundingPartnerRow, value: any) => {
+    setPartners(partners.map((p) => (p.id === id ? { ...p, [field]: value } : p)));
+  };
+
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab') as 'company' | 'network' | 'backup' | 'balances' | 'danger' | null;
+  const [activeTab, setActiveTab] = useState<'company' | 'network' | 'backup' | 'balances' | 'danger'>(() => {
+    if (requestedTab && ['company', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
+      return requestedTab;
+    }
+    return 'company';
+  });
+
+  useEffect(() => {
+    if (requestedTab && ['company', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
+      setActiveTab(requestedTab);
+    }
+  }, [requestedTab]);
+
+  useEffect(() => {
+    if (activeTab === 'balances') {
+      void loadOpeningBalancesAndPartners();
+    }
+  }, [activeTab]);
+  const [networkInfo, setNetworkInfo] = useState<{
+    localIp: string;
+    hostname: string;
+    frontendUrl?: string;
+    apiUrl?: string;
+  } | null>(null);
   const [networkLoading, setNetworkLoading] = useState(false);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [machineMode, setMachineMode] = useState<'server' | 'client'>('server');
-  const [clientIp, setClientIp] = useState('192.168.1.100');
-  const [clientPort, setClientPort] = useState(1433);
-  const [clientDb, setClientDb] = useState('AlMuttahida_New');
+  const [clientIp, setClientIp] = useState(() => {
+    const saved = localStorage.getItem('server_api_url');
+    if (saved) return saved.replace(/^https?:\/\//, '').replace(/:4000$/, '');
+    return '192.168.1.9';
+  });
   const [connStatus, setConnStatus] = useState<'idle' | 'testing' | 'connected' | 'failed'>('idle');
   const [connSaved, setConnSaved] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
 
   interface AutoBackupSettings {
     enabled: boolean;
@@ -229,17 +401,22 @@ export default function Settings() {
     setNetworkError(null);
     try {
       const data = await fetchNetworkInfo();
-      setNetworkInfo({ localIp: data.localIp, hostname: data.hostname });
-      if (data.dbConfig?.mode) setMachineMode(data.dbConfig.mode as 'server' | 'client');
-      const cfg: any = data.dbConfig || {};
-      const host = cfg.host || cfg.db?.host;
-      const port = cfg.port || cfg.db?.port;
-      const database = cfg.database || cfg.db?.database;
-      if (host) setClientIp(host);
-      if (port) setClientPort(Number(port));
-      if (database) setClientDb(database);
+      setNetworkInfo({
+        localIp: data.localIp,
+        hostname: data.hostname,
+        frontendUrl: data.frontendUrl || `http://${data.localIp}:5173`,
+        apiUrl: data.apiUrl || `http://${data.localIp}:4000`,
+      });
+      if (data.mode) {
+        setMachineMode(data.mode);
+      } else if (data.dbConfig?.mode) {
+        setMachineMode(data.dbConfig.mode as 'server' | 'client');
+      }
     } catch {
-      setNetworkError('تعذر الاتصال بالخادم للحصول على معلومات الشبكة.');
+      const saved = localStorage.getItem('server_api_url');
+      if (saved) {
+        setMachineMode('client');
+      }
     } finally {
       setNetworkLoading(false);
     }
@@ -257,31 +434,78 @@ export default function Settings() {
     });
   };
 
-  const handleTestAndSave = async () => {
-    setConnStatus('testing');
-    try {
-      const ok = await testConnection(clientIp);
-      if (!ok) throw new Error('connection failed');
-      setConnStatus('connected');
-      await saveDbConfig({ host: clientIp, port: clientPort, database: clientDb, mode: 'client' });
-      setConnSaved(true);
-      setTimeout(() => setConnSaved(false), 4000);
-    } catch {
-      setConnStatus('failed');
-      setTimeout(() => setConnStatus('idle'), 5000);
-    }
+  const handleCopyUrl = () => {
+    const url = networkInfo?.frontendUrl || `http://${networkInfo?.localIp || '192.168.1.9'}:5173`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2000);
+    });
   };
 
   const handleSaveModeServer = async () => {
+    setNetworkLoading(true);
     try {
-      const localIp = networkInfo?.localIp ?? '127.0.0.1';
-      await saveDbConfig({ host: localIp, port: clientPort, database: clientDb, mode: 'server' });
+      clearServerApiUrl();
+      await saveDbConfig({ host: '127.0.0.1', port: 1433, database: 'AlMuttahida_New', mode: 'server' }).catch(() => null);
       setMachineMode('server');
       setConnSaved(true);
       setTimeout(() => setConnSaved(false), 3000);
+      void loadNetworkInfo();
     } catch (err: any) {
       alert('تعذر حفظ الاعدادات: ' + (err.message || ''));
+    } finally {
+      setNetworkLoading(false);
     }
+  };
+
+  const handleTestAndSaveClient = async () => {
+    if (!clientIp.trim()) return;
+    setConnStatus('testing');
+    setNetworkError(null);
+    try {
+      const testRes = await testServerUrl(clientIp);
+      if (!testRes.ok) throw new Error(testRes.message || 'connection failed');
+      setServerApiUrl(clientIp);
+      setConnStatus('connected');
+      setConnSaved(true);
+      await saveDbConfig({ host: clientIp.trim(), port: 1433, database: 'AlMuttahida_New', mode: 'client' }).catch(() => null);
+      setTimeout(() => setConnSaved(false), 4000);
+    } catch (e: any) {
+      setConnStatus('failed');
+      setNetworkError('فشل الاتصال بالخادم على: ' + clientIp + ' — تأكد أن الجهازين متصلان بنفس شبكة الراوتر وأن السيرفر قيد التشغيل على الجهاز الرئيسي.');
+      setTimeout(() => setConnStatus('idle'), 6000);
+    }
+  };
+
+  const handleAutoScan = async () => {
+    setScanLoading(true);
+    setNetworkError(null);
+    setConnStatus('testing');
+    try {
+      const discoveredUrl = await scanLanForServer();
+      if (discoveredUrl) {
+        const cleanHost = discoveredUrl.replace(/^https?:\/\//, '').replace(/:4000$/, '');
+        setClientIp(cleanHost);
+        setServerApiUrl(discoveredUrl);
+        setConnStatus('connected');
+        setConnSaved(true);
+        setTimeout(() => setConnSaved(false), 4000);
+      } else {
+        setConnStatus('failed');
+        setNetworkError('لم يتم العثور على سيرفر نشط في الشبكة المحلية تلقائياً. تأكد من تشغيل السيرفر على الجهاز الرئيسي ثم ادخل رقم الـ IP يدوياً.');
+        setTimeout(() => setConnStatus('idle'), 5000);
+      }
+    } catch (e: any) {
+      setConnStatus('failed');
+      setNetworkError('حدث خطأ أثناء فحص الشبكة: ' + e.message);
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
+  const handleResetToLocalhost = () => {
+    clearServerApiUrl();
+    window.location.reload();
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -293,11 +517,51 @@ export default function Settings() {
     setTimeout(() => setSaved(false), 3000);
   };
 
-  const handleObSubmit = (e: React.FormEvent) => {
+  const handleObSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    saveOpeningBalances(obData);
-    setObSaved(true);
-    setTimeout(() => setObSaved(false), 3000);
+    setObSubmitting(true);
+    try {
+      if (isApiMode()) {
+        await api.updateOpeningBalances(obData);
+      }
+      saveOpeningBalances(obData);
+
+      const validPartners = partners.filter((p) => p.name.trim().length > 0);
+      for (const partner of validPartners) {
+        const payload = {
+          name: partner.name.trim(),
+          phone: partner.phone.trim() || '01000000000',
+          sharePercentage: Number(partner.sharePercentage) || 0,
+          managementFeePercentage: partner.isFounder ? 0 : Math.max(0, 100 - (Number(partner.sharePercentage) || 0)),
+          capital: Number(partner.capital) || 0,
+          currentBalance: 0,
+          joinedDate: new Date().toISOString().slice(0, 10),
+          isFounder: Boolean(partner.isFounder),
+          notes: partner.notes?.trim() || 'شريك تأسيسي / رصيد افتتاحي دفتري',
+          isOpeningBalance: true,
+          affectsTreasury: false,
+        };
+
+        if (isApiMode()) {
+          if (partner.id && !partner.id.startsWith('temp-') && !partner.id.startsWith('init-')) {
+            await api.updateShareholder(partner.id, payload);
+          } else {
+            await api.createShareholder(payload);
+          }
+        } else {
+          await createShareholder(payload);
+        }
+      }
+
+      setObSaved(true);
+      setTimeout(() => setObSaved(false), 4000);
+      await loadOpeningBalancesAndPartners();
+    } catch (err: any) {
+      console.error('Failed to save opening balances and partners:', err);
+      window.alert(err?.message || 'حدث خطأ أثناء حفظ الأرصدة والشركاء');
+    } finally {
+      setObSubmitting(false);
+    }
   };
 
   const handleExportBackup = async () => {
@@ -311,19 +575,29 @@ export default function Settings() {
     }
   };
 
-  const handleImportBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (!confirm('استيراد النسخة الاحتياطية سيستبدل بيانات النظام الحالية بالكامل. هل تريد المتابعة؟')) return;
+
+    const isConfirmed = await confirmDialog({
+      title: 'استيراد نسخة احتياطية',
+      message: 'استيراد النسخة الاحتياطية سيستبدل بيانات النظام الحالية بالكامل.',
+      subMessage: 'هل تريد المتابعة واستبدال البيانات الحالية؟',
+      confirmText: 'نعم، استيراد واستبدال',
+      cancelText: 'إلغاء',
+      type: 'warning',
+    });
+    if (!isConfirmed) return;
+
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         await restoreDatabaseBackup(String(reader.result || ''));
-        alert('تم استيراد النسخة الاحتياطية بنجاح. ستتم إعادة تحميل النظام.');
-        window.location.reload();
+        showToast('تم استيراد النسخة الاحتياطية بنجاح. ستتم إعادة تحميل النظام.', 'success');
+        setTimeout(() => window.location.reload(), 1500);
       } catch (err: any) {
-        alert(err.message || 'تعذر استيراد ملف النسخة الاحتياطية.');
+        showToast(err.message || 'تعذر استيراد ملف النسخة الاحتياطية.', 'error');
       }
     };
     reader.readAsText(file);
@@ -422,13 +696,19 @@ export default function Settings() {
               </div>
             </div>
             <div className="flex items-center gap-4 pt-2">
-              <button
-                type="submit"
-                className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors font-bold text-sm shadow-2xs cursor-pointer"
-              >
-                <Save size={16} />
-                حفظ الاعدادات
-              </button>
+              {user?.role !== 'manager' ? (
+                <button
+                  type="submit"
+                  className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors font-bold text-sm shadow-2xs cursor-pointer"
+                >
+                  <Save size={16} />
+                  حفظ الاعدادات
+                </button>
+              ) : (
+                <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
+                  حساب المشرف: وضع العرض فقط (لا يمكن تعديل الإعدادات)
+                </span>
+              )}
               {saved && (
                 <span className="flex items-center gap-1 text-emerald-600 font-bold text-sm">
                   <CheckCircle2 size={16} />
@@ -444,165 +724,216 @@ export default function Settings() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Wifi size={18} className="text-blue-600" />
-                <h3 className="font-bold text-slate-800">اعدادات الشبكة والاتصال</h3>
+                <h3 className="font-bold text-slate-800">اعدادات الشبكة وربط الأجهزة</h3>
               </div>
               <button
                 type="button"
                 onClick={() => void loadNetworkInfo()}
                 disabled={networkLoading}
-                className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-blue-300 transition-colors"
+                className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer"
               >
-                <RefreshCw size={13} className={networkLoading ? 'animate-spin' : ''} />
-                تحديث
+                <RefreshCw size={13} className={networkLoading ? 'animate-spin text-blue-600' : ''} />
+                تحديث معلومات الشبكة
               </button>
             </div>
 
             {networkError && (
-              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-4 py-3 text-sm font-bold">
-                <AlertCircle size={16} />
-                {networkError}
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-xs font-bold">
+                <AlertCircle size={16} className="text-amber-600 shrink-0" />
+                <span>{networkError}</span>
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            {/* Mode Selection Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <button
                 type="button"
                 onClick={() => setMachineMode('server')}
-                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
+                className={`flex flex-col items-start p-5 rounded-2xl border-2 transition-all cursor-pointer text-right ${
                   machineMode === 'server'
-                    ? 'border-blue-600 bg-blue-50 text-blue-700'
-                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                    ? 'border-blue-600 bg-blue-50/60 shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
                 }`}
               >
-                <Server size={28} className={machineMode === 'server' ? 'text-blue-600' : 'text-slate-400'} />
-                <span className="font-black text-sm">جهاز رئيسي (Server)</span>
-                <span className="text-xs text-center opacity-70">يحمل قاعدة البيانات وتعمل عليه جميع الاجهزة</span>
+                <div className="flex items-center justify-between w-full mb-3">
+                  <div className={`p-2.5 rounded-xl ${machineMode === 'server' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    <Server size={22} />
+                  </div>
+                  {machineMode === 'server' && (
+                    <span className="text-xs font-black text-blue-700 bg-blue-100 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                      الوضع النشط
+                    </span>
+                  )}
+                </div>
+                <span className="font-black text-base text-slate-800">جهاز رئيسي (Server)</span>
+                <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
+                  الجهاز الأساسي الذي يحمل قاعدة البيانات ومحرك النظام. تشارك منه الرابط لبقية الأجهزة في المكتب.
+                </p>
               </button>
+
               <button
                 type="button"
                 onClick={() => setMachineMode('client')}
-                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
+                className={`flex flex-col items-start p-5 rounded-2xl border-2 transition-all cursor-pointer text-right ${
                   machineMode === 'client'
-                    ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                    ? 'border-indigo-600 bg-indigo-50/60 shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
                 }`}
               >
-                <Monitor size={28} className={machineMode === 'client' ? 'text-indigo-600' : 'text-slate-400'} />
-                <span className="font-black text-sm">جهاز فرعي (Client)</span>
-                <span className="text-xs text-center opacity-70">يتصل بالجهاز الرئيسي عبر الشبكة</span>
+                <div className="flex items-center justify-between w-full mb-3">
+                  <div className={`p-2.5 rounded-xl ${machineMode === 'client' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    <Monitor size={22} />
+                  </div>
+                  {machineMode === 'client' && (
+                    <span className="text-xs font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-2.5 py-0.5 rounded-full">
+                      الوضع النشط
+                    </span>
+                  )}
+                </div>
+                <span className="font-black text-base text-slate-800">جهاز فرعي (Client)</span>
+                <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
+                  جهاز كمبيوتر آخر أو لابتوب في المكتب يتصل بالجهاز الرئيسي عبر الشبكة لحفظ واستعراض الفواتير والبيانات.
+                </p>
               </button>
             </div>
 
+            {/* SERVER MODE DETAILS */}
             {machineMode === 'server' && (
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 space-y-4">
-                <p className="text-blue-800 font-bold text-sm flex items-center gap-2">
-                  <Server size={16} />
-                  هذا الجهاز يعمل كخادم رئيسي
-                </p>
-                <div>
-                  <label className="block text-xs font-bold text-blue-700 mb-2">
-                    عنوان IP الجهاز الرئيسي (شارك هذا العنوان مع الاجهزة الفرعية)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 bg-white border border-blue-300 rounded-lg px-4 py-2.5 font-mono font-black text-lg text-blue-900 select-all">
-                      {networkLoading ? (
-                        <span className="text-slate-400 text-sm font-normal">جاري التحميل...</span>
-                      ) : (
-                        networkInfo?.localIp ?? 'قم بالضغط على تحديث'
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyIp}
-                      disabled={!networkInfo}
-                      className={`flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                        copied
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
-                      }`}
-                    >
-                      {copied ? <CheckCircle2 size={16} /> : <Copy size={16} />}
-                      {copied ? 'تم النسخ!' : 'نسخ'}
-                    </button>
-                  </div>
-                  {networkInfo && (
-                    <p className="text-xs text-blue-600 mt-1.5">
-                      اسم الجهاز: <span className="font-bold">{networkInfo.hostname}</span>
-                    </p>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <p className="text-sm font-black text-slate-800">
+                    هذا الجهاز يعمل كخادم رئيسي (Server)
+                  </p>
+                  {networkInfo?.hostname && (
+                    <span className="mr-auto text-xs text-slate-400 font-bold">
+                      اسم الجهاز: <strong className="text-slate-600 font-mono">{networkInfo.hostname}</strong>
+                    </span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveModeServer()}
-                  className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold"
-                >
-                  <Save size={15} />
-                  حفظ وضع الجهاز الرئيسي
-                </button>
-                {connSaved && (
-                  <span className="flex items-center gap-1 text-emerald-600 font-bold text-sm">
-                    <CheckCircle2 size={15} />
-                    تم الحفظ بنجاح
-                  </span>
-                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* IP Display Card */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                    <label className="block text-xs font-bold text-slate-500">
+                      عنوان IP السيرفر بالشبكة المحلية
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-mono font-black text-slate-800 text-base" dir="ltr">
+                        {networkLoading ? '...' : (networkInfo?.localIp || '127.0.0.1')}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyIp}
+                        disabled={!networkInfo?.localIp}
+                        className={`flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          copied ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                        {copied ? 'تم النسخ' : 'نسخ IP'}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      أدخل هذا العنوان في أي جهاز فرعي للربط المباشر.
+                    </p>
+                  </div>
+
+                  {/* Browser Web Link Card */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                    <label className="block text-xs font-bold text-slate-500">
+                      رابط تشغيل النظام من أي متصفح في المكتب
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-mono font-black text-blue-700 text-xs truncate" dir="ltr">
+                        {networkInfo?.frontendUrl || `http://${networkInfo?.localIp || '192.168.1.9'}:5173`}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyUrl}
+                        className={`flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          copiedUrl ? 'bg-emerald-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                        }`}
+                      >
+                        {copiedUrl ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                        {copiedUrl ? 'تم النسخ' : 'نسخ الرابط'}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      افتح Google Chrome على أي جهاز آخر متصل بالراوتر واكتب هذا الرابط.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveModeServer()}
+                    disabled={networkLoading}
+                    className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-colors text-xs font-bold cursor-pointer shadow-sm"
+                  >
+                    <Save size={15} />
+                    تأكيد وتثبيت وضع الجهاز الرئيسي
+                  </button>
+                  {connSaved && (
+                    <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                      <CheckCircle2 size={15} />
+                      تم تثبيت وضع الجهاز الرئيسي بنجاح
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
+            {/* CLIENT MODE DETAILS */}
             {machineMode === 'client' && (
-              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-5 space-y-4">
-                <p className="text-indigo-800 font-bold text-sm flex items-center gap-2">
-                  <Monitor size={16} />
-                  ادخل عنوان الجهاز الرئيسي للاتصال
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="md:col-span-1">
-                    <label className="block text-xs font-bold text-indigo-700 mb-1">
-                      IP الجهاز الرئيسي
-                    </label>
-                    <input
-                      type="text"
-                      value={clientIp}
-                      onChange={(e) => { setClientIp(e.target.value); setConnStatus('idle'); }}
-                      placeholder="192.168.1.100"
-                      className="input-ui w-full font-mono"
-                      dir="ltr"
-                    />
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <Monitor size={18} className="text-indigo-600" />
+                    <p className="text-sm font-black text-slate-800">
+                      إعدادات اتصال الجهاز الفرعي بالخادم الرئيسي
+                    </p>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-indigo-700 mb-1">
-                      بورت قاعدة البيانات
-                    </label>
-                    <input
-                      type="number"
-                      value={clientPort}
-                      onChange={(e) => setClientPort(Number(e.target.value))}
-                      className="input-ui w-full font-mono"
-                      dir="ltr"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-indigo-700 mb-1">
-                      اسم قاعدة البيانات
-                    </label>
-                    <input
-                      type="text"
-                      value={clientDb}
-                      onChange={(e) => setClientDb(e.target.value)}
-                      className="input-ui w-full font-mono"
-                      dir="ltr"
-                    />
+                  <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-600 bg-white border border-slate-200 px-3 py-1 rounded-lg">
+                    <span>السيرفر الحالي:</span>
+                    <span className="text-indigo-700" dir="ltr">{getServerApiUrl()}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 flex-wrap">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-2">
+                    عنوان IP الخادم الرئيسي أو رابطه (مثال: 192.168.1.9)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={clientIp}
+                      onChange={(e) => {
+                        setClientIp(e.target.value);
+                        setConnStatus('idle');
+                      }}
+                      placeholder="192.168.1.9"
+                      className="input-ui flex-1 font-mono text-sm"
+                      dir="ltr"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 font-medium mt-1.5">
+                    انسخ عنوان IP من صفحة إعدادات الشبكة على الجهاز الرئيسي وضعه هنا.
+                  </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  {/* Test & Save */}
                   <button
                     type="button"
-                    onClick={() => void handleTestAndSave()}
-                    disabled={connStatus === 'testing' || !clientIp}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-bold transition-all ${
+                    onClick={() => void handleTestAndSaveClient()}
+                    disabled={connStatus === 'testing' || !clientIp.trim()}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-sm ${
                       connStatus === 'testing'
                         ? 'bg-slate-200 text-slate-500 cursor-wait'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 shadow-2xs'
+                        : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
                     }`}
                   >
                     {connStatus === 'testing' ? (
@@ -610,36 +941,61 @@ export default function Settings() {
                     ) : (
                       <Wifi size={15} />
                     )}
-                    {connStatus === 'testing' ? 'جاري الاختبار...' : 'اختبار الاتصال والحفظ'}
+                    {connStatus === 'testing' ? 'جاري الفحص والربط...' : 'اختبار الاتصال وربط السيرفر'}
                   </button>
 
-                  {connStatus === 'connected' && (
-                    <span className="flex items-center gap-1.5 text-emerald-600 font-black text-sm bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-                      <Wifi size={15} />
-                      متصل بنجاح{connSaved ? ' — تم الحفظ' : ''}
-                    </span>
-                  )}
-                  {connStatus === 'failed' && (
-                    <span className="flex items-center gap-1.5 text-rose-600 font-black text-sm bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-lg">
-                      <WifiOff size={15} />
-                      فشل الاتصال — تحقق من IP والشبكة
-                    </span>
-                  )}
-                  {connStatus === 'idle' && (
-                    <span className="flex items-center gap-1.5 text-slate-400 text-sm">
-                      <WifiOff size={14} />
-                      لم يتم الاختبار بعد
-                    </span>
-                  )}
+                  {/* Auto-scan LAN */}
+                  <button
+                    type="button"
+                    onClick={() => void handleAutoScan()}
+                    disabled={scanLoading || connStatus === 'testing'}
+                    className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    <Search size={15} className={scanLoading ? 'animate-spin' : ''} />
+                    {scanLoading ? 'جاري فحص الشبكة المحلية...' : 'فحص واكتشاف السيرفر تلقائياً (Auto-Scan)'}
+                  </button>
+
+                  {/* Reset to Localhost */}
+                  <button
+                    type="button"
+                    onClick={handleResetToLocalhost}
+                    className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 text-xs font-bold px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer mr-auto"
+                    title="إعادة التعيين للوضع المحلي الافتراضي"
+                  >
+                    <RotateCcw size={14} />
+                    استعادة الوضع الافتراضي
+                  </button>
                 </div>
 
-                <div className="bg-white border border-indigo-100 rounded-lg p-3 text-xs text-indigo-700 space-y-1">
-                  <p className="font-bold">تعليمات الاتصال:</p>
-                  <ol className="list-decimal list-inside space-y-0.5 text-indigo-600">
-                    <li>افتح اعدادات الشبكة على الجهاز الرئيسي وانسخ عنوان IP</li>
-                    <li>ادخل العنوان في الحقل اعلاه</li>
-                    <li>اضغط اختبار الاتصال والحفظ</li>
-                    <li>اعد تشغيل التطبيق لتطبيق التغييرات</li>
+                {/* Status Indicator Banners */}
+                {connStatus === 'connected' && (
+                  <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl px-4 py-3 text-xs font-bold">
+                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                    <span>تم الاتصال بالسيرفر بنجاح وتم حفظ الرابط للجهاز الفرعي. يرجى إعادة تحميل الصفحة لتطبيق الربط.</span>
+                    <button
+                      type="button"
+                      onClick={() => window.location.reload()}
+                      className="mr-auto bg-emerald-600 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-emerald-700 transition-colors cursor-pointer"
+                    >
+                      تحديث الصفحة الآن
+                    </button>
+                  </div>
+                )}
+
+                {connStatus === 'failed' && (
+                  <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl px-4 py-3 text-xs font-bold">
+                    <WifiOff size={16} className="text-rose-600 shrink-0" />
+                    <span>فشل الاتصال بالسيرفر. تأكد من صحة رقم الـ IP وأن السيرفر قيد التشغيل على الجهاز الرئيسي.</span>
+                  </div>
+                )}
+
+                {/* Instructions Box */}
+                <div className="bg-white border border-slate-200 rounded-xl p-4 text-xs text-slate-600 space-y-2">
+                  <p className="font-black text-slate-800">خطوات تشغيل جهاز فرعي في المكتب:</p>
+                  <ol className="list-decimal list-inside space-y-1 text-slate-500 font-semibold pr-1">
+                    <li>تأكد من تشغيل ملف السيستم على الجهاز الرئيسي وتوصيل كلا الجهازين بنفس الراوتر (Wi-Fi أو كابل).</li>
+                    <li>افتح صفحة إعدادات الشبكة على الجهاز الرئيسي وانسخ عنوان IP.</li>
+                    <li>ألصق عنوان IP في الحقل أعلاه واضغط <strong className="text-slate-700">"اختبار الاتصال وربط السيرفر"</strong>، أو اضغط <strong className="text-slate-700">"فحص واكتشاف السيرفر تلقائياً"</strong>.</li>
                   </ol>
                 </div>
               </div>
@@ -648,77 +1004,459 @@ export default function Settings() {
         )}
 
         {activeTab === 'balances' && (
-          <form onSubmit={handleObSubmit} className="p-6 space-y-5">
-            <div className="flex items-center gap-2 mb-2">
-              <Landmark size={18} className="text-indigo-600" />
-              <h3 className="font-bold text-slate-800">الارصدة الافتتاحية</h3>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">رصيد الخزينة الافتتاحي</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={obData.startingCashBalance}
-                  onChange={(e) => setObData({ ...obData, startingCashBalance: Number(e.target.value) })}
-                  className="input-ui w-full"
-                  placeholder="0.00"
-                />
-                <p className="text-xs text-slate-400 mt-1">النقد الفعلي في الخزينة عند بداية استخدام النظام</p>
+          <form onSubmit={handleObSubmit} className="p-6 space-y-6">
+            {/* Header info */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold shadow-xs">
+                  <Landmark size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-800 text-base">الأرصدة الافتتاحية والشركاء التأسيسيون</h3>
+                  <p className="text-xs text-slate-500">
+                    المرجع الموحد لترحيل أرقام الشركة القديمة، أرصدة الخزينة والديون، وحصص ورؤوس أموال الشركاء التأسيسيين بدقة محاسبية 100%
+                  </p>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">اجمالي رصيد العملاء الافتتاحي</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={obData.startingReceivables}
-                  onChange={(e) => setObData({ ...obData, startingReceivables: Number(e.target.value) })}
-                  className="input-ui w-full"
-                  placeholder="0.00"
-                />
-                <p className="text-xs text-slate-400 mt-1">مستحقات على عملاء قبل بداية النظام</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">اجمالي رصيد الموردين الافتتاحي</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={obData.startingPayables}
-                  onChange={(e) => setObData({ ...obData, startingPayables: Number(e.target.value) })}
-                  className="input-ui w-full"
-                  placeholder="0.00"
-                />
-                <p className="text-xs text-slate-400 mt-1">مستحقات للموردين من قبل بداية النظام</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">قيمة بضاعة اول المدة</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={obData.startingInventoryValue}
-                  onChange={(e) => setObData({ ...obData, startingInventoryValue: Number(e.target.value) })}
-                  className="input-ui w-full"
-                  placeholder="0.00"
-                />
-                <p className="text-xs text-slate-400 mt-1">تقييم المخزون عند بداية استخدام النظام</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4 pt-2">
               <button
-                type="submit"
-                className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition-colors font-bold text-sm shadow-2xs cursor-pointer"
+                type="button"
+                onClick={() => void loadOpeningBalancesAndPartners()}
+                disabled={obLoading}
+                className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer"
               >
-                <Save size={16} />
-                حفظ الارصدة الافتتاحية
+                <RefreshCw size={13} className={obLoading ? 'animate-spin text-blue-600' : ''} />
+                <span>تحديث البيانات</span>
               </button>
+            </div>
+
+            {/* Section 1: Financial Opening Balances */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center gap-2">
+                <Landmark size={18} className="text-emerald-600" />
+                <h4 className="font-bold text-slate-800 text-sm">
+                  1. الأرصدة المالية الافتتاحية (ترحيل أرقام الشركة القديمة)
+                </h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    الرصيد الافتتاحي للخزينة (النقدية الفعلية بالدرج)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={obData.startingCashBalance === 0 ? '' : obData.startingCashBalance}
+                    onChange={(e) => setObData({ ...obData, startingCashBalance: Number(e.target.value) })}
+                    className="input-ui w-full font-bold"
+                    placeholder="0.00"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">النقد الفعلي الموجود في الخزينة لبدء العمليات</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    إجمالي ديون العملاء الافتتاحية (المتبقي الفعلي على العملاء)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={obData.startingReceivables === 0 ? '' : obData.startingReceivables}
+                    onChange={(e) => setObData({ ...obData, startingReceivables: Number(e.target.value) })}
+                    className="input-ui w-full font-bold"
+                    placeholder="0.00"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">الديون المستحقة على العملاء من فواتير النظام القديم</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    إجمالي مستحقات الموردين الافتتاحية (ديون على شركتنا)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={obData.startingPayables === 0 ? '' : obData.startingPayables}
+                    onChange={(e) => setObData({ ...obData, startingPayables: Number(e.target.value) })}
+                    className="input-ui w-full font-bold"
+                    placeholder="0.00"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">مستحقات الموردين القديمة الواجب سدادها</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    قيمة بضاعة أول المدة (المخزون الافتتاحي)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={obData.startingInventoryValue === 0 ? '' : obData.startingInventoryValue}
+                    onChange={(e) => setObData({ ...obData, startingInventoryValue: Number(e.target.value) })}
+                    className="input-ui w-full font-bold"
+                    placeholder="0.00"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">القيمة الإجمالية لسعر تكلفة البضائع المتوفرة بالمخازن</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Section 2: Primary Partners (Owners - 100% Equity Pool) */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-blue-600" />
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-sm">
+                      2. الشركاء الأساسيون أصحاب المنشأة (توزيع الملكية 100%)
+                    </h4>
+                    <p className="text-[11px] text-slate-400">
+                      اقتسام صافي أرباح المنشأة وحقوق الملكية بين الشركاء الأساسيين (مجموع حصص الشركاء يجب أن يساوي 100%)
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={addFounderRow}
+                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-sm"
+                >
+                  <Plus size={14} />
+                  <span>إضافة شريك أساسي</span>
+                </button>
+              </div>
+
+              {/* KPI Badges for Founders */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
+                  <span className="text-[11px] text-slate-500 block font-bold">إجمالي رأس مال الشركاء الأساسيين</span>
+                  <span className="text-sm font-black text-slate-800 block mt-0.5" dir="ltr">
+                    {foundersTotalCapital.toLocaleString()} جنيه
+                  </span>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
+                  <span className="text-[11px] text-slate-500 block font-bold">مجموع حصص الشركاء الأساسيين</span>
+                  <div className="flex items-center justify-center gap-1.5 mt-0.5">
+                    <span
+                      className={`text-sm font-black ${
+                        foundersTotalShare === 100
+                          ? 'text-emerald-600'
+                          : foundersTotalShare > 100
+                          ? 'text-rose-600'
+                          : 'text-amber-600'
+                      }`}
+                    >
+                      %{foundersTotalShare}
+                    </span>
+                    {foundersTotalShare === 100 ? (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold">
+                        مكتمل 100%
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">
+                        {foundersTotalShare < 100 ? 'أقل من 100%' : 'أكبر من 100%'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
+                  <span className="text-[11px] text-slate-500 block font-bold">عدد الشركاء الأساسيين</span>
+                  <span className="text-sm font-black text-blue-700 block mt-0.5">
+                    {founders.length} شريك رئيسي
+                  </span>
+                </div>
+              </div>
+
+              {/* Founders List */}
+              <div className="space-y-3 pt-1">
+                {founders.map((partner, index) => (
+                  <div
+                    key={partner.id}
+                    className="bg-white border border-blue-200/60 rounded-xl p-3.5 space-y-3 shadow-2xs"
+                  >
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                      <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-[11px]">
+                          {index + 1}
+                        </span>
+                        <span>شريك أساسي #{index + 1}</span>
+                      </span>
+                      {founders.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removePartnerRow(partner.id)}
+                          className="text-slate-400 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
+                          title="حذف هذا الشريك"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="md:col-span-2">
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">اسم الشريك الأساسي</label>
+                        <input
+                          type="text"
+                          required
+                          value={partner.name}
+                          onChange={(e) => updatePartnerField(partner.id, 'name', e.target.value)}
+                          placeholder="مثال: أحمد محمود"
+                          className="input-ui w-full text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">رقم الهاتف</label>
+                        <input
+                          type="tel"
+                          value={partner.phone}
+                          onChange={(e) =>
+                            updatePartnerField(partner.id, 'phone', e.target.value.replace(/\D/g, ''))
+                          }
+                          placeholder="010..."
+                          className="input-ui w-full text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          نسبة الملكية من الشركة %
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={partner.sharePercentage === 0 ? '' : partner.sharePercentage}
+                          onChange={(e) =>
+                            updatePartnerField(partner.id, 'sharePercentage', Number(e.target.value))
+                          }
+                          placeholder="مثال: 50"
+                          className="input-ui w-full text-xs font-black text-center text-blue-700 bg-blue-50/50"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          رأس المال التأسيسي الدفتري (جنيه)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={partner.capital === 0 ? '' : partner.capital}
+                          onChange={(e) => updatePartnerField(partner.id, 'capital', Number(e.target.value))}
+                          placeholder="0.00"
+                          className="input-ui w-full text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          ملاحظات الشريك (اختياري)
+                        </label>
+                        <input
+                          type="text"
+                          value={partner.notes || ''}
+                          onChange={(e) => updatePartnerField(partner.id, 'notes', e.target.value)}
+                          placeholder="شريك أساسي مؤسس..."
+                          className="input-ui w-full text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Section 3: Silent Investors / Shareholders (Capital ROI Model) */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <Users size={18} className="text-purple-600" />
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-sm">
+                      3. المساهمون بالتمويل والمضاربة (عائد تشغيل رأس المال)
+                    </h4>
+                    <p className="text-[11px] text-slate-400">
+                      مستثمرون برؤوس أموالهم — يحصل كل مساهم على نسبته من أرباح أمواله فقط، والباقي يعود للمنشأة كنسبة إدارة
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={addInvestorRow}
+                  className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-sm"
+                >
+                  <Plus size={14} />
+                  <span>إضافة مساهم تمويل</span>
+                </button>
+              </div>
+
+              {/* Explanatory banner */}
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs text-purple-900 space-y-1">
+                <div className="flex items-center gap-2 font-bold text-purple-800">
+                  <ShieldCheck size={16} className="text-purple-600 shrink-0" />
+                  <span>قاعدة حساب أرباح المساهمين (مفصولة تماماً عن نسبة الـ 100% للشركاء):</span>
+                </div>
+                <p className="leading-relaxed text-[11px] text-purple-700 pr-6">
+                  المساهم يدخل برأس مال محدد، ويأخذ نسبته المتفق عليها من عائد تشغيل رأس ماله هو فقط، والمنشأة تحتفظ بالباقي كـ (نسبة إدارة) تضاف لأرباح الشركاء الأساسيين. <strong>لذلك لا تُجمع نسب المساهمين مع حصص الشركاء الأساسيين ولا تنقص من نسبتكم الـ 100%.</strong>
+                </p>
+              </div>
+
+              {/* KPI Badges for Investors */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
+                  <span className="text-[11px] text-slate-500 block font-bold">إجمالي رؤوس أموال المساهمين</span>
+                  <span className="text-sm font-black text-purple-700 block mt-0.5" dir="ltr">
+                    {investorsTotalCapital.toLocaleString()} جنيه
+                  </span>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
+                  <span className="text-[11px] text-slate-500 block font-bold">عدد المساهمين بالتمويل</span>
+                  <span className="text-sm font-black text-slate-800 block mt-0.5">
+                    {investors.length} مساهم
+                  </span>
+                </div>
+              </div>
+
+              {/* Investors List */}
+              {investors.length === 0 ? (
+                <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl bg-white text-slate-400 text-xs">
+                  لا يوجد مساهمون بالتمويل حالياً. اضغط على "إضافة مساهم تمويل" إذا كان هناك مستثمرون خارجيون.
+                </div>
+              ) : (
+                <div className="space-y-3 pt-1">
+                  {investors.map((investor, index) => {
+                    const investorShare = Number(investor.sharePercentage || 0);
+                    const mgmtFee = Math.max(0, 100 - investorShare);
+                    return (
+                      <div
+                        key={investor.id}
+                        className="bg-white border border-purple-200/60 rounded-xl p-3.5 space-y-3 shadow-2xs"
+                      >
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                          <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                            <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 font-bold flex items-center justify-center text-[11px]">
+                              {index + 1}
+                            </span>
+                            <span>مساهم تمويل #{index + 1}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removePartnerRow(investor.id)}
+                            className="text-slate-400 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
+                            title="حذف هذا المساهم"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                          <div className="md:col-span-2">
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">اسم المساهم</label>
+                            <input
+                              type="text"
+                              required
+                              value={investor.name}
+                              onChange={(e) => updatePartnerField(investor.id, 'name', e.target.value)}
+                              placeholder="مثال: أحمد علي"
+                              className="input-ui w-full text-xs font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">رقم الهاتف</label>
+                            <input
+                              type="tel"
+                              value={investor.phone}
+                              onChange={(e) =>
+                                updatePartnerField(investor.id, 'phone', e.target.value.replace(/\D/g, ''))
+                              }
+                              placeholder="010..."
+                              className="input-ui w-full text-xs font-bold"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              نسبة ربح المساهم %
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              value={investor.sharePercentage === 0 ? '' : investor.sharePercentage}
+                              onChange={(e) =>
+                                updatePartnerField(investor.id, 'sharePercentage', Number(e.target.value))
+                              }
+                              placeholder="مثال: 20"
+                              className="input-ui w-full text-xs font-black text-center text-purple-700 bg-purple-50/50"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              نسبة إدارة المنشأة %
+                            </label>
+                            <div className="h-9 flex items-center justify-center bg-slate-100 rounded-xl text-xs font-black text-slate-700 border border-slate-200">
+                              %{mgmtFee}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              رأس المال المستثمر (جنيه)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={investor.capital === 0 ? '' : investor.capital}
+                              onChange={(e) => updatePartnerField(investor.id, 'capital', Number(e.target.value))}
+                              placeholder="0.00"
+                              className="input-ui w-full text-xs font-bold text-emerald-700 bg-emerald-50/30"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ملاحظات المساهم (اختياري)
+                            </label>
+                            <input
+                              type="text"
+                              value={investor.notes || ''}
+                              onChange={(e) => updatePartnerField(investor.id, 'notes', e.target.value)}
+                              placeholder="مساهم تمويل - عقد مضاربة..."
+                              className="input-ui w-full text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Submit Bar */}
+            <div className="flex items-center gap-4 pt-2">
+              {user?.role !== 'manager' ? (
+                <button
+                  type="submit"
+                  disabled={obSubmitting}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold text-sm shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Save size={18} />
+                  <span>{obSubmitting ? 'جاري الحفظ...' : 'حفظ الأرصدة والشركاء التأسيسيين'}</span>
+                </button>
+              ) : (
+                <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
+                  حساب المشرف: وضع العرض فقط (لا يمكن تعديل الأرصدة الافتتاحية)
+                </span>
+              )}
               {obSaved && (
-                <span className="flex items-center gap-1 text-emerald-600 font-bold text-sm">
-                  <CheckCircle2 size={16} />
-                  تم الحفظ بنجاح
+                <span className="flex items-center gap-1.5 text-emerald-600 font-black text-sm">
+                  <CheckCircle2 size={18} />
+                  <span>تم حفظ الأرصدة والشركاء التأسيسيين بنجاح 100%!</span>
                 </span>
               )}
             </div>
@@ -755,14 +1493,20 @@ export default function Settings() {
                   className="hidden"
                   onChange={handleImportBackup}
                 />
-                <button
-                  type="button"
-                  onClick={() => backupInputRef.current?.click()}
-                  className="flex items-center gap-2 bg-amber-500 text-white px-5 py-2 rounded-lg hover:bg-amber-600 transition-colors text-sm font-bold"
-                >
-                  <Upload size={15} />
-                  استيراد نسخة احتياطية
-                </button>
+                {user?.role !== 'manager' ? (
+                  <button
+                    type="button"
+                    onClick={() => backupInputRef.current?.click()}
+                    className="flex items-center gap-2 bg-amber-500 text-white px-5 py-2 rounded-lg hover:bg-amber-600 transition-colors text-sm font-bold cursor-pointer"
+                  >
+                    <Upload size={15} />
+                    استيراد نسخة احتياطية
+                  </button>
+                ) : (
+                  <span className="text-xs font-bold text-slate-400 block pt-1">
+                    غير مصرح للمشرف باستيراد النسخ الاحتياطية
+                  </span>
+                )}
               </div>
             </div>
 
@@ -942,14 +1686,20 @@ export default function Settings() {
                 منطقة الخطر
               </h3>
               <p className="text-rose-700 text-sm">مسح كامل البيانات سيحذف جميع السجلات نهائيا. لا يمكن التراجع.</p>
-              <button
-                type="button"
-                onClick={() => setShowDeleteConfirm(true)}
-                className="flex items-center gap-2 bg-rose-600 text-white px-6 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-bold"
-              >
-                <Trash2 size={16} />
-                مسح جميع البيانات
-              </button>
+              {user?.role !== 'manager' ? (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="flex items-center gap-2 bg-rose-600 text-white px-6 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-bold cursor-pointer"
+                >
+                  <Trash2 size={16} />
+                  مسح جميع البيانات
+                </button>
+              ) : (
+                <span className="text-xs font-bold text-slate-500 block pt-1">
+                  غير مصرح للمشرف بمسح البيانات
+                </span>
+              )}
             </div>
 
             {showDeleteConfirm && (

@@ -138,17 +138,24 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
 
         <div className="flex items-center gap-3">
           {/* Dynamic Sync/Network Status Badge */}
-          {isConnected ? (
-            <div className="hidden sm:flex items-center gap-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200/80 px-2.5 py-1 rounded-full text-xs font-bold shadow-2xs">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>النظام متصل</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 bg-rose-50 text-rose-700 border border-rose-200/80 px-2.5 py-1 rounded-full text-xs font-bold shadow-2xs animate-pulse">
-              <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-              <span>غير متصل بالخادم</span>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => navigate('/settings?tab=network')}
+            title="انقر لفتح إعدادات الشبكة وحالة الخادم"
+            className="cursor-pointer transition-all hover:scale-105 active:scale-95"
+          >
+            {isConnected ? (
+              <div className="hidden sm:flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border border-emerald-200/80 px-2.5 py-1 rounded-full text-xs font-bold shadow-2xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>النظام متصل</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100/80 text-rose-700 border border-rose-200/80 px-2.5 py-1 rounded-full text-xs font-bold shadow-2xs animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                <span>غير متصل بالخادم</span>
+              </div>
+            )}
+          </button>
 
           <div className="relative">
             <button onClick={openNotifications} className="relative rounded-xl p-2 hover:bg-slate-100">

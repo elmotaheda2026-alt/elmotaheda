@@ -12,12 +12,15 @@ function getNetworkAddresses(): { primary: string; all: string[] } {
   let best = '';
 
   for (const name of Object.keys(interfaces)) {
-    const isVirtual = /vEthernet|VirtualBox|VMware|Loopback/i.test(name);
+    const isVirtual = /vEthernet|VirtualBox|VMware|Loopback|Hyper-V|WSL|Tailscale|ZeroTier|Docker/i.test(name);
     const netList = interfaces[name] || [];
     for (const net of netList) {
       if (net.family === 'IPv4' && !net.internal) {
         addresses.push(net.address);
-        if (!best || (!isVirtual && /vEthernet|VirtualBox|VMware/i.test(best))) {
+        const isLan = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(net.address);
+        if (!isVirtual && isLan && (!best || /vEthernet|VirtualBox|VMware|Loopback|Hyper-V|WSL|Tailscale|ZeroTier|Docker/i.test(best))) {
+          best = net.address;
+        } else if (!best) {
           best = net.address;
         }
       }
@@ -61,16 +64,21 @@ router.get('/network-info', (_req, res) => {
   try {
     const net = getNetworkAddresses();
     const saved = readConfig();
+    const isServer = saved?.mode !== 'client';
 
     res.json({
       ok: true,
+      mode: isServer ? 'server' : 'client',
       localIp: net.primary,
       allIps: net.all,
       hostname: os.hostname(),
+      backendPort: config.port,
+      frontendUrl: `http://${net.primary}:5173`,
+      apiUrl: `http://${net.primary}:${config.port}`,
       dbConfig: saved || {
         mode: 'server',
         db: {
-          host: config.sql.server,
+          host: '127.0.0.1',
           port: config.sql.port,
           database: config.sql.database,
         },
@@ -95,15 +103,17 @@ router.get('/db-config', (_req, res) => {
 router.post('/db-config', (req, res) => {
   try {
     const { host, port, database, mode } = req.body;
+    const isServerMode = mode === 'server';
+    const resolvedHost = isServerMode ? '127.0.0.1' : (host || '127.0.0.1');
     const current = readConfig() || {};
     const updated = {
       ...current,
-      mode: mode || current.mode || 'client',
-      host: host || current.host || '127.0.0.1',
+      mode: isServerMode ? 'server' : 'client',
+      host: resolvedHost,
       port: Number(port) || current.port || 1433,
       database: database || current.database || 'AlMuttahida_New',
       db: {
-        host: host || current.host || '127.0.0.1',
+        host: resolvedHost,
         port: Number(port) || current.port || 1433,
         database: database || current.database || 'AlMuttahida_New',
       },

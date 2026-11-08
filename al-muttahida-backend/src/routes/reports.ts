@@ -165,7 +165,7 @@ router.get('/dashboard/metrics', async (req, res) => {
   const paymentPeriod = buildDateFilter('p.date', startDate, endDate);
   const db = await dbPromise;
 
-  const [settings, cashIn, cashOut, inventory, customers, suppliers, subscribedCapital, capitalDeposits, capitalWithdrawals, periodSales, periodCogs, periodExpenses, allTimeSales, allTimeCogs, allTimeExpenses, realizedCash] = await Promise.all([
+  const [settings, cashIn, cashOut, inventory, customers, suppliers, subscribedCapital, capitalDeposits, capitalWithdrawals, periodSales, periodCogs, periodExpenses, allTimeSales, allTimeCogs, allTimeExpenses, realizedCash, warehouseProfit] = await Promise.all([
     db.get<{ baseline_capital: number }>('SELECT TOP 1 baseline_capital FROM settings'),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted'"),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted'"),
@@ -182,6 +182,12 @@ router.get('/dashboard/metrics', async (req, res) => {
     db.get<MetricRow>("SELECT COALESCE(SUM(si.quantity * si.unit_cost),0) AS total FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id WHERE s.status <> 'cancelled'"),
     db.get<MetricRow>('SELECT COALESCE(SUM(amount),0) AS total FROM expenses'),
     db.get<MetricRow>(`SELECT COALESCE(SUM(p.amount),0) AS total FROM payments p WHERE p.type = 'in' AND p.status = 'posted' AND (p.sale_id IS NOT NULL OR p.reference_type = 'sale' OR p.invoice_number IS NOT NULL)${paymentPeriod.clause}`, ...paymentPeriod.args),
+    db.get<MetricRow>(`SELECT COALESCE(SUM((si.unit_price * (1.0 - si.discount / 100.0) - si.unit_cost) * si.quantity), 0) AS total
+      FROM sale_items si
+      INNER JOIN sales s ON s.id = si.sale_id
+      WHERE s.status <> 'cancelled'
+        AND (si.fulfillment_type = 'stocked' OR (si.fulfillment_type IS NULL AND si.unit_price > si.unit_cost))
+        ${joinedSalesPeriod.clause}`, ...joinedSalesPeriod.args),
   ]);
 
   const subscribedCapitalValue = money(subscribedCapital?.total);
@@ -230,6 +236,7 @@ router.get('/dashboard/metrics', async (req, res) => {
     expenseMonthSpan: Number(monthSpan.toFixed(4)),
     realizedProfits: money((realizedCash?.total || 0) - (periodCogs?.total || 0) - (periodExpenses?.total || 0)),
     deferredProfits: money((customers?.total || 0) - (periodCogs?.total || 0)),
+    warehouseProfit: money(warehouseProfit?.total),
   });
 });
 
@@ -262,6 +269,7 @@ function mapCacheToResponse(cache: any) {
     totalEquity,
     accountingVariance: m(totalAssets - (totalLiabilities + totalEquity)),
     isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) <= 0.01,
+    warehouseProfit: m(cache.warehouse_profit || 0),
     totalCustomers: cache.total_customers,
     totalProducts: cache.total_products,
     totalSuppliers: cache.total_suppliers,

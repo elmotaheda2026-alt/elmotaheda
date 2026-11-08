@@ -26,7 +26,7 @@ export const config = {
   // Ensure a strong JWT secret is provided via env var
   jwtSecret: process.env.JWT_SECRET || 'AlMuttahida_Secure_Production_JWT_Secret_Key_2026_Fallback',
   sql: {
-    server: saved?.host || saved?.db?.host || process.env.DB_HOST || '127.0.0.1',
+    server: saved?.mode === 'client' ? (saved?.host || saved?.db?.host || '127.0.0.1') : (process.env.DB_HOST || '127.0.0.1'),
     port: Number(saved?.port || saved?.db?.port || process.env.DB_PORT || 1433),
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASSWORD || '',

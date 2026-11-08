@@ -3,165 +3,321 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Al-Muttahida ERP - Setup</title>
+  <title>المتحدة ERP - إعداد النظام</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     
-    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap');
 
     body {
       font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
-      background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
-      color: #e2e8f0;
+      background: radial-gradient(circle at 50% 0%, #1e293b 0%, #0f172a 100%);
+      color: #f1f5f9;
       height: 100vh;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      flex-direction: column;
       overflow: hidden;
-      -webkit-app-region: drag;
+      user-select: none;
     }
 
-    .container {
-      width: 500px;
-      text-align: center;
+    /* Window Custom Titlebar */
+    .titlebar {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      -webkit-app-region: drag;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(15, 23, 42, 0.7);
+    }
+
+    .titlebar-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .titlebar-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3b82f6;
+    }
+
+    .titlebar-close {
+      -webkit-app-region: no-drag;
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      font-size: 1.1rem;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+
+    .titlebar-close:hover {
+      background: #ef4444;
+      color: white;
+    }
+
+    .content-container {
+      flex: 1;
+      padding: 24px 32px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       -webkit-app-region: no-drag;
     }
 
+    .logo-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
     .logo {
-      font-size: 2rem;
+      font-size: 1.8rem;
       font-weight: 800;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      background: linear-gradient(135deg, #60a5fa, #a855f7);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
 
     .subtitle {
       color: #94a3b8;
-      font-size: 0.95rem;
-      margin-bottom: 40px;
+      font-size: 0.85rem;
+      margin-bottom: 24px;
+      text-align: center;
     }
 
     .mode-cards {
       display: flex;
       gap: 16px;
-      margin-bottom: 30px;
+      width: 100%;
+      margin-bottom: 20px;
     }
 
     .mode-card {
       flex: 1;
-      background: rgba(30, 41, 59, 0.8);
+      background: rgba(30, 41, 59, 0.7);
       border: 2px solid #334155;
-      border-radius: 16px;
-      padding: 24px 16px;
+      border-radius: 14px;
+      padding: 18px 14px;
       cursor: pointer;
-      transition: all 0.3s ease;
+      transition: all 0.25s ease;
       position: relative;
-      overflow: hidden;
+      text-align: center;
     }
 
     .mode-card:hover {
       border-color: #3b82f6;
-      transform: translateY(-4px);
-      box-shadow: 0 8px 30px rgba(59, 130, 246, 0.15);
+      transform: translateY(-2px);
+      background: rgba(30, 41, 59, 0.95);
     }
 
     .mode-card.selected {
       border-color: #3b82f6;
-      background: rgba(59, 130, 246, 0.1);
-      box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+      background: rgba(59, 130, 246, 0.12);
+      box-shadow: 0 0 25px rgba(59, 130, 246, 0.2);
     }
 
     .mode-card.selected::after {
       content: '✓';
       position: absolute;
-      top: 8px;
-      left: 8px;
-      width: 24px;
-      height: 24px;
+      top: 10px;
+      left: 10px;
+      width: 22px;
+      height: 22px;
       background: #3b82f6;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 14px;
+      font-size: 12px;
+      font-weight: bold;
       color: white;
     }
 
     .mode-icon {
-      font-size: 2.5rem;
-      margin-bottom: 12px;
+      font-size: 2.2rem;
+      margin-bottom: 8px;
     }
 
     .mode-title {
-      font-size: 1.1rem;
+      font-size: 1.05rem;
       font-weight: 700;
-      margin-bottom: 8px;
-      color: #f1f5f9;
+      color: #f8fafc;
+      margin-bottom: 6px;
     }
 
     .mode-desc {
-      font-size: 0.78rem;
+      font-size: 0.75rem;
       color: #94a3b8;
-      line-height: 1.6;
+      line-height: 1.5;
     }
 
-    /* Server IP Input (shown only for client mode) */
-    .server-ip-section {
+    /* Server DB Status Box */
+    .server-status-section {
       display: none;
-      margin-bottom: 24px;
+      width: 100%;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      text-align: right;
       animation: fadeIn 0.3s ease;
     }
 
-    .server-ip-section.visible {
+    .server-status-section.visible {
       display: block;
     }
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-10px); }
-      to { opacity: 1; transform: translateY(0); }
+    .status-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
     }
 
-    .input-group {
-      text-align: right;
-      margin-bottom: 8px;
-    }
-
-    .input-group label {
-      display: block;
-      font-size: 0.85rem;
-      color: #94a3b8;
-      margin-bottom: 8px;
-    }
-
-    .input-group input {
-      width: 100%;
-      padding: 12px 16px;
-      background: rgba(30, 41, 59, 0.8);
-      border: 2px solid #334155;
-      border-radius: 10px;
+    .status-badge-title {
+      font-size: 0.88rem;
+      font-weight: 700;
       color: #e2e8f0;
-      font-size: 1rem;
-      font-family: 'Cairo', sans-serif;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-pill {
+      font-size: 0.72rem;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    .status-pill.online {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .status-pill.offline {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .status-pill.checking {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    .status-detail-text {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+
+    .action-btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn-secondary {
+      background: #1e293b;
+      border: 1px solid #475569;
+      color: #e2e8f0;
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .btn-secondary:hover {
+      background: #334155;
+      border-color: #64748b;
+    }
+
+    /* Client IP Section */
+    .client-ip-section {
+      display: none;
+      width: 100%;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .client-ip-section.visible {
+      display: block;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      margin-bottom: 10px;
+    }
+
+    .input-row input {
+      flex: 1;
+      padding: 10px 14px;
+      background: #0f172a;
+      border: 1.5px solid #334155;
+      border-radius: 8px;
+      color: #f1f5f9;
+      font-size: 0.95rem;
+      font-family: monospace;
       text-align: center;
       direction: ltr;
-      transition: border-color 0.3s;
-    }
-
-    .input-group input:focus {
       outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .input-row input:focus {
       border-color: #3b82f6;
-      box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
     }
 
-    .input-group input::placeholder {
-      color: #475569;
-    }
-
-    .input-hint {
+    .client-test-feedback {
       font-size: 0.75rem;
-      color: #64748b;
       margin-top: 6px;
+      display: none;
+    }
+
+    .client-test-feedback.visible {
+      display: block;
+    }
+
+    .client-test-feedback.success {
+      color: #4ade80;
+    }
+
+    .client-test-feedback.error {
+      color: #f87171;
     }
 
     /* Start Button */
@@ -171,14 +327,15 @@
       background: linear-gradient(135deg, #3b82f6, #2563eb);
       color: white;
       border: none;
-      border-radius: 12px;
-      font-size: 1.05rem;
+      border-radius: 10px;
+      font-size: 1rem;
       font-weight: 700;
-      font-family: 'Cairo', sans-serif;
+      font-family: inherit;
       cursor: pointer;
-      transition: all 0.3s ease;
+      transition: all 0.25s ease;
       opacity: 0.5;
       pointer-events: none;
+      margin-top: auto;
     }
 
     .start-btn.active {
@@ -187,131 +344,337 @@
     }
 
     .start-btn.active:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+      box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
+      transform: translateY(-1px);
     }
 
-    /* Status */
-    .status {
+    /* Status and Spinner */
+    .status-msg {
       display: none;
-      margin-top: 20px;
-      padding: 12px 20px;
-      background: rgba(30, 41, 59, 0.8);
-      border-radius: 10px;
-      font-size: 0.85rem;
+      width: 100%;
+      margin-top: 14px;
+      padding: 10px 16px;
+      background: rgba(30, 41, 59, 0.9);
+      border-radius: 8px;
+      font-size: 0.8rem;
       color: #94a3b8;
+      text-align: center;
     }
 
-    .status.visible {
+    .status-msg.visible {
       display: block;
     }
 
-    .status.error {
+    .status-msg.error {
       border: 1px solid #ef4444;
       color: #fca5a5;
     }
 
     .spinner {
       display: inline-block;
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       border: 2px solid #3b82f6;
       border-top-color: transparent;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
       vertical-align: middle;
-      margin-left: 8px;
+      margin-left: 6px;
     }
 
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="logo">المتحدة ERP</div>
-    <div class="subtitle">اختر وضع التشغيل لهذا الجهاز</div>
+  <!-- Custom Titlebar -->
+  <div class="titlebar">
+    <div class="titlebar-title">
+      <div class="titlebar-dot"></div>
+      <span>المتحدة ERP - معالج الإعداد الأولي</span>
+    </div>
+    <button class="titlebar-close" onclick="closeApp()" title="إغلاق">✕</button>
+  </div>
 
+  <div class="content-container">
+    <div class="logo-badge">نظام إدارة المؤسسات المتكامل</div>
+    <div class="logo">شركة المتحدة ERP</div>
+    <div class="subtitle">اختر نوع تشغيل هذا الجهاز للبدء تلقائياً</div>
+
+    <!-- Mode Selector Cards -->
     <div class="mode-cards">
       <div class="mode-card" id="card-server" onclick="selectMode('server')">
         <div class="mode-icon">🖥️</div>
-        <div class="mode-title">سيرفر (أساسي)</div>
+        <div class="mode-title">جهاز رئيسي (سيرفر)</div>
         <div class="mode-desc">
-          الجهاز اللي عليه قاعدة البيانات.<br>
-          يشغّل السيرفر والواجهة معاً.
+          الجهاز الأساسي اللي عليه البيانات.<br>
+          يشغل النظام وتتصل به باقي الأجهزة.
         </div>
       </div>
       <div class="mode-card" id="card-client" onclick="selectMode('client')">
         <div class="mode-icon">💻</div>
-        <div class="mode-title">عميل (Client)</div>
+        <div class="mode-title">جهاز فرعي (عميل)</div>
         <div class="mode-desc">
-          جهاز تاني على نفس الشبكة.<br>
-          يتصل بالسيرفر الأساسي.
+          أي جهاز كمبيوتر أو كاشير آخر.<br>
+          يتصل بالسيرفر عبر الشبكة المحلية.
         </div>
       </div>
     </div>
 
-    <div class="server-ip-section" id="server-ip-section">
-      <div class="input-group">
-        <label>عنوان IP السيرفر الأساسي</label>
-        <input type="text" id="server-ip" placeholder="192.168.1.5" oninput="validateIp()">
-        <div class="input-hint">اكتب عنوان الـ IP الخاص بالجهاز الأساسي (السيرفر)</div>
+    <!-- Section A: Server Status -->
+    <div class="server-status-section" id="server-status-section">
+      <div class="status-badge-row">
+        <div class="status-badge-title">
+          <span>فحص محرك البيانات (SQL Server)</span>
+        </div>
+        <div class="status-pill checking" id="sql-pill">جاري الفحص...</div>
+      </div>
+      <div class="status-detail-text" id="sql-detail">
+        جاري اختبار الاتصال بمحرك SQL Server على المنفذ الافتراضي 1433...
+      </div>
+      <div class="action-btn-row">
+        <button class="btn-secondary" onclick="checkSqlEngine()">
+          🔄 إعادة الفحص
+        </button>
+        <button class="btn-secondary" onclick="openSqlDownload()" id="btn-download-sql" style="display:none;">
+          📥 تحميل SQL Express مجاناً
+        </button>
+        <button class="btn-secondary" onclick="setupFirewall()">
+          🛡️ تهيئة جدار الحماية (Firewall)
+        </button>
       </div>
     </div>
 
+    <!-- Section B: Client Network Configuration -->
+    <div class="client-ip-section" id="client-ip-section">
+      <div class="status-badge-row">
+        <div class="status-badge-title">
+          <span>عنوان IP السيرفر الأساسي</span>
+        </div>
+        <button class="btn-secondary" onclick="scanNetworkForServer()" id="btn-auto-scan">
+          🔍 بحث تلقائي في الشبكة
+        </button>
+      </div>
+
+      <div class="input-row">
+        <input type="text" id="server-ip-input" placeholder="مثال: 192.168.1.9" oninput="onIpChanged()">
+        <button class="btn-secondary" onclick="testClientConnection()" id="btn-test-ip">
+          ⚡ اختبار الاتصال
+        </button>
+      </div>
+
+      <div class="client-test-feedback" id="client-feedback"></div>
+      <div class="status-detail-text" style="margin-top: 6px;">
+        💡 الجهاز الفرعي لا يحتاج تثبيت SQL Server. يتصل بالخادم الأساسي فورياً.
+      </div>
+    </div>
+
+    <!-- Start Button -->
     <button class="start-btn" id="start-btn" onclick="startApp()">
-      تشغيل
+      تشغيل النظام
     </button>
 
-    <div class="status" id="status"></div>
+    <div class="status-msg" id="status-msg"></div>
   </div>
 
   <script>
     let selectedMode = null;
+    let sqlServerReady = false;
+    let clientConnected = false;
+
+    function closeApp() {
+      if (window.electronAPI && window.electronAPI.closeWindow) {
+        window.electronAPI.closeWindow();
+      }
+    }
 
     function selectMode(mode) {
       selectedMode = mode;
       document.getElementById('card-server').classList.toggle('selected', mode === 'server');
       document.getElementById('card-client').classList.toggle('selected', mode === 'client');
-      
-      const ipSection = document.getElementById('server-ip-section');
+
+      const serverSection = document.getElementById('server-status-section');
+      const clientSection = document.getElementById('client-ip-section');
       const startBtn = document.getElementById('start-btn');
-      
-      if (mode === 'client') {
-        ipSection.classList.add('visible');
-        validateIp();
+
+      if (mode === 'server') {
+        serverSection.classList.add('visible');
+        clientSection.classList.remove('visible');
+        checkSqlEngine();
       } else {
-        ipSection.classList.remove('visible');
+        serverSection.classList.remove('visible');
+        clientSection.classList.add('visible');
+        onIpChanged();
+        // Automatically probe network on client mode selection
+        setTimeout(() => {
+          scanNetworkForServer();
+        }, 200);
+      }
+    }
+
+    async function checkSqlEngine() {
+      const pill = document.getElementById('sql-pill');
+      const detail = document.getElementById('sql-detail');
+      const dlBtn = document.getElementById('btn-download-sql');
+      const startBtn = document.getElementById('start-btn');
+
+      pill.className = 'status-pill checking';
+      pill.textContent = 'جاري الفحص...';
+      detail.textContent = 'جاري التحقق من تشغيل محرك SQL Server والمنفذ 1433...';
+      dlBtn.style.display = 'none';
+
+      if (!window.electronAPI || !window.electronAPI.checkSqlStatus) {
+        sqlServerReady = true;
+        pill.className = 'status-pill online';
+        pill.textContent = 'جاهز';
+        startBtn.classList.add('active');
+        return;
+      }
+
+      try {
+        const res = await window.electronAPI.checkSqlStatus();
+        if (res && res.running) {
+          sqlServerReady = true;
+          pill.className = 'status-pill online';
+          pill.textContent = 'متصل وجاهز ✓';
+          detail.innerHTML = '✅ محرك SQL Server يعمل بنجاح. سيتم إنشاء قاعدة البيانات (AlMuttahida_New) والجداول تلقائياً عند بدء التشغيل.';
+          startBtn.classList.add('active');
+        } else {
+          sqlServerReady = false;
+          pill.className = 'status-pill offline';
+          pill.textContent = 'غير متصل ✕';
+          detail.innerHTML = '⚠️ محرك SQL Server غير متصل على المنفذ 1433.<br>تأكد من تشغيل خدمة SQL Server أو قم بتحميل نسخة SQL Server Express المجانية.';
+          dlBtn.style.display = 'inline-flex';
+          startBtn.classList.add('active'); // Still allow starting, server will retry in background
+        }
+      } catch (err) {
+        pill.className = 'status-pill offline';
+        pill.textContent = 'خطأ بالفحص';
+        detail.textContent = 'تعذر فحص المحرك: ' + err.message;
         startBtn.classList.add('active');
       }
     }
 
-    function validateIp() {
-      const ip = document.getElementById('server-ip').value.trim();
+    async function openSqlDownload() {
+      const url = 'https://www.microsoft.com/en-us/sql-server/sql-server-downloads';
+      if (window.electronAPI && window.electronAPI.openExternalUrl) {
+        window.electronAPI.openExternalUrl(url);
+      } else {
+        window.open(url, '_blank');
+      }
+    }
+
+    async function setupFirewall() {
+      const detail = document.getElementById('sql-detail');
+      detail.textContent = 'جاري تهيئة قواعد جدار الحماية (Firewall)...';
+      if (window.electronAPI && window.electronAPI.runFirewallSetup) {
+        const res = await window.electronAPI.runFirewallSetup();
+        if (res.success) {
+          detail.innerHTML = '✅ تم تكوين جدار الحماية بنجاح وفتح المنافذ (1433, 4000, 5173).';
+        } else {
+          detail.innerHTML = '⚠️ إشعار الجدار الناري: ' + (res.error || 'تم الإرسال');
+        }
+      }
+    }
+
+    function onIpChanged() {
+      const ip = document.getElementById('server-ip-input').value.trim();
       const startBtn = document.getElementById('start-btn');
-      // Simple IP validation
       const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-      startBtn.classList.toggle('active', ipRegex.test(ip));
+      const isValid = ipRegex.test(ip) || ip === 'localhost';
+
+      if (selectedMode === 'client') {
+        startBtn.classList.toggle('active', isValid);
+      }
+    }
+
+    async function scanNetworkForServer() {
+      const scanBtn = document.getElementById('btn-auto-scan');
+      const ipInput = document.getElementById('server-ip-input');
+      const feedback = document.getElementById('client-feedback');
+
+      scanBtn.innerHTML = '<span class="spinner"></span> جاري البحث...';
+      scanBtn.style.pointerEvents = 'none';
+      feedback.className = 'client-test-feedback visible';
+      feedback.textContent = 'جاري مسح الشبكة المحلية للعثور على خادم المتحدة ERP...';
+
+      if (window.electronAPI && window.electronAPI.scanNetwork) {
+        try {
+          const foundIp = await window.electronAPI.scanNetwork();
+          if (foundIp) {
+            ipInput.value = foundIp;
+            feedback.className = 'client-test-feedback visible success';
+            feedback.textContent = `✅ تم العثور على الخادم بنجاح على العنوان: ${foundIp}`;
+            onIpChanged();
+            testClientConnection();
+          } else {
+            feedback.className = 'client-test-feedback visible error';
+            feedback.textContent = 'لم يتم العثور على خادم نشط تلقائياً. اكتب عنوان IP السيرفر يدوياً.';
+          }
+        } catch (e) {
+          feedback.className = 'client-test-feedback visible error';
+          feedback.textContent = 'تعذر فحص الشبكة تلقائياً. اكتب الـ IP يدوياً.';
+        }
+      }
+
+      scanBtn.innerHTML = '🔍 بحث تلقائي في الشبكة';
+      scanBtn.style.pointerEvents = 'auto';
+    }
+
+    async function testClientConnection() {
+      const ip = document.getElementById('server-ip-input').value.trim();
+      const feedback = document.getElementById('client-feedback');
+      const testBtn = document.getElementById('btn-test-ip');
+
+      if (!ip) {
+        feedback.className = 'client-test-feedback visible error';
+        feedback.textContent = 'يرجى كتابة عنوان الـ IP أولاً.';
+        return;
+      }
+
+      testBtn.innerHTML = '<span class="spinner"></span>';
+      testBtn.style.pointerEvents = 'none';
+
+      if (window.electronAPI && window.electronAPI.testServerIp) {
+        const res = await window.electronAPI.testServerIp(ip);
+        if (res.ok) {
+          clientConnected = true;
+          feedback.className = 'client-test-feedback visible success';
+          feedback.textContent = `✅ الاتصال ناجح بالخادم (${ip}) والنظام يعمل!`;
+          document.getElementById('start-btn').classList.add('active');
+        } else {
+          clientConnected = false;
+          feedback.className = 'client-test-feedback visible error';
+          feedback.textContent = `✕ تعذر الاتصال بـ (${ip}). تأكد أن السيرفر يعمل والجهازين متصلان بنفس الراوتر.`;
+        }
+      }
+
+      testBtn.innerHTML = '⚡ اختبار الاتصال';
+      testBtn.style.pointerEvents = 'auto';
     }
 
     function startApp() {
       const startBtn = document.getElementById('start-btn');
       if (!startBtn.classList.contains('active')) return;
 
-      const status = document.getElementById('status');
-      status.classList.remove('error');
-      status.classList.add('visible');
+      const msg = document.getElementById('status-msg');
+      msg.classList.remove('error');
+      msg.classList.add('visible');
 
       if (selectedMode === 'server') {
-        status.innerHTML = '<span class="spinner"></span> جاري تشغيل السيرفر...';
-        // Send to Electron main process
+        msg.innerHTML = '<span class="spinner"></span> جاري بدء تشغيل السيرفر وقاعدة البيانات...';
         if (window.electronAPI) {
           window.electronAPI.startApp({ mode: 'server' });
         }
-      } else {
-        const ip = document.getElementById('server-ip').value.trim();
-        status.innerHTML = '<span class="spinner"></span> جاري الاتصال بالسيرفر...';
+      } else if (selectedMode === 'client') {
+        const ip = document.getElementById('server-ip-input').value.trim();
+        msg.innerHTML = '<span class="spinner"></span> جاري الاتصال بالخادم على ' + ip + '...';
         if (window.electronAPI) {
           window.electronAPI.startApp({ mode: 'client', serverIp: ip });
         }
@@ -321,17 +684,30 @@
       startBtn.style.pointerEvents = 'none';
     }
 
-    // Listen for errors from main process
+    // Listen for setup events from Electron Main
     if (window.electronAPI) {
-      window.electronAPI.onError((message) => {
-        const status = document.getElementById('status');
-        status.classList.add('visible', 'error');
-        status.textContent = message;
-        const startBtn = document.getElementById('start-btn');
-        startBtn.style.opacity = '1';
-        startBtn.style.pointerEvents = 'auto';
-      });
+      if (window.electronAPI.onError) {
+        window.electronAPI.onError((errorMessage) => {
+          const msg = document.getElementById('status-msg');
+          msg.classList.add('visible', 'error');
+          msg.textContent = errorMessage;
+          const startBtn = document.getElementById('start-btn');
+          startBtn.style.opacity = '1';
+          startBtn.style.pointerEvents = 'auto';
+        });
+      }
+
+      if (window.electronAPI.onStatus) {
+        window.electronAPI.onStatus((statusText) => {
+          const msg = document.getElementById('status-msg');
+          msg.classList.add('visible');
+          msg.innerHTML = `<span class="spinner"></span> ${statusText}`;
+        });
+      }
     }
+
+    // Default selection: Server
+    selectMode('server');
   </script>
 </body>
 </html>
