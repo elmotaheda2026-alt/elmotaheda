@@ -9,5 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testServerIp: (ip) => ipcRenderer.invoke('test-server-ip', ip),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
   runFirewallSetup: () => ipcRenderer.invoke('run-firewall-setup'),
+  downloadAndInstallSql: () => ipcRenderer.invoke('download-and-install-sql'),
+  onSqlProgress: (callback) => ipcRenderer.on('sql-install-progress', (_event, data) => callback(data)),
   closeWindow: () => ipcRenderer.send('close-setup-window'),
 });

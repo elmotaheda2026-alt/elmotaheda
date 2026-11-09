@@ -260,6 +260,33 @@
       border-color: #64748b;
     }
 
+    .btn-primary-action {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      border: 1px solid #3b82f6;
+      color: white;
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary-action:hover {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary-action:disabled {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
     /* Client IP Section */
     .client-ip-section {
       display: none;
@@ -431,23 +458,52 @@
     <div class="server-status-section" id="server-status-section">
       <div class="status-badge-row">
         <div class="status-badge-title">
-          <span>فحص محرك البيانات (SQL Server)</span>
+          <span>حالة محرك البيانات (SQL Server)</span>
         </div>
         <div class="status-pill checking" id="sql-pill">جاري الفحص...</div>
       </div>
       <div class="status-detail-text" id="sql-detail">
         جاري اختبار الاتصال بمحرك SQL Server على المنفذ الافتراضي 1433...
       </div>
+
+      <!-- Auto SQL Setup Box (shown when SQL is not running) -->
+      <div id="sql-auto-box" style="display:none; background: rgba(30, 58, 138, 0.25); border: 1.5px solid rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 14px; margin-top: 10px; margin-bottom: 12px; text-align: right;">
+        <div style="font-weight: 700; color: #93c5fd; font-size: 0.88rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+          <span>⚡ تهيئة بيئة التشغيل التلقائية</span>
+        </div>
+        <div style="font-size: 0.78rem; color: #cbd5e1; line-height: 1.6; margin-bottom: 12px;">
+          البرنامج يحتاج محرك قواعد البيانات (Microsoft SQL Server) ليتمكن من حفظ الفواتير وحسابات العملاء بأمان على هذا الجهاز. سنقوم بتشغيله أو تحميله وتثبيته لك تلقائياً الآن.
+        </div>
+        
+        <div style="font-size: 0.74rem; color: #bae6fd; background: rgba(56, 189, 248, 0.12); padding: 7px 10px; border-radius: 6px; border-right: 3px solid #38bdf8; margin-bottom: 12px; line-height: 1.5;">
+          💡 <strong>معلومة:</strong> إذا ظهرت نافذة مايكروسوفت واكتمل التثبيت بعبارة <em>"Installation has completed successfully"</em>، اضغط على <strong>Close</strong> فيها، ثم اضغط <strong>إعادة الفحص</strong> بالأسفل.
+        </div>
+        
+        <div id="sql-progress-container" style="display:none; margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #93c5fd; margin-bottom: 6px;">
+            <span id="sql-progress-text">جاري التحضير...</span>
+            <span id="sql-progress-pct" style="font-weight: 700;">0%</span>
+          </div>
+          <div style="width: 100%; height: 8px; background: rgba(15, 23, 42, 0.8); border-radius: 999px; overflow: hidden; border: 1px solid #334155;">
+            <div id="sql-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+
+        <button id="btn-auto-sql" class="btn-primary-action" onclick="startAutoSqlSetup()">
+          🚀 بدء التهيئة والتحميل التلقائي الآن
+        </button>
+      </div>
+
       <div class="action-btn-row">
         <button class="btn-secondary" onclick="checkSqlEngine()">
           🔄 إعادة الفحص
         </button>
-        <button class="btn-secondary" onclick="openSqlDownload()" id="btn-download-sql" style="display:none;">
-          📥 تحميل SQL Express مجاناً
-        </button>
         <button class="btn-secondary" onclick="setupFirewall()">
           🛡️ تهيئة جدار الحماية (Firewall)
         </button>
+      </div>
+      <div style="font-size: 0.73rem; color: #94a3b8; line-height: 1.5; margin-top: 8px; text-align: center; background: rgba(15, 23, 42, 0.4); padding: 6px 12px; border-radius: 8px; border: 1px dashed rgba(255, 255, 255, 0.1);">
+        💡 <strong>ما هي تهيئة جدار الحماية؟</strong> مطلوبة فقط إذا كنت تريد توصيل أجهزة كاشير أو أجهزة فرعية أخرى بهذا السيرفر عبر الراوتر. (إذا كنت تعمل على جهاز واحد فلست بحاجة للضغط عليه).
       </div>
     </div>
 
@@ -487,6 +543,7 @@
     let selectedMode = null;
     let sqlServerReady = false;
     let clientConnected = false;
+    let sqlPollingInterval = null;
 
     function closeApp() {
       if (window.electronAPI && window.electronAPI.closeWindow) {
@@ -502,6 +559,14 @@
       const serverSection = document.getElementById('server-status-section');
       const clientSection = document.getElementById('client-ip-section');
       const startBtn = document.getElementById('start-btn');
+
+      const statusMsg = document.getElementById('status-msg');
+      if (statusMsg) {
+        statusMsg.classList.remove('visible', 'error');
+        statusMsg.textContent = '';
+      }
+      startBtn.style.opacity = '1';
+      startBtn.style.pointerEvents = 'auto';
 
       if (mode === 'server') {
         serverSection.classList.add('visible');
@@ -521,20 +586,21 @@
     async function checkSqlEngine() {
       const pill = document.getElementById('sql-pill');
       const detail = document.getElementById('sql-detail');
-      const dlBtn = document.getElementById('btn-download-sql');
+      const autoBox = document.getElementById('sql-auto-box');
       const startBtn = document.getElementById('start-btn');
+      const btnAuto = document.getElementById('btn-auto-sql');
 
       pill.className = 'status-pill checking';
       pill.textContent = 'جاري الفحص...';
       detail.textContent = 'جاري التحقق من تشغيل محرك SQL Server والمنفذ 1433...';
-      dlBtn.style.display = 'none';
 
       if (!window.electronAPI || !window.electronAPI.checkSqlStatus) {
         sqlServerReady = true;
         pill.className = 'status-pill online';
         pill.textContent = 'جاهز';
+        if (autoBox) autoBox.style.display = 'none';
         startBtn.classList.add('active');
-        return;
+        return true;
       }
 
       try {
@@ -543,21 +609,115 @@
           sqlServerReady = true;
           pill.className = 'status-pill online';
           pill.textContent = 'متصل وجاهز ✓';
-          detail.innerHTML = '✅ محرك SQL Server يعمل بنجاح. سيتم إنشاء قاعدة البيانات (AlMuttahida_New) والجداول تلقائياً عند بدء التشغيل.';
+          detail.innerHTML = '✅ محرك SQL Server يعمل بنجاح. سيتم إنشاء وتجهيز قاعدة البيانات (AlMuttahida_New) والجداول تلقائياً عند بدء التشغيل.';
+          if (autoBox) autoBox.style.display = 'none';
           startBtn.classList.add('active');
+          if (btnAuto) {
+            btnAuto.disabled = false;
+            btnAuto.textContent = '⚡ تهيئة وتشغيل المحرك تلقائياً';
+          }
+          if (sqlPollingInterval) {
+            clearInterval(sqlPollingInterval);
+            sqlPollingInterval = null;
+          }
+          return true;
         } else {
           sqlServerReady = false;
           pill.className = 'status-pill offline';
           pill.textContent = 'غير متصل ✕';
-          detail.innerHTML = '⚠️ محرك SQL Server غير متصل على المنفذ 1433.<br>تأكد من تشغيل خدمة SQL Server أو قم بتحميل نسخة SQL Server Express المجانية.';
-          dlBtn.style.display = 'inline-flex';
-          startBtn.classList.add('active'); // Still allow starting, server will retry in background
+          detail.innerHTML = '⚠️ محرك SQL Server غير متصل حالياً.<br>اضغط على زر التهيئة التلقائية بالأسفل أو زر (إعادة الفحص) إذا انتهى التثبيت.';
+          if (autoBox) autoBox.style.display = 'block';
+          startBtn.classList.remove('active');
+          if (btnAuto && !sqlPollingInterval) {
+            btnAuto.disabled = false;
+            btnAuto.textContent = '⚡ تهيئة وتشغيل المحرك تلقائياً';
+          }
+          return false;
         }
       } catch (err) {
         pill.className = 'status-pill offline';
         pill.textContent = 'خطأ بالفحص';
         detail.textContent = 'تعذر فحص المحرك: ' + err.message;
-        startBtn.classList.add('active');
+        if (autoBox) autoBox.style.display = 'block';
+        startBtn.classList.remove('active');
+        if (btnAuto && !sqlPollingInterval) {
+          btnAuto.disabled = false;
+          btnAuto.textContent = '⚡ تهيئة وتشغيل المحرك تلقائياً';
+        }
+        return false;
+      }
+    }
+
+    async function startAutoSqlSetup() {
+      const btn = document.getElementById('btn-auto-sql');
+      const progressBox = document.getElementById('sql-progress-container');
+      const progressText = document.getElementById('sql-progress-text');
+      const progressBar = document.getElementById('sql-progress-bar');
+      const progressPct = document.getElementById('sql-progress-pct');
+
+      btn.disabled = true;
+      btn.textContent = '⏳ جاري التجهيز والتثبيت...';
+      progressBox.style.display = 'block';
+      progressBar.style.width = '15%';
+      progressPct.textContent = '15%';
+      progressText.textContent = 'جاري بدء تهيئة محرك البيانات...';
+
+      if (window.electronAPI && window.electronAPI.onSqlProgress) {
+        window.electronAPI.onSqlProgress((data) => {
+          if (data.msg) progressText.textContent = data.msg;
+          if (data.percent != null) {
+            progressBar.style.width = data.percent + '%';
+            progressPct.textContent = data.percent + '%';
+          }
+        });
+      }
+
+      if (sqlPollingInterval) {
+        clearInterval(sqlPollingInterval);
+        sqlPollingInterval = null;
+      }
+
+      try {
+        if (window.electronAPI && window.electronAPI.downloadAndInstallSql) {
+          const res = await window.electronAPI.downloadAndInstallSql();
+          if (res && res.success) {
+            progressText.textContent = '⚙️ معالج التثبيت يعمل الآن... جاري مراقبة الاتصال التلقائي (يرجى الانتظار)';
+            progressBar.style.width = '85%';
+            progressPct.textContent = '85%';
+
+            // Smart Polling every 2.5 seconds
+            let pollCount = 0;
+            sqlPollingInterval = setInterval(async () => {
+              pollCount++;
+              const isReady = await checkSqlEngine();
+              if (isReady) {
+                clearInterval(sqlPollingInterval);
+                sqlPollingInterval = null;
+                progressText.textContent = '✅ اكتمل التثبيت والاتصال بنجاح! محرك البيانات جاهز.';
+                progressBar.style.width = '100%';
+                progressPct.textContent = '100%';
+                setTimeout(() => {
+                  const autoBox = document.getElementById('sql-auto-box');
+                  if (autoBox) autoBox.style.display = 'none';
+                }, 1500);
+              } else if (pollCount > 100) { // ~4 minutes
+                clearInterval(sqlPollingInterval);
+                sqlPollingInterval = null;
+                progressText.textContent = '💡 إذا انتهت شاشة تثبيت SQL Server من مايكروسوفت، اضغط (Close) فيها ثم اضغط زر (إعادة الفحص) بالأسفل.';
+                btn.disabled = false;
+                btn.textContent = '🔄 إعادة المحاولة / الفحص';
+              }
+            }, 2500);
+          } else {
+            progressText.textContent = '⚠️ ' + (res?.error || 'حدث خطأ أثناء التثبيت.');
+            btn.disabled = false;
+            btn.textContent = '🔄 إعادة المحاولة';
+          }
+        }
+      } catch (err) {
+        progressText.textContent = '⚠️ حدث خطأ: ' + err.message;
+        btn.disabled = false;
+        btn.textContent = '🔄 إعادة المحاولة';
       }
     }
 

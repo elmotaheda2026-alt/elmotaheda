@@ -256,7 +256,12 @@ function startBackend() {
 function stopBackend() {
   if (backendProcess) {
     try {
-      backendProcess.kill();
+      if (process.platform === 'win32' && backendProcess.pid) {
+        const { execSync } = require('child_process');
+        execSync(`taskkill /F /T /PID ${backendProcess.pid}`, { stdio: 'ignore' });
+      } else {
+        backendProcess.kill();
+      }
     } catch (_) {}
     backendProcess = null;
   }

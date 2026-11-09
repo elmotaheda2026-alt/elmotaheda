@@ -71,11 +71,30 @@ async function bootstrap() {
   // Request logging
   app.use(requestLogger);
 
+  // Track database connection state for health checks
+  let dbStatus: { connected: boolean; error: string | null } = { connected: false, error: null };
+
   // Health check endpoints (both /health and /api/health)
   const healthHandler = (_req: express.Request, res: express.Response) =>
-    res.json({ ok: true, service: 'al-muttahida-backend', status: 'running', time: new Date().toISOString() });
+    res.json({
+      ok: true,
+      service: 'al-muttahida-backend',
+      status: 'running',
+      database: dbStatus,
+      time: new Date().toISOString()
+    });
   app.get('/health', healthHandler);
   app.get('/api/health', healthHandler);
+
+  // Dedicated DB health check endpoint for Electron setup verification
+  const dbHealthHandler = (_req: express.Request, res: express.Response) => {
+    if (dbStatus.connected) {
+      return res.json({ ok: true, connected: true });
+    }
+    return res.status(503).json({ ok: false, connected: false, error: dbStatus.error || 'Database is initializing or unreachable' });
+  };
+  app.get('/health/db', dbHealthHandler);
+  app.get('/api/health/db', dbHealthHandler);
 
   // Swagger setup
   const swaggerSpec = swaggerJsdoc({
@@ -166,11 +185,13 @@ async function bootstrap() {
   // Initialize Database in the background without crashing the server if initial connection fails
   initDb()
     .then(() => {
+      dbStatus = { connected: true, error: null };
       // eslint-disable-next-line no-console
       console.log('Database initialized successfully.');
       startAutoBackupScheduler();
     })
     .catch((err) => {
+      dbStatus = { connected: false, error: err.message };
       // eslint-disable-next-line no-console
       console.error('Database initialization warning (can be configured via settings):', err.message);
     });

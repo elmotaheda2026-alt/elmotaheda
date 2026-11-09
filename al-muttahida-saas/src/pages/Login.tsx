@@ -140,6 +140,22 @@ export default function Login() {
                 </p>
               </div>
             )}
+
+            <div className="mt-6 text-center pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  if ((window as any).electronAPI?.openSetupWindow) {
+                    (window as any).electronAPI.openSetupWindow();
+                  }
+                }}
+                className="text-xs text-slate-500 hover:text-blue-700 font-semibold transition-colors flex items-center justify-center gap-1.5 mx-auto"
+                title="اضغط لتغيير وضع الجهاز بين سيرفر رئيسي أو جهاز فرعي"
+              >
+                <span>⚙️</span>
+                <span>إعدادات الاتصال والشبكة (رئيسي / فرعي)</span>
+              </button>
+            </div>
           </form>
         </div>
 

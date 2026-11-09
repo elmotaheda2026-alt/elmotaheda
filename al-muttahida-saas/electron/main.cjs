@@ -5,6 +5,25 @@ const os = require('os');
 const { exec } = require('child_process');
 const { startBackend, stopBackend, checkHealth, getAppDataDir } = require('./backend-loader.cjs');
 
+// ── Single Instance Lock (Fixes white screen caused by opening multiple instances) ──
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.log('Another instance of Al-Muttahida ERP is already running. Quitting duplicate...');
+  app.quit();
+  process.exit(0);
+}
+
+app.on('second-instance', (_event, _commandLine, _workingDirectory) => {
+  // If user tries to open a second instance, focus the existing main or setup window
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  } else if (setupWindow) {
+    if (setupWindow.isMinimized()) setupWindow.restore();
+    setupWindow.focus();
+  }
+});
+
 // ── Legacy OS & Low-Spec Compatibility Settings (Windows 7 / 8 / 32-bit) ──
 const isWindows = process.platform === 'win32';
 const osRelease = isWindows ? os.release() : '';
@@ -54,6 +73,26 @@ function ensureFirewallRules() {
     } else {
       console.log('AlMuttahida ERP firewall rules configured successfully.');
     }
+  });
+}
+
+function ensureSqlConfigured() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve(true);
+
+    // 1. Ensure SQL Server services are started
+    exec('sc config MSSQLSERVER start= auto & net start MSSQLSERVER & sc config "MSSQL$SQLEXPRESS" start= auto & net start "MSSQL$SQLEXPRESS"', () => {
+      // 2. Run PowerShell init script to ensure alm_app login & AlMuttahida_New database exist
+      const psScript = path.join(__dirname, 'init-sql-login.ps1');
+      if (fs.existsSync(psScript)) {
+        exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}"`, (err, stdout) => {
+          if (stdout) console.log('[init-sql-login]', stdout.trim());
+          resolve(true);
+        });
+      } else {
+        resolve(true);
+      }
+    });
   });
 }
 
@@ -159,9 +198,31 @@ function createMainWindow(apiBaseUrl) {
   });
 
   mainWindow.once('ready-to-show', () => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show();
     }
+  });
+
+  // Safety fallback: if ready-to-show takes more than 1.5s, force display window so it doesn't get stuck hidden
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+  }, 1500);
+
+  // If page load fails, retry after a short delay instead of staying blank
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+    console.warn(`[Main Window] Load failed: ${errorCode} - ${errorDescription}. Retrying in 1s...`);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
+        if (fs.existsSync(indexPath)) {
+          mainWindow.loadFile(indexPath);
+        } else {
+          mainWindow.loadURL(apiBaseUrl.replace(':4000', ':5173'));
+        }
+      }
+    }, 1000);
   });
 
   const isDev = process.env.NODE_ENV === 'development';
@@ -188,6 +249,9 @@ function createMainWindow(apiBaseUrl) {
       } else if (input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r')) {
         mainWindow.webContents.reload();
         event.preventDefault();
+      } else if (input.key === 'F2') {
+        showSetupWindow();
+        event.preventDefault();
       }
     }
   });
@@ -198,6 +262,8 @@ function createMainWindow(apiBaseUrl) {
 }
 
 // ── IPC: Setup Window Helpers ────────────────────────────────────
+
+ipcMain.on('open-setup-window', () => { showSetupWindow(); });
 
 ipcMain.on('close-setup-window', () => {
   if (setupWindow) setupWindow.close();
@@ -218,34 +284,162 @@ ipcMain.handle('run-firewall-setup', async () => {
   });
 });
 
+ipcMain.handle('download-and-install-sql', async (event) => {
+  const https = require('https');
+  const http = require('http');
+  const fs = require('fs');
+  const path = require('path');
+  const { exec } = require('child_process');
+
+  const sendProgress = (step, percent, msg) => {
+    try {
+      if (setupWindow && !setupWindow.isDestroyed() && setupWindow.webContents) {
+        setupWindow.webContents.send('sql-install-progress', { step, percent, msg });
+      }
+    } catch (_) {}
+  };
+
+  // 1. Try to start existing installed SQL Server services first
+  sendProgress('service-check', 10, 'جاري فحص خدمات SQL Server على جهازك وتشغيلها تلقائياً...');
+  const startServiceResult = await new Promise((res) => {
+    exec('sc config MSSQLSERVER start= auto & net start MSSQLSERVER || sc config MSSQL$SQLEXPRESS start= auto & net start MSSQL$SQLEXPRESS', (err) => {
+      res(!err);
+    });
+  });
+
+  if (startServiceResult) {
+    sendProgress('service-started', 80, 'تم تشغيل محرك SQL Server... جاري تهيئة قاعدة البيانات...');
+    await ensureSqlConfigured();
+    ensureFirewallRules();
+    sendProgress('done', 100, 'تم الاتصال وتفعيل محرك البيانات بنجاح!');
+    return { success: true, startedExisting: true };
+  }
+
+  // 2. Download official Microsoft SQL Server Express installer
+  sendProgress('downloading', 20, 'جاري تحميل محرك قواعد البيانات الرسمي (SQL Server Express)...');
+  const targetDir = getAppDataDir();
+  try {
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+  } catch (_) {}
+  const installerPath = path.join(targetDir, 'SQL2025-SSEI-Expr.exe');
+  const downloadUrl = 'https://go.microsoft.com/fwlink/p/?linkid=2216019';
+
+  const downloadFile = (url) => {
+    return new Promise((resolve, reject) => {
+      const getWithRedirects = (currentUrl, redirectsLeft = 5) => {
+        if (redirectsLeft <= 0) return reject(new Error('تجاوز عدد التحويلات المسموح بها'));
+        const client = currentUrl.startsWith('https') ? https : http;
+        client.get(currentUrl, (response) => {
+          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+            let nextUrl = response.headers.location;
+            if (!nextUrl.startsWith('http')) {
+              const parsed = new URL(currentUrl);
+              nextUrl = `${parsed.protocol}//${parsed.host}${nextUrl}`;
+            }
+            return getWithRedirects(nextUrl, redirectsLeft - 1);
+          }
+
+          if (response.statusCode !== 200) {
+            return reject(new Error(`فشل التحميل برمز: ${response.statusCode}`));
+          }
+
+          const totalBytes = parseInt(response.headers['content-length'] || '4606792', 10);
+          let receivedBytes = 0;
+          const fileStream = fs.createWriteStream(installerPath);
+
+          response.on('data', (chunk) => {
+            receivedBytes += chunk.length;
+            const pct = Math.min(85, 20 + Math.round((receivedBytes / totalBytes) * 65));
+            const mbDone = (receivedBytes / (1024 * 1024)).toFixed(1);
+            const mbTotal = (totalBytes / (1024 * 1024)).toFixed(1);
+            sendProgress('downloading', pct, `جاري تحميل محرك البيانات (${mbDone} ميجابايت من ${mbTotal} ميجابايت)...`);
+          });
+
+          response.pipe(fileStream);
+          fileStream.on('finish', () => {
+            fileStream.close();
+            resolve();
+          });
+          fileStream.on('error', reject);
+        }).on('error', reject);
+      };
+
+      getWithRedirects(url);
+    });
+  };
+
+  try {
+    await downloadFile(downloadUrl);
+  } catch (dlErr) {
+    console.error('Download error:', dlErr);
+    sendProgress('error', 0, `تعذر التحميل التلقائي: ${dlErr.message}`);
+    return { success: false, error: dlErr.message };
+  }
+
+  // 3. Launch the installer with Unattended parameters including Mixed-mode and TCP
+  sendProgress('installing', 90, 'تم التحميل بنجاح. جاري تشغيل مثبت محرك البيانات تلقائياً...');
+  ensureFirewallRules();
+
+  try {
+    const installArgs = '/Action=Install /IACCEPTSQLSERVERLICENSETERMS /QS /Hideconsole /FEATURES=SQL /INSTANCENAME=SQLEXPRESS /SECURITYMODE=SQL /SAPWD="Alm@2026#App" /TCPENABLED=1 /NPENABLED=1 /SQLSYSADMINACCOUNTS="BUILTIN\\Administrators"';
+    const child = exec(`"${installerPath}" ${installArgs}`, {
+      detached: true,
+      windowsHide: false,
+    });
+    child.unref();
+
+    sendProgress('installing', 95, 'معالج التثبيت يعمل الآن لتجهيز قاعدة البيانات... يرجى الانتظار دقيقة.');
+    return { success: true, launched: true };
+  } catch (execErr) {
+    const { shell } = require('electron');
+    await shell.openPath(installerPath);
+    return { success: true, opened: true };
+  }
+});
+
 ipcMain.handle('check-sql-status', async () => {
-  return new Promise((resolve) => {
-    const net = require('net');
+  const net = require('net');
+  const checkPort = () => new Promise((resolve) => {
     const socket = new net.Socket();
     let resolved = false;
-    socket.setTimeout(1800);
+    socket.setTimeout(1200);
     socket.on('connect', () => {
-      if (!resolved) {
-        resolved = true;
-        socket.destroy();
-        resolve({ running: true, port: 1433 });
-      }
+      if (!resolved) { resolved = true; socket.destroy(); resolve(true); }
     });
     socket.on('timeout', () => {
-      if (!resolved) {
-        resolved = true;
-        socket.destroy();
-        resolve({ running: false, error: 'انتهت مهلة محاولة الاتصال بالبورت 1433' });
-      }
+      if (!resolved) { resolved = true; socket.destroy(); resolve(false); }
     });
-    socket.on('error', (err) => {
-      if (!resolved) {
-        resolved = true;
-        resolve({ running: false, error: err.message });
-      }
+    socket.on('error', () => {
+      if (!resolved) { resolved = true; socket.destroy(); resolve(false); }
     });
     socket.connect(1433, '127.0.0.1');
   });
+
+  const isPortOpen = await checkPort();
+  if (isPortOpen) {
+    ensureSqlConfigured().catch(() => {});
+    return { running: true, port: 1433 };
+  }
+
+  // If port 1433 did not respond, check if SQL Server service is present and try init script
+  const psScript = path.join(__dirname, 'init-sql-login.ps1');
+  if (fs.existsSync(psScript)) {
+    const psOk = await new Promise((resolve) => {
+      exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}"`, (err, stdout) => {
+        if (!err && stdout && stdout.includes('SUCCESS')) {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
+    });
+
+    if (psOk) {
+      return { running: true, port: 1433, configured: true };
+    }
+  }
+
+  return { running: false, error: 'محرك SQL Server غير متصل حالياً' };
 });
 
 ipcMain.handle('test-server-ip', async (_event, ip) => {
@@ -350,15 +544,51 @@ ipcMain.on('start-app', async (event, config) => {
   try {
     if (mode === 'server') {
       ensureFirewallRules();
+      await ensureSqlConfigured().catch(() => {});
+
       if (event.sender && setupWindow) {
-        event.sender.send('setup-status', 'جاري تشغيل السيرفر...');
+        event.sender.send('setup-status', 'جاري تشغيل السيرفر وقاعدة البيانات...');
       }
 
-      const port = await startBackend();
+      let port;
+      try {
+        port = await startBackend();
+      } catch (beErr) {
+        if (event.sender) {
+          event.sender.send('setup-error', `تعذر بدء السيرفر المحلي: ${beErr.message}`);
+        }
+        return;
+      }
+
       const apiUrl = `http://127.0.0.1:${port}`;
+
+      // Check database connection via /health/db
+      let dbReady = false;
+      for (let i = 0; i < 15; i++) {
+        try {
+          await checkHealth(`${apiUrl}/health/db`);
+          dbReady = true;
+          break;
+        } catch (_) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+
+      if (!dbReady) {
+        stopBackend();
+        if (event.sender) {
+          event.sender.send('setup-error', 'تم تشغيل السيرفر ولكن تعذر الاتصال بقاعدة البيانات (SQL Server). تأكد من تشغيل محرك البيانات بالأسفل أو اضغط على زر التهيئة التلقائية.');
+        }
+        return;
+      }
+
       saveConfig({ mode: 'server', port });
 
       if (setupWindow) setupWindow.close();
+      if (mainWindow) {
+        mainWindow.close();
+        mainWindow = null;
+      }
       createMainWindow(apiUrl);
 
     } else if (mode === 'client') {
@@ -377,9 +607,14 @@ ipcMain.on('start-app', async (event, config) => {
         return;
       }
 
+      stopBackend();
       saveConfig({ mode: 'client', serverIp, host: serverIp });
 
       if (setupWindow) setupWindow.close();
+      if (mainWindow) {
+        mainWindow.close();
+        mainWindow = null;
+      }
       createMainWindow(apiUrl);
     }
   } catch (err) {
@@ -395,9 +630,19 @@ ipcMain.on('start-app', async (event, config) => {
 async function initAndLaunch() {
   appConfig = loadConfig();
 
-  // If explicitly configured as client mode with a remote server IP
-  if (appConfig && appConfig.mode === 'client' && (appConfig.serverIp || appConfig.host)) {
+  // If first time (no config) or mode not chosen, show setup window!
+  if (!appConfig || !appConfig.mode) {
+    showSetupWindow();
+    return;
+  }
+
+  // If client mode
+  if (appConfig.mode === 'client') {
     const remoteIp = appConfig.serverIp || appConfig.host;
+    if (!remoteIp) {
+      showSetupWindow();
+      return;
+    }
     const apiUrl = `http://${remoteIp}:4000`;
 
     try {
@@ -411,17 +656,35 @@ async function initAndLaunch() {
     }
   }
 
-  // Default: Server / Standalone mode
-  // Automatically spawn and launch local Express backend
+  // Server mode
   try {
     ensureFirewallRules();
+    ensureSqlConfigured().catch(() => {});
     console.log('Auto-launching local Express backend...');
     const port = await startBackend();
     const apiUrl = `http://127.0.0.1:${port}`;
+
+    // Verify DB health
+    let dbReady = false;
+    for (let i = 0; i < 10; i++) {
+      try {
+        await checkHealth(`${apiUrl}/health/db`);
+        dbReady = true;
+        break;
+      } catch (_) {
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    }
+
+    if (!dbReady) {
+      console.warn('Backend database not ready on launch, showing setup window...');
+      showSetupWindow();
+      return;
+    }
+
     createMainWindow(apiUrl);
   } catch (err) {
     console.error('Failed to auto-start backend server:', err);
-    // Show setup window with error so user can diagnose or switch to client mode
     showSetupWindow();
   }
 }

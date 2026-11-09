@@ -8,6 +8,32 @@ export const dbEngine: 'mssql' = 'mssql';
 /** Pure SQL Server mode is strictly enforced. */
 export const usingSqlite = false;
 
+function getCandidateConfigs(): any[] {
+  const base = { ...config.sql };
+  const list: any[] = [];
+
+  // Primary: dedicated application user 'alm_app' on 127.0.0.1:1433
+  list.push({ ...base, server: '127.0.0.1', port: 1433, user: 'alm_app', password: 'Alm@2026#App' });
+  list.push({ ...base, server: 'localhost', port: 1433, user: 'alm_app', password: 'Alm@2026#App' });
+
+  // Base configuration from env / config.json
+  list.push(base);
+
+  // Fallbacks with sa
+  list.push({ ...base, server: '127.0.0.1', port: 1433, user: 'sa', password: 'Alm@2026#App' });
+  list.push({ ...base, server: '127.0.0.1', port: 1433, user: 'sa', password: '' });
+  list.push({ ...base, server: 'localhost', port: 1433, user: 'sa', password: 'Alm@2026#App' });
+  list.push({ ...base, server: 'localhost', port: 1433, user: 'sa', password: '' });
+
+  // Named instance fallbacks (SQLEXPRESS)
+  list.push({ ...base, server: 'localhost\\SQLEXPRESS', port: undefined, user: 'alm_app', password: 'Alm@2026#App' });
+  list.push({ ...base, server: '.\\SQLEXPRESS', port: undefined, user: 'alm_app', password: 'Alm@2026#App' });
+  list.push({ ...base, server: 'localhost\\SQLEXPRESS', port: undefined, user: 'sa', password: 'Alm@2026#App' });
+  list.push({ ...base, server: 'localhost\\SQLEXPRESS', port: undefined, user: 'sa', password: '' });
+
+  return list;
+}
+
 /**
  * Attempt to auto-provision the target database via the `master` database.
  * If the SQL user lacks CREATE DATABASE permission (Error 262), log a
@@ -16,11 +42,11 @@ export const usingSqlite = false;
  *
  * IMPORTANT: This function never throws – failures are non-fatal.
  */
-async function ensureDatabaseExists(): Promise<void> {
-  const targetDb = config.sql.database;
+async function ensureDatabaseExists(activeConfig: any): Promise<void> {
+  const targetDb = activeConfig.database;
   let masterPool: any = null;
   try {
-    const masterConfig = { ...config.sql, database: 'master' };
+    const masterConfig = { ...activeConfig, database: 'master' };
     masterPool = await sql.connect(masterConfig);
 
     // Check if the database already exists before attempting CREATE
@@ -37,18 +63,14 @@ async function ensureDatabaseExists(): Promise<void> {
   } catch (err: any) {
     const errorNumber = err?.number || err?.originalError?.info?.number;
     if (errorNumber === 262 || err.message?.includes('permission')) {
-      // CREATE DATABASE permission denied – expected with restricted SQL users
       console.warn(
-        `⚠️  Cannot auto-create database '${targetDb}': Permission denied (Error 262).\n` +
-        `   The SQL user '${config.sql.user}' does not have CREATE DATABASE permission on 'master'.\n` +
-        `   → Make sure the database '${targetDb}' already exists, or grant the permission.\n` +
+        `⚠️ Cannot auto-create database '${targetDb}': Permission denied (Error 262).\n` +
         `   → The app will now try to connect directly to '${targetDb}'.`
       );
     } else {
       console.warn('Could not auto-provision database via master:', err.message || String(err));
     }
   } finally {
-    // Close the global pool connected to master so tryConnectMssql can re-connect to target DB
     try { await sql.close(); } catch { /* ignore close errors */ }
   }
 }
@@ -58,37 +80,32 @@ async function ensureDatabaseExists(): Promise<void> {
  * if all attempts fail.
  */
 async function tryConnectMssql(): Promise<any> {
-  await ensureDatabaseExists();
+  const candidateConfigs = getCandidateConfigs();
 
-  let attempts = 0;
-  while (attempts < 3) {
+  for (const candidate of candidateConfigs) {
     try {
-      attempts++;
-      await sql.close(); // close any prior global connection
-      const pool = await sql.connect(config.sql);
-      // Verify we are NOT accidentally connected to 'master'
+      await ensureDatabaseExists(candidate);
+      await sql.close();
+      const pool = await sql.connect(candidate);
+
       const dbNameResult = await pool.request().query('SELECT DB_NAME() AS currentDb');
       const currentDb = dbNameResult.recordset[0]?.currentDb;
-      if (currentDb && currentDb.toLowerCase() === 'master' && config.sql.database.toLowerCase() !== 'master') {
-        console.error(
-          `🚨 Connected to 'master' instead of '${config.sql.database}'!\n` +
-          `   This means the target database does not exist or the connection string is wrong.\n` +
-          `   Tables will NOT be created in 'master' to prevent corruption.`
-        );
+      if (currentDb && currentDb.toLowerCase() === 'master' && candidate.database.toLowerCase() !== 'master') {
         await pool.close();
-        return null;
+        continue;
       }
-      console.log(`✅ Connected to MSSQL database: ${currentDb}`);
+
+      console.log(`✅ Connected to MSSQL database: ${currentDb} via ${candidate.server} (${candidate.user})`);
+      // Update global config with working connection
+      Object.assign(config.sql, candidate);
       return pool;
     } catch (err: any) {
-      if (attempts >= 3) {
-        console.error(`Failed to connect to MSSQL at ${config.sql.server}:${config.sql.port} after ${attempts} attempts:`, err.message);
-        return null;
-      }
-      console.warn(`MSSQL connection attempt ${attempts} failed (${err.message}). Retrying in 2s...`);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Try next candidate config
+      try { await sql.close(); } catch {}
     }
   }
+
+  console.error(`Failed to connect to MSSQL on any candidate configuration.`);
   return null;
 }
 

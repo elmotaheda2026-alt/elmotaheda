@@ -5,6 +5,7 @@ try {
   contextBridge.exposeInMainWorld('__API_BASE_URL__', apiBaseUrl);
   contextBridge.exposeInMainWorld('electronAPI', {
     selectDirectory: () => ipcRenderer.invoke('select-directory'),
+    openSetupWindow: () => ipcRenderer.send('open-setup-window'),
   });
 } catch (err) {
   console.error('Failed to initialize preload:', err);
