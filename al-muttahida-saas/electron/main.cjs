@@ -98,8 +98,17 @@ function ensureSqlConfigured() {
 
 // ── Config helpers ──────────────────────────────────────────────
 
+function getProgramDataConfigFile() {
+  const pd = process.env.PROGRAMDATA || 'C:\\ProgramData';
+  return path.join(pd, 'Al-Muttahida ERP', 'config.json');
+}
+
 function loadConfig() {
   try {
+    const pdConfig = getProgramDataConfigFile();
+    if (fs.existsSync(pdConfig)) {
+      return JSON.parse(fs.readFileSync(pdConfig, 'utf-8'));
+    }
     if (fs.existsSync(CONFIG_FILE)) {
       return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
     }
@@ -111,11 +120,20 @@ function loadConfig() {
 
 function saveConfig(config) {
   try {
-    const dir = path.dirname(CONFIG_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const existing = loadConfig() || {};
     const merged = { ...existing, ...config };
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
+    const content = JSON.stringify(merged, null, 2);
+
+    // 1. Save in %PROGRAMDATA%
+    const pdConfig = getProgramDataConfigFile();
+    const pdDir = path.dirname(pdConfig);
+    if (!fs.existsSync(pdDir)) fs.mkdirSync(pdDir, { recursive: true });
+    fs.writeFileSync(pdConfig, content, 'utf-8');
+
+    // 2. Also mirror to %APPDATA%
+    const appDir = path.dirname(CONFIG_FILE);
+    if (!fs.existsSync(appDir)) fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(CONFIG_FILE, content, 'utf-8');
   } catch (e) {
     console.error('Could not save config:', e.message);
   }
@@ -124,34 +142,13 @@ function saveConfig(config) {
 // ── Setup Window ────────────────────────────────────────────────
 
 function showSetupWindow() {
-  if (setupWindow) {
-    setupWindow.focus();
-    return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    mainWindow.webContents.send('navigate-to', '/onboarding');
+  } else {
+    createMainWindow(currentApiUrl);
   }
-
-  setupWindow = new BrowserWindow({
-    width: 640,
-    height: 700,
-    resizable: true,
-    minWidth: 550,
-    minHeight: 600,
-    frame: false,
-    transparent: false,
-    icon: path.join(__dirname, 'icon.png'),
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      preload: path.join(__dirname, 'preload.cjs'),
-    },
-    title: 'Al-Muttahida ERP - Setup',
-  });
-
-  setupWindow.loadFile(path.join(__dirname, 'setup.html'));
-
-  setupWindow.on('closed', () => {
-    setupWindow = null;
-    if (!mainWindow) app.quit();
-  });
 }
 
 // ── Main Window ─────────────────────────────────────────────────
@@ -265,9 +262,18 @@ function createMainWindow(apiBaseUrl) {
 
 ipcMain.on('open-setup-window', () => { showSetupWindow(); });
 
-ipcMain.on('close-setup-window', () => {
-  if (setupWindow) setupWindow.close();
-  if (!mainWindow) app.quit();
+ipcMain.on('close-window', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) {
+    win.close();
+  } else if (mainWindow) {
+    mainWindow.close();
+  }
+});
+
+ipcMain.on('close-setup-window', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.close();
 });
 
 ipcMain.handle('open-external-url', async (_event, url) => {
@@ -293,6 +299,12 @@ ipcMain.handle('download-and-install-sql', async (event) => {
 
   const sendProgress = (step, percent, msg) => {
     try {
+      if (event && event.sender && !event.sender.isDestroyed()) {
+        event.sender.send('sql-install-progress', { step, percent, msg });
+      }
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+        mainWindow.webContents.send('sql-install-progress', { step, percent, msg });
+      }
       if (setupWindow && !setupWindow.isDestroyed() && setupWindow.webContents) {
         setupWindow.webContents.send('sql-install-progress', { step, percent, msg });
       }
@@ -546,7 +558,7 @@ ipcMain.on('start-app', async (event, config) => {
       ensureFirewallRules();
       await ensureSqlConfigured().catch(() => {});
 
-      if (event.sender && setupWindow) {
+      if (event.sender) {
         event.sender.send('setup-status', 'جاري تشغيل السيرفر وقاعدة البيانات...');
       }
 
@@ -561,6 +573,7 @@ ipcMain.on('start-app', async (event, config) => {
       }
 
       const apiUrl = `http://127.0.0.1:${port}`;
+      currentApiUrl = apiUrl;
 
       // Check database connection via /health/db
       let dbReady = false;
@@ -582,19 +595,21 @@ ipcMain.on('start-app', async (event, config) => {
         return;
       }
 
-      saveConfig({ mode: 'server', port });
+      saveConfig({ mode: 'server', port, host: '127.0.0.1' });
 
-      if (setupWindow) setupWindow.close();
-      if (mainWindow) {
-        mainWindow.close();
-        mainWindow = null;
+      if (event.sender) {
+        event.sender.send('app-started', { success: true, mode: 'server', apiUrl });
       }
-      createMainWindow(apiUrl);
+
+      if (!mainWindow) {
+        createMainWindow(apiUrl);
+      }
 
     } else if (mode === 'client') {
       const apiUrl = `http://${serverIp}:4000`;
+      currentApiUrl = apiUrl;
 
-      if (event.sender && setupWindow) {
+      if (event.sender) {
         event.sender.send('setup-status', 'جاري الاتصال بالسيرفر...');
       }
 
@@ -610,12 +625,13 @@ ipcMain.on('start-app', async (event, config) => {
       stopBackend();
       saveConfig({ mode: 'client', serverIp, host: serverIp });
 
-      if (setupWindow) setupWindow.close();
-      if (mainWindow) {
-        mainWindow.close();
-        mainWindow = null;
+      if (event.sender) {
+        event.sender.send('app-started', { success: true, mode: 'client', apiUrl });
       }
-      createMainWindow(apiUrl);
+
+      if (!mainWindow) {
+        createMainWindow(apiUrl);
+      }
     }
   } catch (err) {
     console.error('Start error:', err);
@@ -630,30 +646,20 @@ ipcMain.on('start-app', async (event, config) => {
 async function initAndLaunch() {
   appConfig = loadConfig();
 
-  // If first time (no config) or mode not chosen, show setup window!
+  // If first time (no config) or mode not chosen:
+  // Open React main window directly (React Router displays OnboardingWizard)!
   if (!appConfig || !appConfig.mode) {
-    showSetupWindow();
+    console.log('No prior config: Launching React main window in Onboarding mode...');
+    createMainWindow('http://127.0.0.1:4000');
     return;
   }
 
   // If client mode
   if (appConfig.mode === 'client') {
     const remoteIp = appConfig.serverIp || appConfig.host;
-    if (!remoteIp) {
-      showSetupWindow();
-      return;
-    }
-    const apiUrl = `http://${remoteIp}:4000`;
-
-    try {
-      await checkHealth(`${apiUrl}/health`);
-      createMainWindow(apiUrl);
-      return;
-    } catch (err) {
-      console.warn(`Remote server ${remoteIp} unreachable, showing setup window:`, err.message);
-      showSetupWindow();
-      return;
-    }
+    const apiUrl = `http://${remoteIp || '127.0.0.1'}:4000`;
+    createMainWindow(apiUrl);
+    return;
   }
 
   // Server mode
@@ -661,31 +667,17 @@ async function initAndLaunch() {
     ensureFirewallRules();
     ensureSqlConfigured().catch(() => {});
     console.log('Auto-launching local Express backend...');
-    const port = await startBackend();
+    let port = 4000;
+    try {
+      port = await startBackend();
+    } catch (e) {
+      console.warn('Backend start error:', e.message);
+    }
     const apiUrl = `http://127.0.0.1:${port}`;
-
-    // Verify DB health
-    let dbReady = false;
-    for (let i = 0; i < 10; i++) {
-      try {
-        await checkHealth(`${apiUrl}/health/db`);
-        dbReady = true;
-        break;
-      } catch (_) {
-        await new Promise((r) => setTimeout(r, 800));
-      }
-    }
-
-    if (!dbReady) {
-      console.warn('Backend database not ready on launch, showing setup window...');
-      showSetupWindow();
-      return;
-    }
-
     createMainWindow(apiUrl);
   } catch (err) {
     console.error('Failed to auto-start backend server:', err);
-    showSetupWindow();
+    createMainWindow('http://127.0.0.1:4000');
   }
 }
 

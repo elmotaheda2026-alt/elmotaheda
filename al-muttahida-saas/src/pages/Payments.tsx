@@ -3,16 +3,19 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Banknote,
+  Calculator,
   CalendarDays,
+  Coins,
   CreditCard,
   Lock,
   Plus,
   Printer,
   Search,
   CheckCircle2,
+  RotateCcw,
 } from 'lucide-react';
 import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, getOpeningBalances } from '../lib/storage';
+import { createPayment, reversePayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, getOpeningBalances } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
@@ -103,6 +106,9 @@ export default function Payments() {
   const [paymentMode, setPaymentMode] = useState<'normal' | 'early_settlement'>('normal');
   const [settlementDiscountType, setSettlementDiscountType] = useState<'fixed' | 'percent'>('fixed');
   const [settlementDiscountValue, setSettlementDiscountValue] = useState<number>(0);
+  const [reversingScheduleId, setReversingScheduleId] = useState<string | null>(null);
+  const [reversingPaymentId, setReversingPaymentId] = useState<string | null>(null);
+  const [autoSuggestedSaleId, setAutoSuggestedSaleId] = useState<string | null>(null);
 
   // Admin approval states for Early Settlement
   const [settlementAdminList, setSettlementAdminList] = useState<{ id: string; name: string; username: string }[]>([]);
@@ -367,18 +373,30 @@ export default function Payments() {
 
   const formatDate = formatDateDisplay;
 
-  const customerSales = useMemo(
-    () =>
-      sales.filter(
-        (sale) =>
-          (!incomingForm.customerId || sale.customerId === incomingForm.customerId) &&
-          sale.status !== 'cancelled' &&
-          sale.remaining > 0,
-      ),
-    [incomingForm.customerId, sales],
-  );
+  const normalizeArabic = (str: string) =>
+    (str || '')
+      .replace(/[أإآ]/g, 'ا')
+      .replace(/ى/g, 'ي')
+      .replace(/ة/g, 'ه')
+      .replace(/[\u064B-\u065F]/g, '')
+      .trim()
+      .toLowerCase();
 
   const selectedCustomer = customers.find((customer) => customer.id === incomingForm.customerId) || null;
+
+  const customerSales = useMemo(() => {
+    const normSearch = normalizeArabic(customerSearchTerm);
+    return sales.filter((sale) => {
+      if (sale.status === 'cancelled') return false;
+      const matchesCustomer =
+        (!incomingForm.customerId && !normSearch) ||
+        (incomingForm.customerId && (sale.customerId === incomingForm.customerId || sale.customerName === selectedCustomer?.name)) ||
+        (normSearch && normalizeArabic(sale.customerName || '').includes(normSearch));
+      if (!matchesCustomer) return false;
+      return sale.remaining > 0 || (sale.financing?.schedules && sale.financing.schedules.length > 0) || sale.paid > 0;
+    });
+  }, [incomingForm.customerId, customerSearchTerm, sales, selectedCustomer]);
+
   const selectedSale = customerSales.find((sale) => sale.id === incomingForm.saleId) || null;
 
   const selectedSchedules = selectedSale?.financing?.schedules?.length
@@ -408,6 +426,79 @@ export default function Payments() {
   const pendingSchedules = selectedSchedules.filter((schedule) => schedule.status !== 'paid');
 
   const totalRemainingUnpaid = selectedSale ? Number(selectedSale.remaining || 0) : 0;
+
+  // Calculate suggested early settlement discount based on unearned profit of remaining months vs contract duration
+  const earlySettlementMetrics = useMemo(() => {
+    if (!selectedSale) {
+      return {
+        totalMonths: 0,
+        paidMonths: 0,
+        remainingMonths: 0,
+        totalProfit: 0,
+        profitPerMonth: 0,
+        suggestedDiscount: 0,
+      };
+    }
+
+    const totalMonths = Math.max(
+      1,
+      Number(selectedSale.financing?.installmentMonths) || selectedSale.financing?.schedules?.length || 1
+    );
+
+    const schedules = selectedSale.financing?.schedules || [];
+    const paidMonths = schedules.filter((s) => s.status === 'paid' || (s.amount > 0 && s.paidAmount >= s.amount)).length;
+    const remainingMonths = schedules.length > 0
+      ? schedules.filter((s) => s.status !== 'paid' && !(s.amount > 0 && s.paidAmount >= s.amount)).length
+      : Math.max(0, totalMonths - paidMonths);
+
+    const basePrice = Number(selectedSale.subtotal) || 0;
+    const totalPrice = Number(selectedSale.total) || 0;
+    let totalProfit = 0;
+
+    if (totalPrice > basePrice && basePrice > 0) {
+      totalProfit = totalPrice - basePrice;
+    } else if (selectedSale.items && selectedSale.items.length > 0) {
+      const cost = selectedSale.items.reduce(
+        (sum, it) => sum + (it.quantity * (Number(it.unitCost) || Number(it.unitPrice) || 0)),
+        0
+      );
+      if (totalPrice > cost && cost > 0) {
+        totalProfit = totalPrice - cost;
+      }
+    }
+
+    const profitPerMonth = totalMonths > 0 ? Math.round(totalProfit / totalMonths) : 0;
+    // Unearned profit for the remaining unspent months
+    const rawSuggested = profitPerMonth * remainingMonths;
+    const maxDiscount = Number(selectedSale.remaining || 0);
+    const suggestedDiscount = Math.min(Math.max(0, Math.round(rawSuggested)), maxDiscount);
+
+    return {
+      totalMonths,
+      paidMonths,
+      remainingMonths,
+      totalProfit,
+      profitPerMonth,
+      suggestedDiscount,
+    };
+  }, [selectedSale]);
+
+  // Auto-populate the suggested discount when early settlement mode is enabled or sale changes
+  useEffect(() => {
+    if (paymentMode === 'early_settlement' && selectedSale) {
+      if (autoSuggestedSaleId !== selectedSale.id) {
+        setAutoSuggestedSaleId(selectedSale.id);
+        if (earlySettlementMetrics.suggestedDiscount > 0) {
+          setSettlementDiscountType('fixed');
+          setSettlementDiscountValue(earlySettlementMetrics.suggestedDiscount);
+        } else {
+          setSettlementDiscountValue(0);
+        }
+      }
+    } else if (paymentMode !== 'early_settlement') {
+      setAutoSuggestedSaleId(null);
+    }
+  }, [paymentMode, selectedSale?.id, autoSuggestedSaleId, earlySettlementMetrics.suggestedDiscount]);
 
   const settlementDiscountAmount = useMemo(() => {
     if (paymentMode !== 'early_settlement' || !selectedSale) return 0;
@@ -878,6 +969,159 @@ export default function Payments() {
     };
   };
 
+  const getPaymentForSchedule = (scheduleId: string) => {
+    const targetSchedule = selectedSchedules.find((s) => s.id === scheduleId);
+    // 1. Direct match by installmentId
+    const byId = payments.find(
+      (p) => p.status !== 'voided' && p.installmentId && p.installmentId === scheduleId
+    );
+    if (byId) return byId;
+
+    if (!selectedSale) return undefined;
+
+    // 2. Match by saleId and schedule label in description
+    if (targetSchedule?.label) {
+      const byLabel = payments.find(
+        (p) =>
+          p.status !== 'voided' &&
+          p.saleId === selectedSale.id &&
+          p.description?.includes(targetSchedule.label)
+      );
+      if (byLabel) return byLabel;
+    }
+
+    // 3. Match by saleId and exact schedule amount / paid amount
+    if (targetSchedule && targetSchedule.paidAmount > 0) {
+      const byAmount = payments.find(
+        (p) =>
+          p.status !== 'voided' &&
+          p.saleId === selectedSale.id &&
+          (Math.abs(Number(p.amount) - Number(targetSchedule.paidAmount)) < 0.01 ||
+           Math.abs(Number(p.amount) - Number(targetSchedule.amount)) < 0.01)
+      );
+      if (byAmount) return byAmount;
+    }
+
+    // 4. If only 1 paid schedule exists in this sale, match any active payment for this sale
+    const paidSchedules = selectedSchedules.filter((s) => s.paidAmount > 0 || s.status === 'paid');
+    if (paidSchedules.length === 1 && paidSchedules[0].id === scheduleId) {
+      const bySale = payments.find(
+        (p) => p.status !== 'voided' && p.saleId === selectedSale.id
+      );
+      if (bySale) return bySale;
+    }
+
+    // 5. Fallback: most recent payment for this sale
+    return payments.find(
+      (p) => p.status !== 'voided' && p.saleId === selectedSale.id
+    );
+  };
+
+  const handleReverseInstallmentPayment = async (schedule: InstallmentSchedule) => {
+    const linkedPmt = getPaymentForSchedule(schedule.id);
+    if (!linkedPmt) {
+      alert('لم يتم العثور على حركة السداد المرتبطة بهذا القسط في السجلات.');
+      return;
+    }
+
+    if (user?.role !== 'admin' && isDateClosed(linkedPmt.date)) {
+      alert('لا يمكن إلغاء سداد في تاريخ مغلق مالياً.');
+      return;
+    }
+
+    const ok = window.confirm(
+      `هل أنت متأكد من إلغاء سداد ${schedule.label} بمبلغ (${formatCurrency(linkedPmt.amount)})؟\n\n` +
+      `سيتم إعادة القسط إلى قائمة الأقساط المفتوحة فوراً وتعديل رصيد الفاتورة والعميل لتتمكن من إعادة سداده بالقيمة والتاريخ الصحيح.`
+    );
+    if (!ok) return;
+
+    setReversingScheduleId(schedule.id);
+    try {
+      if (isApiMode()) {
+        await api.reversePayment(linkedPmt.id);
+      } else {
+        reversePayment(linkedPmt, 'إلغاء سداد قسط لإعادة تعديله', user?.name || 'مدير النظام');
+      }
+
+      await loadData();
+
+      // Automatically preselect the reopened schedule in the form for immediate editing/re-payment
+      const originalAmount = schedule.amount;
+      setIncomingForm((curr) => ({
+        ...curr,
+        installmentId: schedule.id,
+        amount: originalAmount,
+        description: selectedSale ? `سداد ${schedule.label} من الفاتورة ${selectedSale.invoiceNumber}` : '',
+      }));
+
+      setMessage({
+        type: 'success',
+        text: `تم إلغاء سداد ${schedule.label} بنجاح. تم اختياره تلقائياً في النموذج لتعديل المبلغ أو التاريخ وإعادة الحفظ.`,
+      });
+    } catch (err: any) {
+      console.error('Failed to reverse installment payment:', err);
+      alert(`فشل التراجع عن سداد القسط: ${err?.message || 'خطأ غير معروف'}`);
+    } finally {
+      setReversingScheduleId(null);
+    }
+  };
+
+  const handleReversePayment = async (paymentId: string) => {
+    const payment = payments.find((p) => p.id === paymentId);
+    if (!payment) return;
+
+    if (user?.role !== 'admin' && isDateClosed(payment.date)) {
+      alert('لا يمكن عكس حركة مالية في تاريخ مغلق مالياً.');
+      return;
+    }
+
+    const ok = window.confirm(
+      `هل أنت متأكد من عكس وإلغاء هذا الإيصال (${payment.receiptNumber || payment.id}) بمبلغ (${formatCurrency(payment.amount)})؟\n\n` +
+      `سيتم إعادة فتح القسط/الفاتورة المرتبطة به تلقائياً وتحديث أرصدة الحسابات.`
+    );
+    if (!ok) return;
+
+    setReversingPaymentId(paymentId);
+    try {
+      if (isApiMode()) {
+        await api.reversePayment(payment.id);
+      } else {
+        reversePayment(payment, 'عكس الحركة يدوياً من جدول الخزينة', user?.name || 'مدير النظام');
+      }
+
+      await loadData();
+      setMessage({
+        type: 'success',
+        text: `تم عكس الإيصال (${payment.receiptNumber || payment.id}) بنجاح وإعادة فتح القسط/الفاتورة.`,
+      });
+    } catch (err: any) {
+      console.error('Failed to reverse payment:', err);
+      alert(`فشل عكس الحركة: ${err?.message || 'خطأ غير معروف'}`);
+    } finally {
+      setReversingPaymentId(null);
+    }
+  };
+
+  const handlePrintPayment = (payment: Payment) => {
+    const sale = payment.saleId ? sales.find((s) => s.id === payment.saleId) : null;
+    const installment = sale?.financing?.schedules?.find((sch) => sch.id === payment.installmentId) || null;
+    const customer = customers.find((c) => c.id === (payment.customerId || payment.referenceId));
+    const customerName = customer?.name || (sale ? sale.customerName : 'عميل نقدي');
+
+    if (sale) {
+      const remainingSchedules = sale.financing?.schedules?.filter((s) => s.status !== 'paid').length || 0;
+      printInstallmentReceipt({
+        payment,
+        sale,
+        customerName,
+        installment,
+        remainingInstallments: remainingSchedules,
+      });
+    } else {
+      window.print();
+    }
+  };
+
   const handleIncomingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
@@ -1288,14 +1532,15 @@ export default function Payments() {
                 <th className="py-2.5 px-4 text-right">البيان / الوصف</th>
                 <th className="py-2.5 px-4 text-right">التاريخ</th>
                 <th className="py-2.5 px-4 text-right">المبلغ</th>
+                <th className="py-2.5 px-4 text-center">الإجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <LoadingState variant="table" colSpan={6} />
+                <LoadingState variant="table" colSpan={7} />
               ) : todayPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-16 px-4 text-center text-slate-400">
+                  <td colSpan={7} className="py-16 px-4 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2.5 min-h-[220px]">
                       <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                         <Banknote size={24} />
@@ -1340,6 +1585,37 @@ export default function Payments() {
                       <span className={`font-bold text-xs md:text-sm ${payment.type === 'in' ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {payment.type === 'in' ? '+' : '-'} {formatCurrency(payment.amount)}
                       </span>
+                    </td>
+                    <td className="py-2.5 px-4 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        {payment.status !== 'voided' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handlePrintPayment(payment)}
+                              className="p-1 rounded-md text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                              title="طباعة إيصال السداد"
+                            >
+                              <Printer size={15} />
+                            </button>
+                            {hasPermission(user, 'payments:reverse') && (
+                              <button
+                                type="button"
+                                onClick={() => handleReversePayment(payment.id)}
+                                disabled={reversingPaymentId === payment.id}
+                                className="p-1 rounded-md text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="عكس / إلغاء الإيصال وإعادة فتح القسط"
+                              >
+                                <RotateCcw size={15} className={reversingPaymentId === payment.id ? 'animate-spin' : ''} />
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-400 line-through">
+                            معكوس
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1398,15 +1674,23 @@ export default function Payments() {
                               : 'text-slate-500 hover:text-slate-700'
                           }`}
                         >
-                          ⚡ تكييش وتصفية الفاتورة/العقد
+                          تكييش وتصفية الفاتورة/العقد
                         </button>
                       </div>
                     )}
                     {paymentMode === 'early_settlement' && (
                       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-amber-700 font-black text-sm">⚡ وضع التكييش والتسوية المبكرة</span>
+                          <span className="text-amber-800 font-black text-sm flex items-center gap-1.5">
+                            <Coins size={17} /> وضع التكييش والتسوية المبكرة
+                          </span>
                         </div>
+                        {selectedSale && selectedSale.remaining <= 0 && (
+                          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs font-bold text-blue-800 flex items-center gap-2">
+                            <span>ℹ️</span>
+                            <span>هذه الفاتورة ({selectedSale.invoiceNumber}) مسددة بالكامل بالفعل ومتبقيها 0 جنيه. لا توجد أقساط متبقية لتكييشها.</span>
+                          </div>
+                        )}
                         <div className="grid gap-3 md:grid-cols-3">
                           <div>
                             <label className="block text-xs font-bold text-slate-700 mb-1">إجمالي المتبقي</label>
@@ -1443,6 +1727,58 @@ export default function Payments() {
                             />
                           </div>
                         </div>
+
+                        {selectedSale && earlySettlementMetrics.totalMonths > 0 && (
+                          <div className="rounded-xl border border-amber-200 bg-white/80 p-3 text-xs text-slate-700 space-y-2">
+                            <div className="flex items-center justify-between font-bold text-amber-900 flex-wrap gap-2">
+                              <span className="flex items-center gap-1">
+                                <Calculator size={14} className="text-amber-700" />
+                                <span>الحسبة المقترحة للتكييش (إسقاط أرباح الشهور المتبقية):</span>
+                              </span>
+                              {earlySettlementMetrics.suggestedDiscount > 0 && settlementDiscountValue !== earlySettlementMetrics.suggestedDiscount && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSettlementDiscountType('fixed');
+                                    setSettlementDiscountValue(earlySettlementMetrics.suggestedDiscount);
+                                  }}
+                                  className="text-[11px] font-extrabold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded px-2 py-0.5 transition-colors cursor-pointer"
+                                  title="استعادة قيمة الخصم المقترحة تلقائياً"
+                                >
+                                  ↺ استعادة المقترح التلقائي ({formatCurrency(earlySettlementMetrics.suggestedDiscount)})
+                                </button>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-600 font-medium pt-0.5">
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                                <span className="text-[11px] text-slate-500 block">مدة العقد الإجمالية</span>
+                                <strong className="text-slate-800 text-xs">{earlySettlementMetrics.totalMonths} شهر</strong>
+                              </div>
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                                <span className="text-[11px] text-slate-500 block">الأقساط المسددة</span>
+                                <strong className="text-emerald-700 text-xs">{earlySettlementMetrics.paidMonths} شهر</strong>
+                              </div>
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                                <span className="text-[11px] text-slate-500 block">الشهور المتبقية</span>
+                                <strong className="text-rose-700 text-xs">{earlySettlementMetrics.remainingMonths} شهر</strong>
+                              </div>
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                                <span className="text-[11px] text-slate-500 block">ربح التقسيط / شهر</span>
+                                <strong className="text-slate-800 text-xs">{formatCurrency(earlySettlementMetrics.profitPerMonth)}</strong>
+                              </div>
+                            </div>
+                            {earlySettlementMetrics.suggestedDiscount > 0 ? (
+                              <p className="text-[11px] text-amber-900 border-t border-amber-100 pt-1.5 leading-relaxed">
+                                إجمالي أرباح التقسيط للعقد: <strong>{formatCurrency(earlySettlementMetrics.totalProfit)}</strong> — تم اقتراح إسقاط أرباح الـ <strong>{earlySettlementMetrics.remainingMonths} شهر</strong> المتبقية بقيمة <strong>{formatCurrency(earlySettlementMetrics.suggestedDiscount)}</strong> وتم إدراجها تلقائياً، ويمكنك تعديلها بحرية في حقل مبلغ الخصم أعلاه.
+                              </p>
+                            ) : (
+                              <p className="text-[11px] text-slate-500 border-t border-slate-100 pt-1.5">
+                                لم يتم العثور على فارق أرباح تقسيط مسجل بالفاتورة. يمكنك كتابة قيمة خصم التعجيل بحرية في الحقل أعلاه.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
                         {settlementDiscountAmount > 0 && (
                           <div className="flex items-center justify-between rounded-xl bg-white border border-amber-200 px-4 py-2.5">
                             <span className="text-sm font-bold text-slate-700">صافي التسوية المطلوب</span>
@@ -1493,9 +1829,10 @@ export default function Payments() {
                               <input
                                 value={customerSearchTerm}
                                 onChange={(e) => {
-                                  setCustomerSearchTerm(e.target.value);
+                                  const val = e.target.value;
+                                  setCustomerSearchTerm(val);
                                   setShowCustomerSuggestions(true);
-                                  if (e.target.value.trim() === '') {
+                                  if (val.trim() === '') {
                                     setIncomingForm((current) => ({
                                       ...current,
                                       customerId: '',
@@ -1504,6 +1841,18 @@ export default function Payments() {
                                       amount: 0,
                                       description: '',
                                     }));
+                                  } else {
+                                    const exact = customers.find(
+                                      (c) => normalizeArabic(c.name) === normalizeArabic(val)
+                                    );
+                                    if (exact && exact.id !== incomingForm.customerId) {
+                                      setIncomingForm((current) => ({
+                                        ...current,
+                                        customerId: exact.id,
+                                        saleId: '',
+                                        installmentId: '',
+                                      }));
+                                    }
                                   }
                                 }}
                                 onFocus={() => setShowCustomerSuggestions(true)}
@@ -1556,7 +1905,7 @@ export default function Payments() {
                               <option value="">اختر الفاتورة</option>
                               {customerSales.map((sale) => (
                                 <option key={sale.id} value={sale.id}>
-                                  {sale.invoiceNumber} - المتبقي {formatCurrency(sale.remaining)}
+                                  {sale.invoiceNumber} {sale.remaining <= 0 ? '(مسددة بالكامل - للمراجعة أو التعديل)' : `- المتبقي ${formatCurrency(sale.remaining)}`}
                                 </option>
                               ))}
                             </select>
@@ -1591,6 +1940,11 @@ export default function Payments() {
                                   {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                                 </option>
                               ))}
+                              {selectedSale && pendingSchedules.length === 0 && selectedSchedules.length > 0 && (
+                                <option value="" disabled>
+                                  جميع الأقساط مسددة بالكامل (يمكن التراجع وتعديل أي قسط من الجدول أدناه)
+                                </option>
+                              )}
                             </select>
                           </Field>
                           )}
@@ -1706,7 +2060,21 @@ export default function Payments() {
                                         {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                                       </td>
                                       <td className="px-3 py-3">
-                                        <StatusBadge status={schedule.status} />
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <StatusBadge status={schedule.status} />
+                                          {(schedule.paidAmount > 0 || schedule.status === 'paid') && (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleReverseInstallmentPayment(schedule)}
+                                              disabled={reversingScheduleId === schedule.id}
+                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 transition-colors cursor-pointer shadow-xs"
+                                              title="إلغاء السداد وإعادة فتح هذا القسط لتعديل قيمته أو تاريخه"
+                                            >
+                                              <RotateCcw size={11} className={reversingScheduleId === schedule.id ? 'animate-spin' : ''} />
+                                              <span>تراجع وتعديل</span>
+                                            </button>
+                                          )}
+                                        </div>
                                       </td>
                                     </tr>
                                   ))}

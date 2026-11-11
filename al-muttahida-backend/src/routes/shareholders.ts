@@ -73,7 +73,7 @@ async function computeShareholdersEngine(
   periodFrom: string | null,
   periodTo: string | null
 ) {
-  const [salesRows, saleItemsRows, expensesRows, shareholdersRows, transactionsRows] = await Promise.all([
+  const [salesRows, saleItemsRows, expensesRows, shareholdersRows, transactionsRows, suppliersDebtRow] = await Promise.all([
     db.all(`SELECT id, date, total, status FROM sales WHERE status <> 'cancelled'`),
     db.all(
       `SELECT si.sale_id, si.quantity, si.unit_cost, s.date AS sale_date
@@ -84,7 +84,10 @@ async function computeShareholdersEngine(
     db.all(`SELECT id, date, amount, category, description FROM expenses`),
     db.all(`SELECT * FROM shareholders ORDER BY created_at ASC`),
     db.all(`SELECT * FROM shareholder_transactions ORDER BY date ASC, created_at ASC`),
+    db.get(`SELECT COALESCE(SUM(balance), 0) AS total_debt FROM suppliers`),
   ]);
+
+  const totalSupplierDebt = roundMoney(Number(suppliersDebtRow?.total_debt || 0));
 
   // Pre-group COGS by sale_id for fast lookup
   const cogsBySaleId = new Map<string, number>();
@@ -408,6 +411,20 @@ async function computeShareholdersEngine(
       availableProfit,
       retainedProfits,
       totalNetValue,
+      partnerShareOfDebt: roundMoney(
+        totalSupplierDebt * (item.isFounder
+          ? (rawFoundersShareTotal > 0 ? (sharePercentage / rawFoundersShareTotal) : (1 / (foundersRows.length || 1)))
+          : 0)
+      ),
+      partnerNetFreeCapital: roundMoney(
+        Math.max(
+          0,
+          totalNetValue -
+            (totalSupplierDebt * (item.isFounder
+              ? (rawFoundersShareTotal > 0 ? (sharePercentage / rawFoundersShareTotal) : (1 / (foundersRows.length || 1)))
+              : 0))
+        )
+      ),
       periodTransactionsCount: periodPartnerTxs.length,
       ledger: ledgerEntries.reverse(), // newest first for UI display
     };
@@ -422,6 +439,8 @@ async function computeShareholdersEngine(
   const totalNetEntitlementAll = roundMoney(
     liveShareholders.reduce((sum: number, s: any) => sum + s.netEntitlement, 0)
   );
+  const totalGrossEquity = roundMoney(totalCapital + totalAvailableProfits);
+  const netFreeCapital = roundMoney(Math.max(0, totalGrossEquity - totalSupplierDebt));
 
   // Build global transactions list (filtered by period if specified, with running balances attached)
   const runningByShareholder = new Map<string, { cap: number; prof: number }>();
@@ -480,6 +499,9 @@ async function computeShareholdersEngine(
     totalAvailableProfits,
     totalWithdrawnProfits: totalWithdrawnProfitsAll,
     totalNetEntitlement: totalNetEntitlementAll,
+    totalSupplierDebt,
+    totalGrossEquity,
+    netFreeCapital,
     periodFrom: periodFrom || null,
     periodTo: periodTo || null,
     shareholders: liveShareholders,
@@ -911,6 +933,104 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
     return res.status(201).json({ id });
   } catch (error: any) {
     return res.status(error.message === 'Shareholder not found' ? 404 : 500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// POST /shareholders/capitalize-profits
+router.post('/capitalize-profits', async (req: AuthedRequest, res) => {
+  try {
+    const db = await dbPromise;
+    const now = new Date().toISOString();
+    const todayStr = toDatePart(now);
+    const targetShareholderId = req.body?.shareholderId;
+
+    const engineState = await computeShareholdersEngine(db, null, null);
+
+    // If targetShareholderId is specified and not 'all', capitalize only that partner
+    // Otherwise, capitalize all founders who have available profits
+    const partnersToCapitalize = engineState.shareholders.filter((s: any) => {
+      if (targetShareholderId && targetShareholderId !== 'all') {
+        return s.id === targetShareholderId && s.availableProfit > 0;
+      }
+      return s.isFounder && s.availableProfit > 0;
+    });
+
+    if (partnersToCapitalize.length === 0) {
+      return res.status(400).json({ message: 'لا توجد أرباح متاحة للرسملة حالياً لدى الشركاء.' });
+    }
+
+    let totalCapitalized = 0;
+    const capitalizedDetails: { name: string; amount: number }[] = [];
+
+    await db.withTransaction(async (txDb: any) => {
+      for (const partner of partnersToCapitalize) {
+        const profitToCapitalize = roundMoney(partner.availableProfit);
+        if (profitToCapitalize <= 0) continue;
+
+        // 1. Add profit to capital
+        await txDb.run(
+          'UPDATE shareholders SET capital = capital + ?, updated_at = ? WHERE id = ?',
+          profitToCapitalize,
+          now,
+          partner.id
+        );
+
+        // 2. Insert capital_deposit transaction
+        const depId = uid();
+        await txDb.run(
+          `INSERT INTO shareholder_transactions (
+            id, shareholder_id, shareholder_name, type, amount, date, description, created_by, created_at
+          ) VALUES (?, ?, ?, 'capital_deposit', ?, ?, ?, ?, ?)`,
+          depId,
+          partner.id,
+          partner.name,
+          profitToCapitalize,
+          todayStr,
+          `رسملة وتدوير الأرباح المحققة وإضافتها رسمياً إلى رأس المال`,
+          req.user?.name || 'مدير النظام',
+          now
+        );
+
+        // 3. Insert profit_withdrawal transaction to offset availableProfit
+        const withId = uid();
+        await txDb.run(
+          `INSERT INTO shareholder_transactions (
+            id, shareholder_id, shareholder_name, type, amount, date, description, created_by, created_at
+          ) VALUES (?, ?, ?, 'profit_withdrawal', ?, ?, ?, ?, ?)`,
+          withId,
+          partner.id,
+          partner.name,
+          profitToCapitalize,
+          todayStr,
+          `تحويل ورسملة الأرباح إلى رأس المال`,
+          req.user?.name || 'مدير النظام',
+          now
+        );
+
+        totalCapitalized = roundMoney(totalCapitalized + profitToCapitalize);
+        capitalizedDetails.push({ name: partner.name, amount: profitToCapitalize });
+      }
+    });
+
+    await audit('shareholders.capitalize', 'shareholders', 'all', req.user?.name || 'system', {
+      totalCapitalized,
+      capitalizedDetails,
+    });
+
+    await createSystemNotification(
+      'success',
+      'رسملة وتدوير الأرباح',
+      `تمت رسملة أرباح الشركاء بنجاح وإضافتها لرأس المال بقيمة إجمالية ${formatMoney(totalCapitalized)}`
+    );
+
+    return res.json({
+      success: true,
+      totalCapitalized,
+      capitalizedDetails,
+      message: `تمت رسملة وتدوير الأرباح بنجاح وإضافتها لرأس المال بقيمة إجمالية ${formatMoney(totalCapitalized)}.`,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
   }
 });
 

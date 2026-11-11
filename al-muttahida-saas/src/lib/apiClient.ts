@@ -176,8 +176,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const payload = await response.json().catch(() => ({}));
     if (response.status === 401) {
       clearApiToken();
-      if (window.location.pathname !== '/login') {
-        window.location.replace('/login');
+      if (typeof window !== 'undefined' && !window.location.hash.includes('login')) {
+        window.location.hash = '#/login';
       }
     }
     let errorMsg = payload.message || payload.error;
@@ -340,6 +340,11 @@ export const api = {
   listShareholderTransactions: () => requestArray<any>('/shareholders/transactions', 'shareholder transactions'),
   createShareholderTransaction: (payload: any) => request<{ id: string }>('/shareholders/transactions', { method: 'POST', body: JSON.stringify(payload) }),
   deleteShareholderTransaction: (id: string) => request<{ message: string }>(`/shareholders/transactions/${id}`, { method: 'DELETE' }),
+  capitalizeProfits: (shareholderId?: string) =>
+    request<{ success: boolean; totalCapitalized: number; message: string }>('/shareholders/capitalize-profits', {
+      method: 'POST',
+      body: JSON.stringify({ shareholderId }),
+    }),
   getShareholdersLiveTrading: (filters: { periodFrom?: string; periodTo?: string } = {}) => {
     const params = new URLSearchParams();
     if (filters.periodFrom) params.set('periodFrom', filters.periodFrom);

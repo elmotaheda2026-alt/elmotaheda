@@ -523,8 +523,10 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
             `UPDATE sales
              SET paid = CASE WHEN paid - ? < 0 THEN 0 ELSE paid - ? END,
                  remaining = CASE WHEN remaining + ? > total THEN total ELSE remaining + ? END,
-                 status = CASE WHEN (paid - ?) <= 0 THEN 'pending' ELSE status END
+                 locked = CASE WHEN (paid - ?) <= 0 THEN 0 ELSE 1 END,
+                 status = CASE WHEN (paid - ?) >= total THEN 'completed' ELSE 'pending' END
              WHERE id = ?`,
+            original.amount,
             original.amount,
             original.amount,
             original.amount,

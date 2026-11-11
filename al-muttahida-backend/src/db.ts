@@ -1,5 +1,5 @@
 import sql from 'mssql';
-import { config } from './config.js';
+import { config, getSavedConfig, saveAppConfig } from './config.js';
 import { applyPagination, normalizeQueryParams, prepareSqlRequest, type PaginationOptions, type QueryParam, type QueryParams, type RequestLike } from './dbQuery.js';
 import { hashPassword, uid } from './utils.js';
 
@@ -8,28 +8,91 @@ export const dbEngine: 'mssql' = 'mssql';
 /** Pure SQL Server mode is strictly enforced. */
 export const usingSqlite = false;
 
+/**
+ * Builds a valid MSSQL configuration for a target server/instance.
+ * When connecting to a named instance (e.g. localhost\SQLEXPRESS):
+ * - server becomes 'localhost'
+ * - options.instanceName becomes 'SQLEXPRESS'
+ * - port is omitted (undefined) so SQL Server Browser dynamically resolves the port.
+ */
+function buildCandidateConfig(serverTarget: string, user = 'alm_app', password = 'Alm@2026#App', database = 'AlMuttahida_New'): any {
+  let server = serverTarget;
+  let instanceName: string | undefined = undefined;
+  let port: number | undefined = undefined;
+
+  if (serverTarget.includes('\\')) {
+    const parts = serverTarget.split('\\');
+    server = parts[0] === '.' ? 'localhost' : parts[0];
+    instanceName = parts[1];
+    port = undefined; // IMPORTANT: Do NOT specify port for named instances so SQL Browser can resolve dynamic ports!
+  } else if (serverTarget === '127.0.0.1' || serverTarget.toLowerCase() === 'localhost') {
+    port = 1433;
+  }
+
+  const baseOptions: Record<string, any> = {
+    encrypt: false,
+    trustServerCertificate: true,
+  };
+
+  if (instanceName) {
+    baseOptions.instanceName = instanceName;
+  }
+
+  return {
+    ...config.sql,
+    server,
+    port,
+    user,
+    password,
+    database,
+    options: baseOptions,
+    pool: {
+      max: 50,
+      min: 10,
+      idleTimeoutMillis: 30000,
+      acquireTimeoutMillis: 15000,
+    },
+    connectionTimeout: 4000,
+    requestTimeout: 15000,
+  };
+}
+
 function getCandidateConfigs(): any[] {
-  const base = { ...config.sql };
+  const saved = getSavedConfig();
   const list: any[] = [];
+  const seenTargets = new Set<string>();
 
-  // Primary: dedicated application user 'alm_app' on 127.0.0.1:1433
-  list.push({ ...base, server: '127.0.0.1', port: 1433, user: 'alm_app', password: 'Alm@2026#App' });
-  list.push({ ...base, server: 'localhost', port: 1433, user: 'alm_app', password: 'Alm@2026#App' });
+  const addTarget = (target: string, user = 'alm_app', password = 'Alm@2026#App') => {
+    if (!target) return;
+    const key = `${target}:${user}`;
+    if (!seenTargets.has(key)) {
+      seenTargets.add(key);
+      list.push(buildCandidateConfig(target, user, password, config.sql.database || 'AlMuttahida_New'));
+    }
+  };
 
-  // Base configuration from env / config.json
-  list.push(base);
+  // 1. If there is a previously successful server saved in config.json, try it FIRST!
+  if (saved?.lastSuccessfulServer) {
+    addTarget(saved.lastSuccessfulServer, saved.dbUser || 'alm_app', saved.dbPassword || 'Alm@2026#App');
+  }
+  if (saved?.instanceName && (saved?.host || saved?.server)) {
+    const host = saved.host || saved.server || 'localhost';
+    addTarget(`${host}\\${saved.instanceName}`, saved.dbUser || 'alm_app', saved.dbPassword || 'Alm@2026#App');
+  }
 
-  // Fallbacks with sa
-  list.push({ ...base, server: '127.0.0.1', port: 1433, user: 'sa', password: 'Alm@2026#App' });
-  list.push({ ...base, server: '127.0.0.1', port: 1433, user: 'sa', password: '' });
-  list.push({ ...base, server: 'localhost', port: 1433, user: 'sa', password: 'Alm@2026#App' });
-  list.push({ ...base, server: 'localhost', port: 1433, user: 'sa', password: '' });
+  // 2. Candidate servers requested: localhost\SQLEXPRESS, localhost, 127.0.0.1
+  addTarget('localhost\\SQLEXPRESS', 'alm_app', 'Alm@2026#App');
+  addTarget('.\\SQLEXPRESS', 'alm_app', 'Alm@2026#App');
+  addTarget('localhost', 'alm_app', 'Alm@2026#App');
+  addTarget('127.0.0.1', 'alm_app', 'Alm@2026#App');
 
-  // Named instance fallbacks (SQLEXPRESS)
-  list.push({ ...base, server: 'localhost\\SQLEXPRESS', port: undefined, user: 'alm_app', password: 'Alm@2026#App' });
-  list.push({ ...base, server: '.\\SQLEXPRESS', port: undefined, user: 'alm_app', password: 'Alm@2026#App' });
-  list.push({ ...base, server: 'localhost\\SQLEXPRESS', port: undefined, user: 'sa', password: 'Alm@2026#App' });
-  list.push({ ...base, server: 'localhost\\SQLEXPRESS', port: undefined, user: 'sa', password: '' });
+  // 3. Fallbacks with sa user (in case sa is already configured)
+  addTarget('localhost\\SQLEXPRESS', 'sa', 'Alm@2026#App');
+  addTarget('localhost\\SQLEXPRESS', 'sa', '');
+  addTarget('localhost', 'sa', 'Alm@2026#App');
+  addTarget('localhost', 'sa', '');
+  addTarget('127.0.0.1', 'sa', 'Alm@2026#App');
+  addTarget('127.0.0.1', 'sa', '');
 
   return list;
 }
@@ -43,10 +106,15 @@ function getCandidateConfigs(): any[] {
  * IMPORTANT: This function never throws – failures are non-fatal.
  */
 async function ensureDatabaseExists(activeConfig: any): Promise<void> {
-  const targetDb = activeConfig.database;
+  const targetDb = activeConfig.database || 'AlMuttahida_New';
   let masterPool: any = null;
   try {
-    const masterConfig = { ...activeConfig, database: 'master' };
+    const masterConfig = { 
+      ...activeConfig, 
+      database: 'master',
+      connectionTimeout: 5000,
+      requestTimeout: 5000 
+    };
     masterPool = await sql.connect(masterConfig);
 
     // Check if the database already exists before attempting CREATE
@@ -83,9 +151,14 @@ async function tryConnectMssql(): Promise<any> {
   const candidateConfigs = getCandidateConfigs();
 
   for (const candidate of candidateConfigs) {
+    const targetIdentifier = candidate.options?.instanceName
+      ? `${candidate.server}\\${candidate.options.instanceName}`
+      : `${candidate.server}${candidate.port ? `:${candidate.port}` : ''}`;
+
     try {
       await ensureDatabaseExists(candidate);
       await sql.close();
+
       const pool = await sql.connect(candidate);
 
       const dbNameResult = await pool.request().query('SELECT DB_NAME() AS currentDb');
@@ -95,9 +168,25 @@ async function tryConnectMssql(): Promise<any> {
         continue;
       }
 
-      console.log(`✅ Connected to MSSQL database: ${currentDb} via ${candidate.server} (${candidate.user})`);
+      console.log(`✅ Connected to MSSQL database: ${currentDb} via ${targetIdentifier} (${candidate.user})`);
+
       // Update global config with working connection
       Object.assign(config.sql, candidate);
+
+      // Save working connection immediately to config.json in PROGRAMDATA for fast start next time
+      try {
+        saveAppConfig({
+          lastSuccessfulServer: candidate.options?.instanceName ? `${candidate.server}\\${candidate.options.instanceName}` : candidate.server,
+          host: candidate.server,
+          instanceName: candidate.options?.instanceName || null,
+          dbPort: candidate.port || null,
+          dbUser: candidate.user,
+          database: candidate.database,
+        });
+      } catch (saveErr) {
+        console.warn('Could not save successful DB server to config.json:', saveErr);
+      }
+
       return pool;
     } catch (err: any) {
       // Try next candidate config
@@ -239,20 +328,21 @@ export const dbPromise = (async () => {
         try {
           await transaction.begin();
           const txDb = {
-            all: async (q: string, p?: QueryParam | QueryParams, pag?: PaginationOptions) => {
-              const actualParams = normalizeQueryParams(p);
-              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pag, new sql.Request(transaction));
+            all: async (q: string, ...args: QueryParam[]) => {
+              const { params: actualParams, pagination } = normalizeReadArgs(args);
+              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pagination, new sql.Request(transaction));
               const result = await request.query(preparedQuery);
               return result.recordset;
             },
-            get: async (q: string, p?: QueryParam | QueryParams, pag?: PaginationOptions) => {
-              const actualParams = normalizeQueryParams(p);
-              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pag, new sql.Request(transaction));
+            get: async (q: string, ...args: QueryParam[]) => {
+              const { params: actualParams, pagination } = normalizeReadArgs(args);
+              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pagination, new sql.Request(transaction));
               const result = await request.query(preparedQuery);
               return result.recordset[0];
             },
             run: async (q: string, ...p: QueryParam[]) => {
-              const { request, preparedQuery } = prepareRequest(q, p, new sql.Request(transaction));
+              const { params: actualParams } = normalizeReadArgs(p);
+              const { request, preparedQuery } = prepareRequest(q, actualParams, new sql.Request(transaction));
               return await request.query(preparedQuery);
             }
           };

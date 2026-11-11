@@ -127,17 +127,23 @@ function startBackend() {
       ELECTRON_RUN_AS_NODE: '1',
     };
 
-    // Load config.json if present
-    const appConfigFile = path.join(getAppDataDir(), 'config.json');
-    try {
-      if (fs.existsSync(appConfigFile)) {
-        const parsed = JSON.parse(fs.readFileSync(appConfigFile, 'utf-8'));
-        if (parsed.host) env.DB_HOST = parsed.host;
-        if (parsed.port) env.DB_PORT = String(parsed.port);
-        if (parsed.database) env.DB_NAME = parsed.database;
+    // Load config.json if present (check %PROGRAMDATA% first, then %APPDATA%)
+    const configCandidates = [
+      path.join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Al-Muttahida ERP', 'config.json'),
+      path.join(getAppDataDir(), 'config.json'),
+    ];
+    for (const appConfigFile of configCandidates) {
+      try {
+        if (fs.existsSync(appConfigFile)) {
+          const parsed = JSON.parse(fs.readFileSync(appConfigFile, 'utf-8'));
+          if (parsed.host) env.DB_HOST = parsed.host;
+          if (parsed.port) env.DB_PORT = String(parsed.port);
+          if (parsed.database) env.DB_NAME = parsed.database;
+          break;
+        }
+      } catch (err) {
+        console.warn('Could not read config.json:', err.message);
       }
-    } catch (err) {
-      console.warn('Could not read config.json:', err.message);
     }
 
     // Read .env file if present

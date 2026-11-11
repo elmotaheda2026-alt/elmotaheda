@@ -38,14 +38,24 @@ function AppRoutes() {
     );
   }
 
+  // If system is not configured yet, direct user to /onboarding
+  if (!isConfigured) {
+    return (
+      <Routes>
+        <Route path="/onboarding" element={<OnboardingWizard />} />
+        <Route path="*" element={<Navigate to="/onboarding" replace />} />
+      </Routes>
+    );
+  }
+
   return (
     <>
       <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
       <Routes>
-        <Route path="/onboarding" element={<ProtectedRoute permission="settings:manage"><Navigate to="/settings?tab=balances" replace /></ProtectedRoute>} />
-        <Route path="/login" element={isAuthenticated ? (isConfigured ? <Navigate to="/" /> : <Navigate to="/settings?tab=balances" />) : <Login />} />
+        <Route path="/onboarding" element={<OnboardingWizard />} />
+        <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
 
-        <Route path="/" element={<ProtectedRoute>{!isConfigured ? <Navigate to="/settings?tab=balances" replace /> : <Layout />}</ProtectedRoute>}>
+        <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route index element={<ProtectedRoute permission="dashboard:view"><Dashboard /></ProtectedRoute>} />
           <Route path="users" element={<ProtectedRoute permission="users:manage"><Users /></ProtectedRoute>} />
           <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />

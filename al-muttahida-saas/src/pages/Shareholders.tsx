@@ -23,6 +23,7 @@ import {
   LayoutGrid,
   ChevronDown,
   ChevronUp,
+  RotateCw,
 } from 'lucide-react';
 import { Shareholder, ShareholderTransaction, Sale, Expense, Product } from '../types';
 import {
@@ -85,6 +86,9 @@ interface LiveTradingMetrics {
   totalAvailableProfits: number;
   totalWithdrawnProfits?: number;
   totalNetEntitlement?: number;
+  totalSupplierDebt?: number;
+  totalGrossEquity?: number;
+  netFreeCapital?: number;
 }
 
 function toIsoDay(dateVal?: string | null): string {
@@ -174,6 +178,9 @@ export default function Shareholders() {
             totalAvailableProfits: Number(liveData.totalAvailableProfits || 0),
             totalWithdrawnProfits: Number(liveData.totalWithdrawnProfits || 0),
             totalNetEntitlement: Number(liveData.totalNetEntitlement || 0),
+            totalSupplierDebt: Number(liveData.totalSupplierDebt || 0),
+            totalGrossEquity: Number(liveData.totalGrossEquity || 0),
+            netFreeCapital: Number(liveData.netFreeCapital || 0),
           });
           setShareholders(liveData.shareholders || []);
           setTransactions(liveData.transactions || []);
@@ -219,9 +226,15 @@ export default function Shareholders() {
     if (isApiMode() && liveMetrics) {
       const totalCapital = liveMetrics.totalCapital;
       const totalAvailableProfits = liveMetrics.totalAvailableProfits;
+      const totalSupplierDebt = Number(liveMetrics.totalSupplierDebt || 0);
+      const totalGrossEquity = Number(liveMetrics.totalGrossEquity || (totalCapital + totalAvailableProfits));
+      const netFreeCapital = Number(liveMetrics.netFreeCapital || Math.max(0, totalGrossEquity - totalSupplierDebt));
       return {
         totalCapital,
         totalAvailableProfits,
+        totalSupplierDebt,
+        totalGrossEquity,
+        netFreeCapital,
         liveShareholders: shareholders,
         filteredTransactions: transactions,
       };
@@ -484,10 +497,16 @@ export default function Shareholders() {
     );
 
     const filteredTransactions = transactions;
+    const totalSupplierDebt = Number(liveMetrics?.totalSupplierDebt || 0);
+    const totalGrossEquity = Number(liveMetrics?.totalGrossEquity || (totalCapital + totalAvailableProfits));
+    const netFreeCapital = Number(liveMetrics?.netFreeCapital || Math.max(0, totalGrossEquity - totalSupplierDebt));
 
     return {
       totalCapital,
       totalAvailableProfits,
+      totalSupplierDebt,
+      totalGrossEquity,
+      netFreeCapital,
       liveShareholders,
       filteredTransactions,
     };
@@ -496,6 +515,9 @@ export default function Shareholders() {
   const {
     totalCapital,
     totalAvailableProfits,
+    totalSupplierDebt,
+    totalGrossEquity,
+    netFreeCapital,
     liveShareholders,
     filteredTransactions,
   } = computedState;
@@ -740,6 +762,41 @@ export default function Shareholders() {
     }
   };
 
+  const [isCapitalizing, setIsCapitalizing] = useState(false);
+
+  const handleCapitalizeProfits = async (shareholderId?: string) => {
+    const isSingle = typeof shareholderId === 'string';
+    const targetName = isSingle
+      ? liveShareholders.find((s: any) => s.id === shareholderId)?.name || 'الشريك'
+      : 'كافة الشركاء الأساسيين';
+
+    const isConfirmed = await confirmDialog({
+      title: 'رسملة وتدوير الأرباح في رأس المال',
+      message: `هل أنت متأكد من رسملة وإضافة الأرباح المتاحة لـ (${targetName}) إلى رأس المال الفعلي؟\n\n` +
+        `• سيتم تحويل الأرباح القابلة للصرف إلى رأس مال فعلي دائم للشركة.\n` +
+        `• ستزيد حصة الشريك الرأسمالية وقوة التمويل التشغيلي دون سحب سيولة نقدية من الخزينة.`,
+      confirmText: 'نعم، رسملة الأرباح الآن',
+      cancelText: 'إلغاء',
+      type: 'info',
+    });
+    if (!isConfirmed) return;
+
+    setIsCapitalizing(true);
+    try {
+      if (isApiMode()) {
+        const res = await api.capitalizeProfits(shareholderId);
+        showToast(res.message || 'تمت رسملة الأرباح وإضافتها لرأس المال بنجاح', 'success');
+      } else {
+        showToast('خاصية الرسملة تتطلب الاتصال بالنظام السحابي/الرئيسي', 'error');
+      }
+      await loadData();
+    } catch (err: any) {
+      showToast(err.message || 'فشل تنفيذ عملية رسملة الأرباح', 'error');
+    } finally {
+      setIsCapitalizing(false);
+    }
+  };
+
   const handleDeleteShareholder = async (shareholderId: string, name: string) => {
     const isConfirmed = await confirmDialog({
       title: 'تأكيد حذف الشريك',
@@ -893,6 +950,52 @@ export default function Shareholders() {
               <span>+ إضافة شريك</span>
             </button>
           )}
+        </div>
+      </section>
+
+      {/* Financial Health & Equity vs Supplier Debt Summary Banner */}
+      <section className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-md border border-slate-800 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3 mb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 font-bold">
+              ⚖️
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-white">المركز المالي وصافي رأس المال الفعلي للشركة</h3>
+              <p className="text-[11px] text-slate-300">حقوق الشركاء الكلية مطروحاً منها التزامات ومديونيات الموردين القائمة</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/30 font-bold">
+              موقف مالي سليم وقابل للتوزيع
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+            <span className="text-[11px] text-slate-300 block font-semibold mb-1">إجمالي حقوق الشركاء (رأس المال + الأرباح)</span>
+            <span className="text-lg font-black text-white block">{formatCurrency(totalGrossEquity)}</span>
+            <span className="text-[10px] text-slate-400 block mt-0.5">
+              رأس المال: {formatCurrency(totalCapital)} + الأرباح: {formatCurrency(totalAvailableProfits)}
+            </span>
+          </div>
+
+          <div className="bg-rose-500/10 rounded-xl p-3 border border-rose-500/20">
+            <span className="text-[11px] text-rose-300 block font-semibold mb-1">مديونيات الموردين القائمة (التزامات متداولة)</span>
+            <span className="text-lg font-black text-rose-400 block">-{formatCurrency(totalSupplierDebt)}</span>
+            <span className="text-[10px] text-rose-300/80 block mt-0.5">
+              واجبة السداد للموردين وتُخصم من صافي المركز
+            </span>
+          </div>
+
+          <div className="bg-emerald-500/15 rounded-xl p-3 border border-emerald-500/30">
+            <span className="text-[11px] text-emerald-300 block font-semibold mb-1">صافي رأس المال الحر الفعلي للشركة</span>
+            <span className="text-xl font-black text-emerald-400 block">{formatCurrency(netFreeCapital)}</span>
+            <span className="text-[10px] text-emerald-300/80 block mt-0.5">
+              صافي القيمة الحقيقية للشركة بعد تغطية كافة الديون
+            </span>
+          </div>
         </div>
       </section>
 
@@ -1124,15 +1227,19 @@ export default function Shareholders() {
                         {/* 3 Clear Metric Pillars */}
                         <div className="grid grid-cols-3 gap-2 p-2 bg-slate-50/80 rounded-xl border border-slate-200/70 mb-2.5 text-center">
                           <div className="bg-white p-2 rounded-lg border border-slate-200/60 shadow-2xs">
-                            <span className="text-[10px] font-bold text-slate-500 block leading-tight">رأس المال</span>
+                            <span className="text-[10px] font-bold text-slate-500 block leading-tight">
+                              {shareholder.isFounder ? 'رأس المال الأساسي' : 'مبلغ التمويل'}
+                            </span>
                             <span className="text-xs font-black text-slate-800 block mt-1">{formatCurrency(shareholder.capital)}</span>
                           </div>
                           <div className="bg-emerald-50/70 p-2 rounded-lg border border-emerald-200/60 shadow-2xs">
-                            <span className="text-[10px] font-bold text-emerald-700 block leading-tight">الأرباح المتاحة</span>
+                            <span className="text-[10px] font-bold text-emerald-700 block leading-tight">
+                              {shareholder.isFounder ? 'أرباح مدورة بالنشاط' : 'أرباح جاهزة للسحب'}
+                            </span>
                             <span className="text-xs font-black text-emerald-800 block mt-1">+{formatCurrency(shareholder.availableProfit)}</span>
                           </div>
                           <div className="bg-indigo-50/70 p-2 rounded-lg border border-indigo-200/60 shadow-2xs">
-                            <span className="text-[10px] font-bold text-indigo-700 block leading-tight">إجمالي الرصيد</span>
+                            <span className="text-[10px] font-bold text-indigo-700 block leading-tight">إجمالي الرصيد الفعلي</span>
                             <span className="text-xs font-black text-indigo-900 block mt-1">{formatCurrency(shareholder.totalNetValue)}</span>
                           </div>
                         </div>
@@ -1141,20 +1248,32 @@ export default function Shareholders() {
                         <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-100/70 border border-slate-200/60 text-slate-600 mb-2.5 font-semibold">
                           <span>أرباح مكتسبة: <strong className="text-blue-700">+{formatCurrency(shareholder.netEntitlement)}</strong></span>
                           <span>•</span>
-                          <span>مسحوبات سابقة: <strong className={Number(shareholder.totalWithdrawnProfits) > 0 ? 'text-amber-700' : 'text-slate-600'}>{formatWithdrawal(shareholder.totalWithdrawnProfits)}</strong></span>
+                          <span>مسحوبات نقدية سابقة: <strong className={Number(shareholder.totalWithdrawnProfits) > 0 ? 'text-amber-700' : 'text-slate-600'}>{formatWithdrawal(shareholder.totalWithdrawnProfits)}</strong></span>
                         </div>
                       </div>
 
                       {/* Clean Action Buttons */}
                       <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 mt-auto">
-                        <button
-                          type="button"
-                          onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
-                          className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 active:scale-95"
-                        >
-                          <DollarSign size={13} />
-                          <span>صرف أرباح</span>
-                        </button>
+                        {!shareholder.isFounder ? (
+                          <button
+                            type="button"
+                            onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
+                            className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 active:scale-95"
+                          >
+                            <DollarSign size={13} />
+                            <span>صرف أرباح المساهم</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
+                            className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 active:scale-95"
+                            title="سحب أرباح نقداً للشريك من الخزينة عند الحاجة"
+                          >
+                            <DollarSign size={13} />
+                            <span>سحب نقدي</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => openTxModal(shareholder.id, 'capital_deposit')}
