@@ -159,9 +159,65 @@ export default function Users() {
         </div>
       </div>
 
-      {/* Users Table */}
+      {/* Users Table (Desktop) & Cards (Mobile) */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden p-2.5 space-y-2.5">
+          {filteredUsers.map((user) => (
+            <div key={`mob-usr-${user.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 bg-indigo-50 rounded-full flex items-center justify-center shrink-0">
+                    <span className="text-indigo-600 font-black text-sm">{user.name.charAt(0)}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 text-sm truncate">{user.name}</p>
+                    <p className="text-xs text-slate-500 font-mono">@{user.username} • {user.phone || 'بدون هاتف'}</p>
+                  </div>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold shrink-0 ${user.role === 'admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                    user.role === 'manager' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+                      user.role === 'accountant' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                        'bg-slate-100 text-slate-700'
+                  }`}>
+                  {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : user.role === 'accountant' ? 'محاسب' : 'مستخدم'}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                {currentUser?.role !== 'manager' ? (
+                  <button
+                    onClick={() => toggleUserStatus(user)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold cursor-pointer ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}
+                  >
+                    {user.isActive ? <UserCheck size={13} /> : <UserX size={13} />}
+                    {user.isActive ? 'نشط' : 'غير نشط'}
+                  </button>
+                ) : (
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                    {user.isActive ? <UserCheck size={13} /> : <UserX size={13} />}
+                    {user.isActive ? 'نشط' : 'غير نشط'}
+                  </span>
+                )}
+
+                <div className="flex items-center gap-1.5">
+                  {hasPermission(currentUser, 'users:manage') && currentUser?.role !== 'manager' && (
+                    <button onClick={() => handleEdit(user)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
+                      <Edit size={14} />
+                    </button>
+                  )}
+                  {canDelete && currentUser?.id !== user.id && (
+                    <button onClick={() => handleDelete(user.id)} className="p-1.5 text-red-600 bg-red-50 rounded-lg" title="حذف">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>

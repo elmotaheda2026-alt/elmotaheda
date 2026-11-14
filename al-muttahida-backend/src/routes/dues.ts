@@ -28,6 +28,8 @@ export interface DueCollectionRow {
   remaining_amount: number;
   status: string;
   paid_at?: string;
+  notes?: string | null;
+  invoice_note?: string | null;
   effective_payment_date?: string | Date | null;
   last_payment_date?: string;
   parsed_last_payment_date?: Date | null;
@@ -205,6 +207,8 @@ export async function getCollectionDues(params: {
         (sch.amount - sch.paid_amount) AS remaining_amount,
         sch.status,
         sch.paid_at,
+        sch.notes AS notes,
+        s.collection_note AS invoice_note,
         COALESCE(
           TRY_CONVERT(date, sch.paid_at),
           TRY_CONVERT(date, p_sale.last_payment_by_sale),
@@ -284,6 +288,8 @@ export async function getCollectionDues(params: {
         END AS remaining_amount,
         CASE WHEN s.remaining < 1.0 THEN 'paid' WHEN s.paid > 0 THEN 'partial' ELSE 'unpaid' END AS status,
         NULL AS paid_at,
+        NULL AS notes,
+        s.collection_note AS invoice_note,
         COALESCE(
           TRY_CONVERT(date, p_sale.last_payment_by_sale),
           TRY_CONVERT(date, p_cust.last_payment_by_customer),
@@ -369,6 +375,8 @@ export async function getCollectionDues(params: {
       remainingAmount: Math.max(Number(row.remaining_amount), 0),
       status: row.status,
       paidAt: row.paid_at || isoEffectivePaymentDate || undefined,
+      notes: row.notes || undefined,
+      invoiceNote: row.invoice_note || undefined,
       guarantors: parsedGuarantors,
       salesRepId: row.sales_rep_id || undefined,
       salesRepName: row.sales_rep_name || undefined,

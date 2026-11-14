@@ -262,6 +262,11 @@ function startBackend() {
 function stopBackend() {
   if (backendProcess) {
     try {
+      if (backendProcess.send) {
+        backendProcess.send('shutdown');
+      }
+    } catch (_) {}
+    try {
       if (process.platform === 'win32' && backendProcess.pid) {
         const { execSync } = require('child_process');
         execSync(`taskkill /F /T /PID ${backendProcess.pid}`, { stdio: 'ignore' });
@@ -270,6 +275,24 @@ function stopBackend() {
       }
     } catch (_) {}
     backendProcess = null;
+  }
+
+  // Also verify and terminate any orphan process holding port 4000 to prevent zombie processes
+  if (process.platform === 'win32') {
+    try {
+      const { execSync } = require('child_process');
+      const stdout = execSync('netstat -ano -p tcp', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const lines = stdout.split('\r\n');
+      for (const line of lines) {
+        if (line.includes(':4000') && line.includes('LISTENING')) {
+          const parts = line.trim().split(/\s+/);
+          const pid = parts[parts.length - 1];
+          if (pid && pid !== '0' && pid !== String(process.pid)) {
+            try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' }); } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
   }
 }
 

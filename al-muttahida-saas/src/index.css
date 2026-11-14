@@ -39,6 +39,17 @@
     font-feature-settings: "zero" 0;
   }
 
+  /* Hide native number input spinner arrows across entire system */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
   html {
     direction: rtl;
     height: 100%;
@@ -93,7 +104,7 @@
   }
 
   .erp-status-bar {
-    @apply sticky bottom-0 z-20 flex min-h-11 items-center justify-between gap-4 border-t border-slate-200 bg-white/95 px-4 py-2.5 text-xs font-bold text-slate-700 backdrop-blur shadow-sm;
+    @apply sticky bottom-0 z-20 flex flex-wrap min-h-11 items-center justify-between gap-2 sm:gap-4 border-t border-slate-200 bg-white/95 px-3 sm:px-4 py-2.5 text-xs font-bold text-slate-700 backdrop-blur shadow-sm;
   }
 
   /* Desktop-grade 3-Tier Layout System */
@@ -102,7 +113,7 @@
   }
 
   .desktop-table-card {
-    @apply flex-1 min-h-[420px] flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden;
+    @apply flex-1 min-h-[260px] md:min-h-[420px] flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden;
   }
 
   .desktop-table-scroll {

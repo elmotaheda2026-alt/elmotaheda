@@ -12,6 +12,7 @@ try {
     // 1. SQL Server engine & setup
     checkSqlStatus: () => ipcRenderer.invoke('check-sql-status'),
     downloadAndInstallSql: () => ipcRenderer.invoke('download-and-install-sql'),
+    saveCustomSqlConfig: (cfg) => ipcRenderer.invoke('save-custom-sql-config', cfg),
     onSqlProgress: (callback) => ipcRenderer.on('sql-install-progress', (_event, data) => callback(data)),
 
     // 2. Network scan & client probe
@@ -26,6 +27,7 @@ try {
     onStatus: (callback) => ipcRenderer.on('setup-status', (_event, message) => callback(message)),
     onError: (callback) => ipcRenderer.on('setup-error', (_event, message) => callback(message)),
     onAppStarted: (callback) => ipcRenderer.on('app-started', (_event, data) => callback(data)),
+    onNavigate: (callback) => ipcRenderer.on('navigate-to', (_event, route) => callback(route)),
 
     // 5. System helpers
     selectDirectory: () => ipcRenderer.invoke('select-directory'),

@@ -41,7 +41,7 @@ export default function Login() {
 
   return (
 
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 flex items-center justify-center p-4">
+    <div className="h-[100dvh] overflow-y-auto overflow-x-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 flex items-center justify-center p-4">
       {/* Background Pattern */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-20 right-20 w-40 h-40 bg-white rounded-full blur-3xl" />
@@ -132,28 +132,17 @@ export default function Login() {
               </button>
             </div>
 
-            {showDemoCredentials && (
-              <div className="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-                <p className="text-xs text-slate-600 text-center font-medium">
-                  بيانات الدخول التجريبية:<br />
-                  <span className="font-bold text-blue-700">admin</span> / <span className="font-bold text-blue-700">admin123</span>
-                </p>
-              </div>
-            )}
-
             <div className="mt-6 text-center pt-2 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => {
-                  if ((window as any).electronAPI?.openSetupWindow) {
-                    (window as any).electronAPI.openSetupWindow();
-                  }
+                  navigate('/onboarding');
                 }}
-                className="text-xs text-slate-500 hover:text-blue-700 font-semibold transition-colors flex items-center justify-center gap-1.5 mx-auto"
-                title="اضغط لتغيير وضع الجهاز بين سيرفر رئيسي أو جهاز فرعي"
+                className="text-xs text-blue-600 hover:text-blue-800 font-bold transition-colors flex items-center justify-center gap-1.5 mx-auto py-1 px-3 rounded-lg hover:bg-blue-50 cursor-pointer"
+                title="اضغط لتغيير وضع الجهاز بين سيرفر رئيسي أو جهاز فرعي واختبار محرك البيانات"
               >
                 <span>⚙️</span>
-                <span>إعدادات الاتصال والشبكة (رئيسي / فرعي)</span>
+                <span>معالج إعدادات التثبيت والشبكة (سيرفر / جهاز فرعي)</span>
               </button>
             </div>
           </form>

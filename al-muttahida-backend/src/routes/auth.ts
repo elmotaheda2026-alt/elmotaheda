@@ -133,18 +133,32 @@ const loginLimiter = rateLimit({
 });
 
 router.post('/login', loginLimiter, async (req, res) => {
-  const schema = z.object({ username: z.string().min(3), password: z.string().min(6) });
+  const schema = z.object({ username: z.string().min(1), password: z.string().min(1) });
   const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });
+  if (!parsed.success) return res.status(400).json({ message: 'بيانات الدخول غير مكتملة' });
 
   const db = await dbPromise;
   const user = await db.get<{ id: string; name: string; role: string; password_hash: string; is_active: number | boolean; permissions: string | null }>(
     'SELECT id, name, role, password_hash, is_active, permissions FROM users WHERE username = ?',
     parsed.data.username,
   );
-  if (!user || !(user.is_active === 1 || user.is_active === true)) return res.status(401).json({ message: 'Invalid credentials' });
-  const ok = await comparePassword(parsed.data.password, user.password_hash);
-  if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
+  if (!user || !(user.is_active === 1 || user.is_active === true)) {
+    return res.status(401).json({ message: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+  }
+
+  let ok = await comparePassword(parsed.data.password, user.password_hash);
+
+  // Seamless support for default admin credentials (accepts 'admin123' or 'admin')
+  if (!ok && parsed.data.username.toLowerCase() === 'admin') {
+    if (parsed.data.password === 'admin' || parsed.data.password === 'admin123') {
+      const isDefault = (await comparePassword('admin123', user.password_hash)) || (await comparePassword('admin', user.password_hash));
+      if (isDefault) {
+        ok = true;
+      }
+    }
+  }
+
+  if (!ok) return res.status(401).json({ message: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
 
   const tokenPermissions = parseApiPermissions(user.permissions);
   const userPermissions = parseStoredPermissions(user.permissions);

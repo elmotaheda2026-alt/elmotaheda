@@ -1378,7 +1378,76 @@ export default function Shareholders() {
             )}
           </div>
 
-          <div className="desktop-table-scroll">
+          {/* Mobile Transactions Cards (< md) */}
+          <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+            {displayedTransactions.length === 0 ? (
+              <div className="py-12 px-4 text-center text-slate-400">
+                <FileText size={32} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-xs font-bold">لا توجد حركات مالية مسجلة مطابقة للفلتر</p>
+              </div>
+            ) : (
+              displayedTransactions.map((tx: any) => {
+                const isPositive = tx.type === 'capital_deposit' || tx.type === 'profit_distribution';
+                const partner = liveShareholders.find((s: any) => s.id === tx.shareholderId);
+                const partnerName = partner?.name || tx.shareholderName;
+                return (
+                  <div key={`mob-tx-${tx.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => setInspectingPartnerId(tx.shareholderId)}
+                          className="font-black text-sm text-slate-900 hover:text-indigo-600 text-right block truncate"
+                        >
+                          {partnerName}
+                        </button>
+                        <span className="text-[11px] font-mono text-slate-500">{formatDateDisplay(tx.date)}</span>
+                      </div>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-mono font-black border shrink-0 ${
+                          isPositive ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'
+                        }`}
+                        dir="ltr"
+                      >
+                        {isPositive ? '+' : '-'}{formatCurrency(tx.amount)}
+                      </span>
+                    </div>
+
+                    {tx.description && (
+                      <p className="text-xs text-slate-600 break-words">{tx.description}</p>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2 bg-slate-50 rounded-xl p-2 text-xs border border-slate-100">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-bold">رأس المال بعد الحركة</span>
+                        <span className="font-bold text-slate-800">{tx.runningCapital !== undefined ? formatCurrency(tx.runningCapital) : '-'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-bold">الأرباح بعد الحركة</span>
+                        <span className="font-bold text-emerald-700">{tx.runningAvailableProfit !== undefined ? formatCurrency(tx.runningAvailableProfit) : '-'}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[11px] text-slate-500">
+                      <span>بواسطة: {tx.createdBy || 'المدير العام'}</span>
+                      {user?.role !== 'manager' && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTransaction(tx.id)}
+                          className="p-1 text-rose-600 bg-rose-50 rounded-lg"
+                          title="حذف وعكس أثر الحركة"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="hidden md:block desktop-table-scroll">
             <table className="w-full min-w-[950px] border-collapse">
               <thead className="desktop-sticky-header">
                 <tr>
@@ -1638,8 +1707,33 @@ export default function Shareholders() {
               </div>
             </div>
 
-            {/* Scrollable Chronological Ledger Table (Strictly 100% Modal Width, No Horizontal Scrollbar) */}
-            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+            {/* Scrollable Chronological Ledger Table (Desktop) & Cards (Mobile) */}
+            <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2 custom-scrollbar">
+              {(!inspectingPartner.ledger || inspectingPartner.ledger.length === 0) ? (
+                <div className="py-10 text-center text-slate-400">
+                  <FileText size={28} className="mx-auto mb-2 text-slate-300" />
+                  <p className="text-xs font-bold">لا توجد حركات مسجلة في كشف حساب الشريك</p>
+                </div>
+              ) : (
+                inspectingPartner.ledger.map((entry: LedgerEntry) => (
+                  <div key={`mob-ldg-${entry.id}`} className="bg-white border border-slate-200 rounded-xl p-3 space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] text-slate-500">{formatDateDisplay(entry.date)}</span>
+                      <span className="font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded text-[10px]">
+                        {entry.type === 'initial_capital' ? 'رأس مال تأسيسي' : entry.type === 'capital_deposit' ? 'إيداع رأس مال' : entry.type === 'capital_withdrawal' ? 'سحب رأس مال' : entry.type === 'profit_allocation' ? 'استحقاق أرباح' : entry.type === 'profit_distribution' ? 'توزيع أرباح' : 'سحب أرباح'}
+                      </span>
+                    </div>
+                    <p className="text-slate-700 font-medium break-words">{entry.description}</p>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-100 font-bold">
+                      <span>رأس المال: {formatCurrency(entry.capitalBalance)}</span>
+                      <span className="text-emerald-700">الأرباح: {formatCurrency(entry.profitBalance)}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="hidden md:block flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               <table className="w-full table-fixed border-collapse text-xs">
                 <thead className="desktop-sticky-header">
                   <tr>

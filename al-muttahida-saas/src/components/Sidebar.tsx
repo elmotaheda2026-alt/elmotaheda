@@ -190,10 +190,9 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
             title={settings.companyName || 'شركة المتحدة'}
           >
             <CompanyLogo
-              size={38}
+              size={40}
               variant={isExpanded ? 'full' : 'emblem'}
               companyName={settings.companyName || 'شركة المتحدة'}
-              subTitle="نظام ERP المتكامل"
             />
           </button>
         </div>

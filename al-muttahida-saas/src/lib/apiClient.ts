@@ -1,12 +1,26 @@
-function resolveApiBaseUrl(): string {
+export function isMobileDevice(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  if ((window as any).electronAPI) return false;
+  const ua = navigator.userAgent || '';
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua) || window.innerWidth < 768;
+}
+
+export function resolveApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
-    // 1. Electron or custom window injected API URL
-    if ((window as any).__API_BASE_URL__) {
-      return (window as any).__API_BASE_URL__;
+    // 1. Saved custom server URL in localStorage (configured via OnboardingWizard or Settings)
+    const saved = localStorage.getItem('server_api_url');
+    if (saved && !saved.includes('localhost') && !saved.includes('127.0.0.1')) {
+      return saved;
     }
 
-    // 2. Saved custom server URL in localStorage
-    const saved = localStorage.getItem('server_api_url');
+    // 2. Electron or custom window injected API URL
+    if ((window as any).__API_BASE_URL__) {
+      const injected = (window as any).__API_BASE_URL__;
+      if (injected && (!saved || injected !== 'http://127.0.0.1:4000')) {
+        return injected;
+      }
+    }
+
     if (saved) return saved;
 
     // 3. Dynamic network detection:
@@ -100,7 +114,7 @@ export function isLocalMode() {
 }
 
 function getToken() {
-  return localStorage.getItem('api_token');
+  return sessionStorage.getItem('api_token');
 }
 
 export function hasApiToken() {
@@ -108,17 +122,25 @@ export function hasApiToken() {
 }
 
 export function clearApiToken() {
-  localStorage.removeItem('api_token');
-  localStorage.removeItem(API_USER_KEY);
+  sessionStorage.removeItem('api_token');
+  sessionStorage.removeItem(API_USER_KEY);
+  try {
+    localStorage.removeItem('api_token');
+    localStorage.removeItem(API_USER_KEY);
+  } catch (_) {}
 }
 
 export function setApiSession(token: string, user: unknown) {
-  localStorage.setItem('api_token', token);
-  localStorage.setItem(API_USER_KEY, JSON.stringify(user));
+  sessionStorage.setItem('api_token', token);
+  sessionStorage.setItem(API_USER_KEY, JSON.stringify(user));
+  try {
+    localStorage.removeItem('api_token');
+    localStorage.removeItem(API_USER_KEY);
+  } catch (_) {}
 }
 
 export function getApiUser<T>() {
-  const user = localStorage.getItem(API_USER_KEY);
+  const user = sessionStorage.getItem(API_USER_KEY);
   return user ? JSON.parse(user) as T : null;
 }
 
@@ -164,14 +186,20 @@ async function requestArray<T>(path: string, label: string, options: RequestInit
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const base = resolveApiBaseUrl();
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Client-Device': isMobileDevice() ? 'mobile' : 'desktop',
     ...(options.headers as Record<string, string> || {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const response = await fetch(`${base}${path}`, {
+    ...options,
+    headers,
+    signal: options.signal || (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(12000) : undefined),
+  });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     if (response.status === 401) {
@@ -252,6 +280,16 @@ export const api = {
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSale: (id: string) => request<{ message: string }>(`/sales/${id}`, { method: 'DELETE' }),
   getSale: (id: string) => request<any>(`/sales/${id}`),
+  updateInstallmentNote: (installmentId: string, notes: string) =>
+    request<{ ok: boolean; id: string; notes: string | null }>(`/installments/${installmentId}/note`, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes }),
+    }),
+  updateSaleCollectionNote: (saleId: string, notes: string) =>
+    request<{ ok: boolean; id: string; invoiceNote: string | null }>(`/sales/${saleId}/collection-note`, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes }),
+    }),
   deferInstallment: (saleId: string, payload: {
     installmentId: string;
     newDueDate: string;
@@ -299,6 +337,7 @@ export const api = {
   deleteCustomer: (id: string) => request<{ message: string }>(`/customers/${id}`, { method: 'DELETE' }),
   getCustomer: (id: string) => request<any>(`/customers/${id}`),
   listSuppliers: () => requestArray<any>('/suppliers', 'suppliers'),
+  getSupplierStatement: (id: string) => request<any>(`/suppliers/${id}/statement`),
   createSupplier: (payload: any) => request<{ id: string }>('/suppliers', { method: 'POST', body: JSON.stringify(payload) }),
   updateSupplier: (id: string, payload: any) => request<{ message: string }>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSupplier: (id: string) => request<{ message: string }>(`/suppliers/${id}`, { method: 'DELETE' }),

@@ -1,3 +1,12 @@
+export function today(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 export function formatDateDisplay(dateStr?: string | Date | null): string {
   if (!dateStr || dateStr === 'null' || dateStr === 'undefined' || dateStr === '0') return '-';
 

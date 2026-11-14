@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Calendar, CalendarCheck, CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp, RefreshCw, Eye, X, Package } from 'lucide-react';
+import { Calendar, CalendarCheck, CalendarRange, CheckCircle2, Clock3, Search, UserRound, Wallet, LayoutList, FileText, Printer, User, Phone, MapPin, Briefcase, Shield, AlertTriangle, Gavel, ChevronDown, ChevronUp, RefreshCw, Eye, X, Package, Maximize2, Minimize2, MessageSquare, Trash2, Save, Pin } from 'lucide-react';
 import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } from '../types';
 import { getCustomers, getSales, getSalesReps, toggleCustomerSued } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -7,7 +7,7 @@ import { useDialog } from '../context/DialogContext';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
-import { api, isApiMode } from '../lib/apiClient';
+import { api, isApiMode, isMobileDevice } from '../lib/apiClient';
 import LoadingState from '../components/LoadingState';
 
 interface CollectionInvoiceView {
@@ -39,6 +39,7 @@ interface DueCustomerRow {
   customerPhone: string;
   customerAddress: string;
   customerNumber: string;
+  installmentId?: string;
   installmentLabel: string;
   dueDate: string;
   installmentAmount: number;
@@ -46,6 +47,8 @@ interface DueCustomerRow {
   remainingAmount: number;
   status: InstallmentSchedule['status'];
   paidAt?: string;
+  notes?: string;
+  invoiceNote?: string;
   guarantors: (Guarantor | null)[];
   salesRepId?: string;
   salesRepName?: string;
@@ -128,6 +131,79 @@ export default function CollectionStatement() {
   const [dueCurrentPage, setDueCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false);
+  const [noteModalRow, setNoteModalRow] = useState<DueCustomerRow | null>(null);
+  const [noteScope, setNoteScope] = useState<'installment' | 'invoice'>('installment');
+  const [noteDraft, setNoteDraft] = useState('');
+  const [isSavingNote, setIsSavingNote] = useState(false);
+
+  const handleOpenNoteModal = (e: React.MouseEvent, row: DueCustomerRow, preferredScope?: 'installment' | 'invoice') => {
+    e.stopPropagation();
+    if (isMobileDevice()) return;
+    const initialScope = preferredScope || (row.invoiceNote && !row.notes ? 'invoice' : 'installment');
+    setNoteModalRow(row);
+    setNoteScope(initialScope);
+    setNoteDraft(initialScope === 'invoice' ? (row.invoiceNote || '') : (row.notes || ''));
+  };
+
+  const handleSaveInstallmentNote = async (nextNoteText: string) => {
+    if (!noteModalRow) return;
+    const trimmed = nextNoteText.trim();
+
+    if (noteScope === 'invoice') {
+      setIsSavingNote(true);
+      try {
+        const res = await api.updateSaleCollectionNote(noteModalRow.saleId, trimmed);
+        setApiDues((prev) =>
+          prev.map((item) =>
+            item.saleId === noteModalRow.saleId
+              ? { ...item, invoiceNote: res.invoiceNote || undefined }
+              : item
+          )
+        );
+        showToast(trimmed ? 'تم تثبيت الملاحظة على الفاتورة حتى الانتهاء' : 'تم مسح الملاحظة المثبتة', 'success');
+        setNoteModalRow(null);
+      } catch (err: any) {
+        showToast(err?.message || 'حدث خطأ أثناء حفظ الملاحظة على الفاتورة', 'error');
+      } finally {
+        setIsSavingNote(false);
+      }
+      return;
+    }
+
+    if (!noteModalRow.installmentId || noteModalRow.installmentId.endsWith('-single')) {
+      showToast('هذا السجل لا يملك جدول أقساط منفصل؛ يمكنك اختيار "تثبيت على الفاتورة".', 'error');
+      return;
+    }
+    setIsSavingNote(true);
+    try {
+      const res = await api.updateInstallmentNote(noteModalRow.installmentId, trimmed);
+      setApiDues((prev) =>
+        prev.map((item) =>
+          item.installmentId === noteModalRow.installmentId
+            ? { ...item, notes: res.notes || undefined }
+            : item
+        )
+      );
+      showToast(trimmed ? 'تم حفظ الملاحظة على القسط بنجاح' : 'تم مسح الملاحظة', 'success');
+      setNoteModalRow(null);
+    } catch (err: any) {
+      showToast(err?.message || 'حدث خطأ أثناء حفظ الملاحظة', 'error');
+    } finally {
+      setIsSavingNote(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen]);
 
   // Dedicated API state for dues
   const [apiDues, setApiDues] = useState<DueCustomerRow[]>([]);
@@ -138,9 +214,11 @@ export default function CollectionStatement() {
     if (!isApiMode()) return;
     let isCancelled = false;
 
-    const fetchDues = async () => {
-      setIsDueLoading(true);
-      setDueError(null);
+    const fetchDues = async (silent = false) => {
+      if (!silent) {
+        setIsDueLoading(true);
+        setDueError(null);
+      }
       try {
         const data = await api.listCollectionDue({
           from: dueFromDate,
@@ -159,21 +237,36 @@ export default function CollectionStatement() {
       } catch (err: any) {
         if (!isCancelled) {
           console.error('Failed to load due collection data:', err);
-          setDueError(err.message || 'تعذر تحميل بيانات المستحقات');
+          if (!silent) {
+            setDueError(err.message || 'تعذر تحميل بيانات المستحقات');
+          }
         }
       } finally {
-        if (!isCancelled) {
+        if (!isCancelled && !silent) {
           setIsDueLoading(false);
         }
       }
     };
 
-    void fetchDues();
+    void fetchDues(false);
+
+    const handleSilentRefresh = () => {
+      if (document.visibilityState === 'visible' && activeTab === 'due') {
+        void fetchDues(true);
+      }
+    };
+
+    window.addEventListener('focus', handleSilentRefresh);
+    document.addEventListener('visibilitychange', handleSilentRefresh);
+    const pollInterval = window.setInterval(handleSilentRefresh, 20000);
 
     return () => {
       isCancelled = true;
+      window.removeEventListener('focus', handleSilentRefresh);
+      document.removeEventListener('visibilitychange', handleSilentRefresh);
+      window.clearInterval(pollInterval);
     };
-  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis]);
+  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis, activeTab]);
 
   // Dynamic screen-fitting page size
   useEffect(() => {
@@ -184,11 +277,20 @@ export default function CollectionStatement() {
       }
 
       let availableHeight = 0;
+      let measuredRowHeight = 65;
       if (tableContainerRef.current) {
         const containerHeight = tableContainerRef.current.clientHeight;
+        const theadEl = tableContainerRef.current.querySelector('thead');
+        const headerHeight = theadEl ? theadEl.getBoundingClientRect().height : 42;
         if (containerHeight > 80) {
-          // Subtract table sticky header height (~38px)
-          availableHeight = containerHeight - 38;
+          availableHeight = containerHeight - headerHeight - 4;
+        }
+        const firstRow = tableContainerRef.current.querySelector('tbody tr');
+        if (firstRow) {
+          const h = firstRow.getBoundingClientRect().height;
+          if (h >= 40 && h <= 120) {
+            measuredRowHeight = Math.ceil(h);
+          }
         }
       }
 
@@ -197,9 +299,7 @@ export default function CollectionStatement() {
         availableHeight = Math.max(150, window.innerHeight - 380);
       }
 
-      // Measured row height: ~57px with two-line financial amount and avatar
-      const rowHeight = 57;
-      const computedRows = Math.max(3, Math.floor(availableHeight / rowHeight));
+      const computedRows = Math.max(3, Math.floor(availableHeight / measuredRowHeight));
       setPageSize(computedRows);
     };
 
@@ -222,7 +322,7 @@ export default function CollectionStatement() {
       window.removeEventListener('resize', handleResize);
       observer?.disconnect();
     };
-  }, [userPageSizePreference, activeTab]);
+  }, [userPageSizePreference, activeTab, isFullscreen, filtersCollapsed, apiDues.length]);
 
   // Reset pagination when filters change
   useEffect(() => {
@@ -733,11 +833,11 @@ export default function CollectionStatement() {
         }
       }
     `}</style>
-      <div className="desktop-view-container print:hidden">
+      <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-50 p-3 flex flex-col gap-2.5 overflow-hidden' : 'desktop-view-container'} print:hidden`}>
         {/* Header/Tabs & Filters Bar */}
-        <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 space-y-2.5 shrink-0 print:hidden shadow-xs">
+        <div className={`bg-white border border-slate-200 rounded-xl px-4 ${filtersCollapsed ? 'py-2' : 'py-3 space-y-2.5'} shrink-0 print:hidden shadow-xs transition-all`}>
           {/* Segmented Control Tabs */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
+          <div className={`flex flex-col sm:flex-row sm:items-center justify-between ${filtersCollapsed ? '' : 'border-b border-slate-100 pb-3'} gap-3`}>
             <div className="flex bg-slate-100 p-1 rounded-xl w-fit">
               <button
                 type="button"
@@ -776,21 +876,53 @@ export default function CollectionStatement() {
                 الشئون القانونية (النزاعات)
               </button>
             </div>
-            {/* Context/Page Title in Arabic */}
-            <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
-              <span>مديرية تحصيل الحسابات</span>
-              <span className="h-4 w-px bg-slate-200"></span>
-              <span className="text-xs text-slate-500 font-medium">إدارة الفواتير والتحصيل</span>
+            {/* Context/Page Title + View Controls */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="text-sm font-bold text-slate-800 hidden lg:flex items-center gap-2 ml-2">
+                <span>مديرية تحصيل الحسابات</span>
+                <span className="h-4 w-px bg-slate-200"></span>
+                <span className="text-xs text-slate-500 font-medium">إدارة الفواتير والتحصيل</span>
+              </div>
+
+              {activeTab !== 'legal' && (
+                <button
+                  type="button"
+                  onClick={() => setFiltersCollapsed(!filtersCollapsed)}
+                  className={`h-8 px-2.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    filtersCollapsed
+                      ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                  title={filtersCollapsed ? 'إظهار شريط الفلاتر والبحث' : 'طي شريط الفلاتر لتوسيع الجدول'}
+                >
+                  {filtersCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  <span>{filtersCollapsed ? 'إظهار الفلاتر' : 'طي الفلاتر'}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsFullscreen(!isFullscreen)}
+                className={`h-8 px-3 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  isFullscreen
+                    ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                    : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                }`}
+                title={isFullscreen ? 'تصغير والرجوع للوضع العادي (Esc)' : 'تكبير الجدول لملء الشاشة بالكامل'}
+              >
+                {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                <span>{isFullscreen ? 'تصغير (Esc)' : 'ملء الشاشة'}</span>
+              </button>
             </div>
           </div>
 
           {/* Render filters inside this card based on activeTab */}
-          {activeTab === 'due' && (
+          {!filtersCollapsed && activeTab === 'due' && (
             <div className="space-y-3 pt-1">
               {/* Row 1: Primary Scope (Status Capsule) & Search Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 {/* Right: Main Status Segmented Capsule */}
-                <div className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-slate-100/90 p-0.5 text-xs font-bold shadow-2xs shrink-0">
+                <div className="inline-flex h-9 w-full sm:w-auto items-center rounded-xl border border-slate-200 bg-slate-100/90 p-0.5 text-xs font-bold shadow-2xs shrink-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -799,7 +931,7 @@ export default function CollectionStatement() {
                       setExpandedCustomerSaleId(null);
                       setIncludeOverdue(false);
                     }}
-                    className={`h-full px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    className={`h-full flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
                       dueStatusFilter === 'unpaid'
                         ? 'bg-white text-rose-700 shadow-2xs font-black'
                         : 'text-slate-600 hover:text-slate-900'
@@ -816,7 +948,7 @@ export default function CollectionStatement() {
                       setExpandedCustomerSaleId(null);
                       setIncludeOverdue(false);
                     }}
-                    className={`h-full px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    className={`h-full flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
                       dueStatusFilter === 'paid'
                         ? 'bg-white text-emerald-700 shadow-2xs font-black'
                         : 'text-slate-600 hover:text-slate-900'
@@ -834,7 +966,7 @@ export default function CollectionStatement() {
                       setExpandedCustomerSaleId(null);
                       setIncludeOverdue(false);
                     }}
-                    className={`h-full px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    className={`h-full flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
                       dueStatusFilter === 'all'
                         ? 'bg-white text-sky-700 shadow-2xs font-black'
                         : 'text-slate-600 hover:text-slate-900'
@@ -846,7 +978,7 @@ export default function CollectionStatement() {
                 </div>
 
                 {/* Left: Wide, Elegant Search Input */}
-                <div className="relative flex-1 max-w-md min-w-[260px]">
+                <div className="relative flex-1 w-full sm:max-w-md min-w-0 sm:min-w-[260px]">
                   <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   <input
                     value={dueSearchTerm}
@@ -871,12 +1003,14 @@ export default function CollectionStatement() {
                 {/* Right: Date Range + Attached Date Basis (only in Paid tab) + Sales Rep */}
                 <div className="flex items-center gap-2 flex-wrap">
                   {/* Date Range Group (Height h-9 unified) */}
-                  <div className="flex h-9 items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 text-xs shadow-2xs">
-                    <Calendar size={14} className="text-slate-400 shrink-0" />
-                    <span className="text-[11px] text-slate-400 font-bold">الفترة:</span>
-                    <DatePicker value={dueFromDate} onChange={(d) => { setDueFromDate(d); setDueCurrentPage(1); }} className="h-7 w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
+                  <div className="flex h-9 w-full sm:w-auto items-center justify-between sm:justify-start gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 text-xs shadow-2xs">
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Calendar size={14} className="text-slate-400 shrink-0" />
+                      <span className="text-[11px] text-slate-400 font-bold hidden sm:inline">الفترة:</span>
+                    </div>
+                    <DatePicker value={dueFromDate} onChange={(d) => { setDueFromDate(d); setDueCurrentPage(1); }} className="h-7 w-[108px] sm:w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
                     <span className="text-[11px] text-slate-300 font-bold px-0.5">←</span>
-                    <DatePicker value={dueToDate} onChange={(d) => { setDueToDate(d); setDueCurrentPage(1); }} className="h-7 w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
+                    <DatePicker value={dueToDate} onChange={(d) => { setDueToDate(d); setDueCurrentPage(1); }} className="h-7 w-[108px] sm:w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
                   </div>
 
                   {/* Date Basis Switcher: Only shown in 'paid' page as requested */}
@@ -893,7 +1027,7 @@ export default function CollectionStatement() {
                         title="فلترة بحسب تاريخ السداد والتحصيل الفعلي بالخزينة"
                       >
                         <CheckCircle2 size={12} className={dueDateBasis === 'actual_payment' ? 'text-emerald-600' : 'text-slate-400'} />
-                        <span>السداد الفعلي</span>
+                        <span>تاريخ الدفع الفعلي</span>
                       </button>
                       <button
                         type="button"
@@ -903,10 +1037,10 @@ export default function CollectionStatement() {
                             ? 'bg-white text-sky-700 shadow-2xs font-black'
                             : 'text-slate-500 hover:text-slate-800'
                         }`}
-                        title="فلترة بحسب موعد استحقاق القسط الشهري"
+                        title="فلترة بحسب موعد استحقاق القسط الأصلي في الجدول"
                       >
                         <Clock3 size={12} className={dueDateBasis === 'due_date' ? 'text-sky-600' : 'text-slate-400'} />
-                        <span>تاريخ الاستحقاق</span>
+                        <span>موعد القسط الأصلي</span>
                       </button>
                     </div>
                   )}
@@ -989,9 +1123,9 @@ export default function CollectionStatement() {
             </div>
           )}
 
-          {activeTab === 'invoices' && (
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <div className="relative flex-1 max-w-md min-w-[240px]">
+          {!filtersCollapsed && activeTab === 'invoices' && (
+            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 pt-1">
+              <div className="relative flex-1 w-full sm:max-w-md min-w-0 sm:min-w-[240px]">
                 <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   value={invoiceSearchTerm}
@@ -1067,10 +1201,157 @@ export default function CollectionStatement() {
               </div>
             )}
 
-            {/* Scrollable Table Body */}
+            {/* Mobile Cards View (< md) */}
+            <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+              {isDueLoading ? (
+                <div className="py-10 text-center text-slate-400 text-xs font-bold">جاري التحميل...</div>
+              ) : dueError ? (
+                <div className="py-8 px-4 text-center text-red-600 font-bold flex flex-col items-center gap-1">
+                  <AlertTriangle size={28} className="text-red-500 mb-1" />
+                  <p className="text-xs">{dueError}</p>
+                </div>
+              ) : groupedDueRows.length === 0 ? (
+                <div className="py-10 px-4 text-center text-slate-400 font-bold flex flex-col items-center">
+                  <CheckCircle2 size={32} className="text-slate-300 mb-2" />
+                  <p className="text-sm font-bold text-slate-600 mb-1">
+                    {dueStatusFilter === 'paid' ? 'لا توجد أقساط مسددة في هذه الفترة' : 'لا توجد أقساط مستحقة للفترة المحددة'}
+                  </p>
+                  <p className="text-xs text-slate-400 font-normal">
+                    {dueStatusFilter === 'paid' ? 'يمكنك تبديل خيار تاريخ الفلترة أو توسيع نطاق التاريخ.' : 'يمكنك تفعيل خيار "شامل المتأخرات" بالأعلى لعرض كافة المستحقات السابقة.'}
+                  </p>
+                </div>
+              ) : (
+                paginatedGroupedDueRows.map((group) => {
+                  const totalRemaining = group.reduce((sum, r) => sum + r.remainingAmount, 0);
+                  const totalPaidInGroup = group.reduce((sum, r) => sum + (r.status === 'paid' ? r.installmentAmount : (r.paidAmount || (r.installmentAmount - r.remainingAmount))), 0);
+                  const isAllPaid = group.every((r) => r.status === 'paid' || r.remainingAmount <= 1);
+                  const isPartial = !isAllPaid && group.some((r) => (r.paidAmount && r.paidAmount > 0) || r.status === 'paid');
+                  const actualPaidDate = group[0].paidAt || group[0].lastPaymentDate;
+
+                  return (
+                    <div
+                      key={`mob-${group[0].saleId}`}
+                      onClick={() => setSelectedCustomerModal(group)}
+                      className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs active:scale-[0.99] transition-transform cursor-pointer space-y-2.5"
+                    >
+                      {/* Top Row: Customer Name & Amount */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${group[0].isSued ? 'bg-red-50 text-red-500' : (isAllPaid ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-600')}`}>
+                            {group[0].isSued ? <Gavel size={14} /> : (isAllPaid ? <CheckCircle2 size={15} /> : <User size={14} />)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className={`font-black text-slate-900 text-sm leading-snug break-words ${group[0].isSued ? 'text-red-500 line-through' : ''}`}>
+                              {group[0].customerName}
+                            </p>
+                            {group[0].isSued && (
+                              <span className="text-[11px] text-red-500 font-bold inline-flex items-center gap-0.5 mt-0.5">
+                                <AlertTriangle size={10} /> محال للقضاء
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-left shrink-0">
+                          {isAllPaid ? (
+                            <>
+                              <p className="text-emerald-700 text-sm font-black">{formatCurrency(totalPaidInGroup)}</p>
+                              <p className="text-[10px] text-emerald-600 font-bold">تم السداد</p>
+                            </>
+                          ) : isPartial ? (
+                            <>
+                              <p className="text-amber-700 text-sm font-black">{formatCurrency(totalRemaining)}</p>
+                              <p className="text-[10px] text-amber-600 font-bold">سُدد: {formatCurrency(totalPaidInGroup)}</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-red-600 text-sm font-black">{formatCurrency(totalRemaining)}</p>
+                              {group[0].totalInvoiceRemaining !== undefined && group[0].totalInvoiceRemaining > totalRemaining && (
+                                <p className="text-[10px] text-slate-400 font-bold">العقد: {formatCurrency(group[0].totalInvoiceRemaining)}</p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Middle Row: Direct Phone Call, Sales Rep, Date */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {group[0].customerPhone && (
+                            <a
+                              href={`tel:${group[0].customerPhone}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 font-mono font-bold text-xs transition-colors"
+                              title="اتصال مباشر بالعميل"
+                            >
+                              <Phone size={12} className="text-emerald-600 shrink-0" />
+                              <span dir="ltr">{group[0].customerPhone}</span>
+                            </a>
+                          )}
+                          <span className="inline-flex items-center gap-1 text-slate-600 font-semibold text-xs">
+                            <Briefcase size={12} className="text-slate-400 shrink-0" />
+                            <span>{group[0].salesRepName || '---'}</span>
+                          </span>
+                        </div>
+
+                        {isAllPaid ? (
+                          <span className="font-bold text-emerald-800 text-[11px] bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                            <CheckCircle2 size={11} className="text-emerald-600" />
+                            {actualPaidDate ? formatDateDisplay(actualPaidDate) : 'تم التحصيل'}
+                          </span>
+                        ) : (
+                          <span className="font-bold text-slate-700 text-[11px] bg-slate-100 border border-slate-200/70 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                            <Calendar size={11} className="text-slate-500" />
+                            {formatDateDisplay(group[0].dueDate)}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Bottom Row: Notes (if unpaid) */}
+                      {!isAllPaid && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          {group[0].invoiceNote && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenNoteModal(e, group[0], 'invoice')}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200/80 text-xs font-bold max-w-full"
+                            >
+                              <Pin size={11} className="text-blue-600 shrink-0" />
+                              <span className="truncate">{group[0].invoiceNote}</span>
+                            </button>
+                          )}
+                          {group[0].notes && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenNoteModal(e, group[0], 'installment')}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200/80 text-xs font-bold max-w-full"
+                            >
+                              <MessageSquare size={11} className="text-amber-600 shrink-0" />
+                              <span className="truncate">{group[0].notes}</span>
+                            </button>
+                          )}
+                          {!isMobileDevice() && !group[0].notes && !group[0].invoiceNote && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenNoteModal(e, group[0])}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 text-xs font-bold"
+                            >
+                              <MessageSquare size={11} />
+                              <span>+ إضافة ملاحظة</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Scrollable Desktop Table Body (>= md) */}
             <div
               ref={tableContainerRef}
-              className={`desktop-table-scroll ${userPageSizePreference === 'auto' ? 'overflow-y-hidden overflow-x-auto' : 'overflow-auto'}`}
+              className={`hidden md:block desktop-table-scroll ${userPageSizePreference === 'auto' ? 'overflow-y-hidden overflow-x-auto' : 'overflow-auto'}`}
             >
               <table className="w-full text-right text-xs border-collapse">
                 <thead className="desktop-sticky-header">
@@ -1127,69 +1408,104 @@ export default function CollectionStatement() {
                             className="hover:bg-sky-50/70 transition-colors cursor-pointer select-none group"
                             title="اضغط على أي عميل لعرض كافة بياناته والضامنين وجدول الأقساط"
                           >
-                            <td className="px-4 py-2 sm:py-2.5">
+                            <td className="px-4 py-2.5 sm:py-3">
                               <div className="flex items-center gap-2.5">
-                                <div className={`w-7.5 h-7.5 rounded-full flex items-center justify-center shrink-0 ${group[0].isSued ? 'bg-red-50 text-red-500' : (isAllPaid ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-500 group-hover:bg-sky-100 group-hover:text-sky-600')}`}>
-                                  {group[0].isSued ? <Gavel size={13} /> : (isAllPaid ? <CheckCircle2 size={14} /> : <User size={13} />)}
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${group[0].isSued ? 'bg-red-50 text-red-500' : (isAllPaid ? 'bg-emerald-50 text-emerald-600' : 'bg-sky-50 text-sky-500 group-hover:bg-sky-100 group-hover:text-sky-600')}`}>
+                                  {group[0].isSued ? <Gavel size={14} /> : (isAllPaid ? <CheckCircle2 size={15} /> : <User size={14} />)}
                                 </div>
-                                <div className="flex flex-col">
-                                  <span className={`font-bold text-slate-800 text-xs sm:text-sm group-hover:text-sky-600 transition-colors ${group[0].isSued ? 'text-red-500 line-through' : ''}`}>
-                                    {group[0].customerName}
-                                  </span>
+                                <div className="flex flex-col min-w-0">
+                                  <div className="flex items-center gap-2 flex-nowrap">
+                                    <span className={`font-bold text-slate-800 text-sm sm:text-[15px] group-hover:text-sky-600 transition-colors whitespace-nowrap ${group[0].isSued ? 'text-red-500 line-through' : ''}`}>
+                                      {group[0].customerName}
+                                    </span>
+                                    {!isAllPaid && group[0].invoiceNote && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleOpenNoteModal(e, group[0], 'invoice')}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200/80 text-xs font-bold transition-colors cursor-pointer max-w-[210px] shrink-0"
+                                        title={`ملاحظة مثبتة على الفاتورة: ${group[0].invoiceNote}`}
+                                      >
+                                        <Pin size={11} className="text-blue-600 shrink-0" />
+                                        <span className="truncate">{group[0].invoiceNote}</span>
+                                      </button>
+                                    )}
+                                    {!isAllPaid && group[0].notes && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleOpenNoteModal(e, group[0], 'installment')}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 text-xs font-bold transition-colors cursor-pointer max-w-[210px] shrink-0"
+                                        title={`ملاحظة القسط: ${group[0].notes}`}
+                                      >
+                                        <MessageSquare size={11} className="text-amber-600 shrink-0" />
+                                        <span className="truncate">{group[0].notes}</span>
+                                      </button>
+                                    )}
+                                    {!isAllPaid && !group[0].notes && !group[0].invoiceNote && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleOpenNoteModal(e, group[0])}
+                                        className="opacity-70 group-hover:opacity-100 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 hover:bg-amber-50 text-slate-500 hover:text-amber-700 border border-slate-200 hover:border-amber-200 text-[11px] font-bold transition-all cursor-pointer shrink-0"
+                                        title="إضافة ملاحظة متابعة لهذا القسط أو الفاتورة"
+                                      >
+                                        <MessageSquare size={11} />
+                                        <span>+ ملاحظة</span>
+                                      </button>
+                                    )}
+                                  </div>
                                   {group[0].isSued && (
-                                    <span className="text-[9px] text-red-500 font-bold flex items-center gap-0.5 mt-0.5">
-                                      <AlertTriangle size={9} /> محال للقضاء
+                                    <span className="text-[11px] text-red-500 font-bold flex items-center gap-0.5 mt-0.5">
+                                      <AlertTriangle size={10} /> محال للقضاء
                                     </span>
                                   )}
                                 </div>
                               </div>
                             </td>
-                            <td className="px-4 py-2 sm:py-2.5 text-slate-600 font-semibold font-mono text-xs">{group[0].customerPhone}</td>
-                            <td className="px-4 py-2 sm:py-2.5">
+                            <td className="px-4 py-2.5 sm:py-3 text-slate-700 font-semibold font-mono text-sm">{group[0].customerPhone}</td>
+                            <td className="px-4 py-2.5 sm:py-3">
                               <div className="flex items-center gap-1.5 text-slate-700">
-                                <Briefcase size={12} className="text-slate-400 shrink-0" />
-                                <span className="font-semibold text-xs">{group[0].salesRepName || '---'}</span>
+                                <Briefcase size={13} className="text-slate-400 shrink-0" />
+                                <span className="font-semibold text-sm">{group[0].salesRepName || '---'}</span>
                               </div>
                             </td>
-                            <td className="px-4 py-2 sm:py-2.5 text-center">
+                            <td className="px-4 py-2.5 sm:py-3 text-center">
                               {isAllPaid ? (
-                                <span className="font-bold text-emerald-800 text-[11px] bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-md inline-flex items-center gap-1 shadow-2xs">
-                                  <CheckCircle2 size={11} className="text-emerald-600" />
+                                <span className="font-bold text-emerald-800 text-xs sm:text-[13px] bg-emerald-50 border border-emerald-200/80 px-2.5 py-1 rounded-md inline-flex items-center gap-1 shadow-2xs">
+                                  <CheckCircle2 size={12} className="text-emerald-600" />
                                   {actualPaidDate ? formatDateDisplay(actualPaidDate) : 'تم التحصيل'}
                                 </span>
                               ) : (
-                                <span className="font-bold text-slate-800 text-[11px] bg-slate-100/90 px-2 py-0.5 rounded-md border border-slate-200/70 inline-flex items-center gap-1 shadow-2xs">
-                                  <Calendar size={11} className="text-slate-500" />
+                                <span className="font-bold text-slate-800 text-xs sm:text-[13px] bg-slate-100/90 px-2.5 py-1 rounded-md border border-slate-200/70 inline-flex items-center gap-1 shadow-2xs">
+                                  <Calendar size={12} className="text-slate-500" />
                                   {formatDateDisplay(group[0].dueDate)}
                                 </span>
                               )}
                             </td>
-                            <td className="px-4 py-2 sm:py-2.5 text-center">
+                            <td className="px-4 py-2.5 sm:py-3 text-center">
                               <div className="flex flex-col items-center">
                                 {isAllPaid ? (
                                   <>
-                                    <span className="text-emerald-700 text-xs sm:text-sm font-black flex items-center gap-1">
-                                      <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1 py-0.2 rounded font-bold">تم السداد</span>
+                                    <span className="text-emerald-700 text-sm sm:text-base font-black flex items-center gap-1.5">
+                                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold">تم السداد</span>
                                       {formatCurrency(totalPaidInGroup)}
                                     </span>
-                                    <span className="text-[9px] text-emerald-600 font-medium whitespace-nowrap">
+                                    <span className="text-[11px] text-emerald-600 font-medium whitespace-nowrap">
                                       مسدد بالكامل
                                     </span>
                                   </>
                                 ) : isPartial ? (
                                   <>
-                                    <span className="text-amber-700 text-xs sm:text-sm font-black">
+                                    <span className="text-amber-700 text-sm sm:text-base font-black">
                                       {formatCurrency(totalRemaining)}
                                     </span>
-                                    <span className="text-[9px] text-amber-600 font-medium whitespace-nowrap">
+                                    <span className="text-[11px] text-amber-600 font-medium whitespace-nowrap">
                                       متبقي (سُدد: {formatCurrency(totalPaidInGroup)})
                                     </span>
                                   </>
                                 ) : (
                                   <>
-                                    <span className="text-red-600 text-xs sm:text-sm font-black">{formatCurrency(totalRemaining)}</span>
+                                    <span className="text-red-600 text-sm sm:text-base font-black">{formatCurrency(totalRemaining)}</span>
                                     {group[0].totalInvoiceRemaining !== undefined && group[0].totalInvoiceRemaining > totalRemaining && (
-                                      <span className="text-[9px] text-slate-400 font-medium whitespace-nowrap">
+                                      <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap">
                                         متبقي العقد: {formatCurrency(group[0].totalInvoiceRemaining)}
                                       </span>
                                     )}
@@ -1205,11 +1521,11 @@ export default function CollectionStatement() {
               </table>
             </div>
 
-            {/* Locked Bottom Footer — rigid 3-column grid */}
-            <div className="bg-white border-t border-slate-200 px-5 py-3 shrink-0 z-10 relative select-none print:hidden">
-              <div className="grid grid-cols-3 items-center gap-4">
+            {/* Locked Bottom Footer — responsive on mobile, rigid 3-column grid on desktop */}
+            <div className="bg-white border-t border-slate-200 px-3 sm:px-5 py-2.5 sm:py-3 shrink-0 z-10 relative select-none print:hidden">
+              <div className="flex flex-col gap-2 md:grid md:grid-cols-3 md:items-center md:gap-4">
                 {/* Right: Statistics */}
-                <div className="flex items-center gap-3 text-xs font-bold text-slate-600">
+                <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3 gap-y-1 text-xs font-bold text-slate-600">
                   {dueStatusFilter === 'unpaid' && (
                     <>
                       <span>أقساط مستحقة: <span className="text-slate-900 font-black">{dueRows.length}</span></span>
@@ -1246,43 +1562,48 @@ export default function CollectionStatement() {
                   )}
                 </div>
 
-                {/* Center: Pagination — always centered */}
+                {/* Center: Pagination — fixed-width so Prev/Next buttons never shift */}
                 <div className="flex items-center justify-center">
                   {totalDuePages > 1 ? (
-                    <nav className="inline-flex items-center gap-1" aria-label="Pagination">
+                    <nav className="inline-flex items-center gap-1.5" aria-label="Pagination">
                       <button
+                        type="button"
                         disabled={dueCurrentPage === 1}
                         onClick={() => setDueCurrentPage((prev) => Math.max(prev - 1, 1))}
-                        className="h-7 px-2 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                        className="h-7 w-14 shrink-0 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
                         السابق
                       </button>
-                      {getPaginatedPages().map((page, idx) => {
-                        if (page === '...') {
+                      <div className="w-auto sm:w-[232px] flex items-center justify-center gap-1 shrink-0">
+                        {getPaginatedPages().map((page, idx) => {
+                          if (page === '...') {
+                            return (
+                              <span key={`dots-${idx}`} className="h-7 w-7 flex items-center justify-center text-slate-400 text-[11px] font-bold">
+                                ...
+                              </span>
+                            );
+                          }
                           return (
-                            <span key={`dots-${idx}`} className="h-7 w-5 flex items-center justify-center text-slate-400 text-[11px] font-bold">
-                              ...
-                            </span>
+                            <button
+                              type="button"
+                              key={`page-${page}`}
+                              onClick={() => setDueCurrentPage(page as number)}
+                              className={`h-7 w-7 shrink-0 rounded-md text-[11px] font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                                dueCurrentPage === page
+                                  ? 'bg-blue-600 text-white shadow-2xs'
+                                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              {page}
+                            </button>
                           );
-                        }
-                        return (
-                          <button
-                            key={`page-${page}`}
-                            onClick={() => setDueCurrentPage(page as number)}
-                            className={`h-7 w-7 rounded-md text-[11px] font-bold transition-all ${
-                              dueCurrentPage === page
-                                ? 'bg-blue-600 text-white'
-                                : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                            }`}
-                          >
-                            {page}
-                          </button>
-                        );
-                      })}
+                        })}
+                      </div>
                       <button
+                        type="button"
                         disabled={dueCurrentPage === totalDuePages}
                         onClick={() => setDueCurrentPage((prev) => Math.min(prev + 1, totalDuePages))}
-                        className="h-7 px-2 rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                        className="h-7 w-14 shrink-0 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
                         التالي
                       </button>
@@ -1293,7 +1614,7 @@ export default function CollectionStatement() {
                 </div>
 
                 {/* Left: Range indicator & Page size selector */}
-                <div className="flex items-center justify-end gap-2.5">
+                <div className="flex items-center justify-between md:justify-end gap-2.5">
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] text-slate-400 font-bold">العدد:</span>
                     <select
@@ -1385,12 +1706,21 @@ export default function CollectionStatement() {
                               {row.paymentMethod === 'installment' ? 'دفع بالتقسيط' : 'نقداً'}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
-                            <span className="font-semibold text-slate-700">{row.customerPhone}</span>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-1">
+                            {row.customerPhone && (
+                              <a
+                                href={`tel:${row.customerPhone}`}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 font-mono font-bold text-xs transition-colors"
+                                title="اتصال مباشر بالعميل"
+                              >
+                                <Phone size={11} className="text-emerald-600 shrink-0" />
+                                <span dir="ltr">{row.customerPhone}</span>
+                              </a>
+                            )}
                             {row.customerAddress && row.customerAddress !== '-' && (
                               <>
-                                <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
-                                <span className="truncate max-w-sm">{row.customerAddress}</span>
+                                <span className="w-1 h-1 bg-slate-300 rounded-full hidden sm:inline-block"></span>
+                                <span className="truncate max-w-full sm:max-w-sm">{row.customerAddress}</span>
                               </>
                             )}
                           </div>
@@ -1400,17 +1730,17 @@ export default function CollectionStatement() {
                       {/* Left side: Stats & Action Buttons */}
                       <div className="flex items-center gap-2.5 flex-wrap lg:justify-end">
                         {/* Mini Financial Summary Pills */}
-                        <div className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200 text-xs">
+                        <div className="w-full sm:w-auto grid grid-cols-3 sm:flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200 text-xs">
                           <div className="px-2 py-0.5 text-center">
                             <span className="text-[10px] text-slate-400 block font-bold leading-tight">الإجمالي</span>
                             <span className="font-black text-slate-800 text-xs">{formatCurrency(row.total)}</span>
                           </div>
-                          <div className="w-px h-5 bg-slate-200"></div>
-                          <div className="px-2 py-0.5 text-center">
+                          <div className="hidden sm:block w-px h-5 bg-slate-200"></div>
+                          <div className="px-2 py-0.5 text-center border-x sm:border-x-0 border-slate-200">
                             <span className="text-[10px] text-slate-400 block font-bold leading-tight">المدفوع</span>
                             <span className="font-black text-emerald-700 text-xs">{formatCurrency(row.paid)}</span>
                           </div>
-                          <div className="w-px h-5 bg-slate-200"></div>
+                          <div className="hidden sm:block w-px h-5 bg-slate-200"></div>
                           <div className="px-2 py-0.5 text-center">
                             <span className="text-[10px] text-slate-400 block font-bold leading-tight">المتبقي</span>
                             <span className={`font-black text-xs ${row.remaining > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
@@ -1421,7 +1751,7 @@ export default function CollectionStatement() {
 
                         {/* Action Buttons */}
                         <div className="flex items-center gap-1.5">
-                          {user?.role !== 'manager' && (
+                          {user?.role !== 'manager' && !isMobileDevice() && (
                             <button
                               onClick={() => handleToggleLegalCustomer(row.customerId, !row.isSued)}
                               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
@@ -1476,9 +1806,72 @@ export default function CollectionStatement() {
                       </div>
                     )}
 
-                    {/* Compact Scrollable Installments Table */}
+                    {/* Compact Scrollable Installments Table (Desktop) & Cards (Mobile) */}
                     <div className={`mt-2.5 ${isSingle ? 'flex-1 min-h-0' : 'min-h-[200px]'} flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden`}>
-                      <div className={`${isSingle ? 'flex-1 min-h-0' : 'max-h-[380px]'} overflow-auto desktop-table-scroll`}>
+                      {/* Mobile Installment Cards (< md) */}
+                      <div className={`md:hidden ${isSingle ? 'flex-1 min-h-0' : 'max-h-[380px]'} overflow-y-auto p-2 space-y-2 custom-scrollbar`}>
+                        {row.schedules.map((schedule) => {
+                          const rawRemaining = Math.max(schedule.amount - schedule.paidAmount, 0);
+                          const isEffectivelyPaid = schedule.status === 'paid' || rawRemaining <= 1;
+                          const remaining = isEffectivelyPaid ? 0 : rawRemaining;
+                          const effectiveStatus: InstallmentSchedule['status'] = isEffectivelyPaid
+                            ? 'paid'
+                            : (schedule.status === 'partial' || schedule.paidAmount > 0 ? 'partial' : 'unpaid');
+                          const isPaid = effectiveStatus === 'paid';
+                          const isPartial = effectiveStatus === 'partial';
+
+                          return (
+                            <div
+                              key={`mob-sch-${schedule.id}`}
+                              className={`rounded-xl border p-2.5 space-y-2 ${
+                                isPaid
+                                  ? 'bg-emerald-50/40 border-emerald-200/70'
+                                  : isPartial
+                                    ? 'bg-amber-50/40 border-amber-200/70'
+                                    : 'bg-rose-50/25 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="inline-block px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-800 font-black text-xs">
+                                    {schedule.label}
+                                  </span>
+                                  <span className="text-xs font-bold text-slate-600 inline-flex items-center gap-1">
+                                    <Calendar size={11} className="text-slate-400" />
+                                    {formatDateDisplay(schedule.dueDate)}
+                                  </span>
+                                </div>
+                                <MonthBadge status={effectiveStatus} />
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-1.5 bg-white/80 rounded-lg border border-slate-100 p-1.5 text-center text-xs">
+                                <div>
+                                  <span className="text-[10px] text-slate-400 block font-bold">قيمة الشهر</span>
+                                  <span className="font-bold text-slate-800">{formatCurrency(schedule.amount)}</span>
+                                </div>
+                                <div className="border-x border-slate-100">
+                                  <span className="text-[10px] text-slate-400 block font-bold">المدفوع</span>
+                                  <span className="font-bold text-emerald-700">{formatCurrency(isEffectivelyPaid ? schedule.amount : schedule.paidAmount)}</span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] text-slate-400 block font-bold">المتبقي</span>
+                                  <span className={`font-black ${remaining > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{formatCurrency(remaining)}</span>
+                                </div>
+                              </div>
+
+                              {schedule.paidAt && (
+                                <div className="text-[11px] text-slate-500 font-semibold flex items-center justify-end gap-1">
+                                  <CheckCircle2 size={11} className="text-emerald-600" />
+                                  <span>تاريخ السداد: {formatDateDisplay(schedule.paidAt)}</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Desktop Installments Table (>= md) */}
+                      <div className={`hidden md:block ${isSingle ? 'flex-1 min-h-0' : 'max-h-[380px]'} overflow-auto desktop-table-scroll`}>
                         <table className="w-full text-right border-collapse text-xs">
                           <thead className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs border-b border-slate-200 text-xs font-black text-slate-700 shadow-2xs">
                             <tr>
@@ -1559,18 +1952,89 @@ export default function CollectionStatement() {
         {/* TAB CONTENT: LEGAL */}
         {activeTab === 'legal' && (
           <div className="desktop-table-card animate-in fade-in slide-in-from-bottom-2 duration-300 print:hidden">
-            <div className="bg-red-50/80 border-b border-red-100 p-3.5 flex items-center justify-between shrink-0 print:hidden">
+            <div className="bg-red-50/80 border-b border-red-100 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0 print:hidden">
               <div>
                 <h3 className="text-red-800 font-bold text-base flex items-center gap-2"><Gavel size={18} /> سجل القضايا والنزاعات القانونية</h3>
                 <p className="text-red-600 text-xs mt-0.5">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
               </div>
-              <button onClick={() => { setPrintingInvoice(null); setPrintingLegalReport(true); setTimeout(() => { window.print(); setPrintingLegalReport(false); }, 300); }} className="h-9 px-4 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all whitespace-nowrap">
+              <button onClick={() => { setPrintingInvoice(null); setPrintingLegalReport(true); setTimeout(() => { window.print(); setPrintingLegalReport(false); }, 300); }} className="h-9 px-4 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all whitespace-nowrap w-full sm:w-auto">
                 <Printer size={15} />
                 طباعة كشف المحامي
               </button>
             </div>
 
-            <div className="desktop-table-scroll">
+            {/* Mobile Cards View (< md) */}
+            <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+              {suedCustomersList.length === 0 ? (
+                <div className="py-12 px-4 text-center text-slate-400 flex flex-col items-center justify-center">
+                  <CheckCircle2 size={36} className="text-slate-300 mb-3" />
+                  <p className="font-bold text-sm text-slate-700">لا يوجد أي عملاء في الشئون القانونية حالياً</p>
+                </div>
+              ) : (
+                suedCustomersList.map((customer) => {
+                  const rawDate = (customer as any).suedDate || (customer as any).sued_date || (customer as any).createdAt;
+                  const formatted = formatDateDisplay(rawDate);
+
+                  return (
+                    <div key={`mob-legal-${customer.id}`} className="bg-white border border-red-200/80 rounded-2xl p-3.5 shadow-2xs space-y-2.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0 mt-0.5">
+                            <Gavel size={14} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-black text-slate-900 text-sm leading-snug break-words">{customer.name}</p>
+                            <span className="text-[11px] text-slate-500 font-bold">
+                              الفواتير: <span className="text-slate-800 font-black">{customer.invoicesCount}</span>
+                              {formatted && formatted !== '-' && ` • الإحالة: ${formatted}`}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-left shrink-0">
+                          <p className="font-black text-red-600 text-sm">{formatCurrency(customer.totalDebt)}</p>
+                          <p className="text-[10px] text-red-500 font-bold">المديونية</p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                        {customer.phone && (
+                          <a
+                            href={`tel:${customer.phone}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 font-mono font-bold text-xs transition-colors"
+                            title="اتصال مباشر بالعميل"
+                          >
+                            <Phone size={12} className="text-emerald-600 shrink-0" />
+                            <span dir="ltr">{customer.phone}</span>
+                          </a>
+                        )}
+
+                        {!isMobileDevice() && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleLegalCustomer(customer.id, false)}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1 mr-auto"
+                          >
+                            <CheckCircle2 size={13} />
+                            إلغاء النزاع
+                          </button>
+                        )}
+                      </div>
+
+                      {customer.address && customer.address !== '-' && (
+                        <div className="flex items-start gap-1.5 text-xs text-slate-600 bg-slate-50 rounded-lg px-2.5 py-1.5">
+                          <MapPin size={13} className="text-slate-400 shrink-0 mt-0.5" />
+                          <span className="leading-relaxed break-words">{customer.address}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Desktop Table (>= md) */}
+            <div className="hidden md:block desktop-table-scroll">
               <table className="w-full bg-white border-collapse">
                 <thead className="desktop-sticky-header">
                   <tr>
@@ -2019,6 +2483,138 @@ export default function CollectionStatement() {
                 <p className="mt-0.5">تم الاستخراج من نظام {settings.companyName}</p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Quick Installment Note Modal */}
+      {noteModalRow && (
+        <div
+          className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 print:hidden"
+          onClick={() => !isSavingNote && setNoteModalRow(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-slate-50 border-b border-slate-200 px-5 py-3.5 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <MessageSquare size={16} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-800">ملاحظة متابعة القسط</h3>
+                  <p className="text-xs text-slate-500 font-semibold">
+                    {noteModalRow.customerName} — {noteModalRow.installmentLabel} ({formatDateDisplay(noteModalRow.dueDate)})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNoteModalRow(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Scope Toggle */}
+              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNoteScope('installment');
+                    if (noteModalRow.notes !== undefined) {
+                      setNoteDraft(noteModalRow.notes || '');
+                    }
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    noteScope === 'installment'
+                      ? 'bg-white text-amber-800 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <MessageSquare size={13} className={noteScope === 'installment' ? 'text-amber-600' : 'text-slate-400'} />
+                  <span>هذا القسط فقط</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNoteScope('invoice');
+                    if (noteModalRow.invoiceNote !== undefined) {
+                      setNoteDraft(noteModalRow.invoiceNote || '');
+                    }
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    noteScope === 'invoice'
+                      ? 'bg-white text-blue-800 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Pin size={13} className={noteScope === 'invoice' ? 'text-blue-600' : 'text-slate-400'} />
+                  <span>تثبيت على الفاتورة</span>
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">نص الملاحظة:</label>
+                <textarea
+                  rows={3}
+                  maxLength={250}
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  placeholder={
+                    noteScope === 'invoice'
+                      ? 'مثال: بيقبض يوم 10 من كل شهر أو هيدفع 3 شهور مع بعض...'
+                      : 'مثال: العميل هيتأخر ليوم 8...'
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                  autoFocus
+                />
+                <p className={`text-[11px] mt-1 font-medium ${noteScope === 'invoice' ? 'text-blue-600' : 'text-slate-400'}`}>
+                  {noteScope === 'invoice'
+                    ? '📌 ستظل هذه الملاحظة مثبتة على الفاتورة في كل الشهور حتى انتهاء سداد الفاتورة بالكامل.'
+                    : '💬 تُحذف هذه الملاحظة تلقائياً بمجرد سداد هذا القسط بالكامل.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border-t border-slate-200 px-5 py-3 flex items-center justify-between gap-2">
+              {(noteScope === 'invoice' ? noteModalRow.invoiceNote : noteModalRow.notes) ? (
+                <button
+                  type="button"
+                  disabled={isSavingNote}
+                  onClick={() => handleSaveInstallmentNote('')}
+                  className="px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 size={14} />
+                  <span>مسح الملاحظة</span>
+                </button>
+              ) : (
+                <div />
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isSavingNote}
+                  onClick={() => setNoteModalRow(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-bold transition-colors"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingNote}
+                  onClick={() => handleSaveInstallmentNote(noteDraft)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
+                >
+                  <Save size={14} />
+                  <span>{isSavingNote ? 'جاري الحفظ...' : 'حفظ الملاحظة'}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

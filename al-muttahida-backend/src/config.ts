@@ -2,7 +2,14 @@ import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env relative to this source/dist root first, then fallback to cwd
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config();
 
 /**
@@ -66,9 +73,21 @@ export function saveAppConfig(newConfig: Record<string, any>): void {
 
 const saved = getSavedConfig();
 
+function resolveJwtSecret(): string {
+  if (process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 16) {
+    return process.env.JWT_SECRET.trim();
+  }
+  if (saved?.jwtSecret && typeof saved.jwtSecret === 'string' && saved.jwtSecret.length >= 32) {
+    return saved.jwtSecret;
+  }
+  const generated = crypto.randomBytes(64).toString('hex');
+  saveAppConfig({ jwtSecret: generated });
+  return generated;
+}
+
 export const config = {
   port: Number(process.env.PORT || saved?.port || 4000),
-  jwtSecret: process.env.JWT_SECRET || 'AlMuttahida_Secure_Production_JWT_Secret_Key_2026_Fallback',
+  jwtSecret: resolveJwtSecret(),
   sql: {
     server: saved?.lastSuccessfulServer || (saved?.mode === 'client' ? (saved?.host || saved?.db?.host || '127.0.0.1') : (process.env.DB_HOST || '127.0.0.1')),
     port: Number(saved?.port || saved?.db?.port || process.env.DB_PORT || 1433),

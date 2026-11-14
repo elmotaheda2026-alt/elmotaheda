@@ -3,7 +3,7 @@ import { Bell, LogOut, Mail, Menu, Search, Shield, User, Wifi, WifiOff } from 'l
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getNotifications, markAllNotificationsRead, markNotificationRead, syncNotifications } from '../lib/storage';
-import { checkBackendHealth } from '../lib/apiClient';
+import { checkBackendHealth, isMobileDevice } from '../lib/apiClient';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -136,7 +136,14 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {isMobileDevice() && (
+            <div className="flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200/90 px-2.5 py-1 rounded-full text-[11px] font-bold shadow-2xs">
+              <Shield size={12} className="text-amber-600 shrink-0" />
+              <span>وضع العرض فقط</span>
+            </div>
+          )}
+
           {/* Dynamic Sync/Network Status Badge */}
           <button
             type="button"

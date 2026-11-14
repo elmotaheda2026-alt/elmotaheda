@@ -219,10 +219,34 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       finalCustomerId = sale.customer_id;
     }
 
-    // Run all DB mutations inside a single transaction to avoid deadlocks
+    // Run all DB mutations inside a single transaction with row-level locks to prevent double-payment races
     await db.withTransaction(async (tx) => {
-      // 1. If paying for a sale, update sales + installments
+      // 1. If paying for a sale, lock the sale row and verify balance atomically
       if (data.type === 'in' && data.saleId) {
+        const lockedSale = await tx.get(
+          'SELECT id, paid, remaining, total, status FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+          data.saleId,
+        );
+        if (!lockedSale) {
+          const err: any = new Error('الفاتورة غير موجودة');
+          err.statusCode = 404;
+          throw err;
+        }
+        const liveRemaining = Number(lockedSale.remaining || 0);
+        if (data.isEarlySettlement) {
+          const discount = Number(data.settlementDiscount || 0);
+          const expectedNet = Math.max(0, Number((liveRemaining - discount).toFixed(2)));
+          if (liveRemaining <= 0 || lockedSale.status === 'settled_early' || roundMoney(data.amount) > roundMoney(expectedNet)) {
+            const err: any = new Error('تم سداد هذه الفاتورة أو تغير رصيدها من جهاز آخر، يرجى تحديث الصفحة.');
+            err.statusCode = 409;
+            throw err;
+          }
+        } else if (roundMoney(data.amount) > roundMoney(liveRemaining)) {
+          const err: any = new Error('تم سداد جزء من هذه الفاتورة من جهاز آخر وأصبح المبلغ أكبر من المتبقي، يرجى تحديث الصفحة.');
+          err.statusCode = 409;
+          throw err;
+        }
+
         if (data.isEarlySettlement) {
           const discount = Number(data.settlementDiscount || 0);
           await tx.run(
@@ -232,6 +256,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
                  locked = 1,
                  status = 'settled_early',
                  discount = discount + ?,
+                 collection_note = NULL,
                  last_edited_by = ?,
                  last_edited_at = ?
              WHERE id = ?`,
@@ -245,7 +270,8 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
           await tx.run(
             `UPDATE installment_schedules
              SET status = 'settled_early',
-                 paid_at = ?
+                 paid_at = ?,
+                 notes = NULL
              WHERE sale_id = ? AND status <> 'paid'`,
             data.date,
             data.saleId,
@@ -256,27 +282,35 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
              SET paid = paid + ?,
                  remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
                  locked = 1,
-                 status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END
+                 status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END,
+                 collection_note = CASE WHEN (paid + ?) >= (total - 1.0) THEN NULL ELSE collection_note END
              WHERE id = ?`,
-            data.amount, data.amount, data.amount, data.amount, data.saleId,
+            data.amount, data.amount, data.amount, data.amount, data.amount, data.saleId,
           );
 
           if (data.installmentId) {
             const schedule = await tx.get(
-              'SELECT id, amount, paid_amount, month_index, sale_id FROM installment_schedules WHERE id = ?',
+              'SELECT id, amount, paid_amount, month_index, sale_id, status FROM installment_schedules WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
               data.installmentId,
             );
             if (schedule) {
+              if (schedule.status === 'paid' || (schedule.amount - schedule.paid_amount) <= 1.0) {
+                const err: any = new Error('تم تحصيل هذا القسط بالفعل من جهاز آخر، يرجى تحديث الصفحة.');
+                err.statusCode = 409;
+                throw err;
+              }
               const schRemaining = Math.max(0, Number((schedule.amount - schedule.paid_amount).toFixed(2)));
               const applied = Math.min(schRemaining, data.amount);
               const nextPaid = Number((schedule.paid_amount + applied).toFixed(2));
               const isPaid = (schedule.amount - nextPaid) <= 1.0;
               const finalPaid = isPaid ? schedule.amount : nextPaid;
+              const nextStatus = isPaid ? 'paid' : (finalPaid > 0 ? 'partial' : 'unpaid');
               await tx.run(
-                `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+                `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ?, notes = CASE WHEN ? = 'paid' THEN NULL ELSE notes END WHERE id = ?`,
                 finalPaid,
-                isPaid ? 'paid' : (finalPaid > 0 ? 'partial' : 'unpaid'),
+                nextStatus,
                 data.date,
+                nextStatus,
                 data.installmentId,
               );
 
@@ -299,11 +333,13 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
                   surplus = Number((surplus - nextApplied).toFixed(2));
                   const isNextPaid = (nextSch.amount - nextSchPaid) <= 1.0;
                   const finalNextPaid = isNextPaid ? nextSch.amount : nextSchPaid;
+                  const nextSchStatus = isNextPaid ? 'paid' : (finalNextPaid > 0 ? 'partial' : 'unpaid');
                   await tx.run(
-                    `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+                    `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ?, notes = CASE WHEN ? = 'paid' THEN NULL ELSE notes END WHERE id = ?`,
                     finalNextPaid,
-                    isNextPaid ? 'paid' : (finalNextPaid > 0 ? 'partial' : 'unpaid'),
+                    nextSchStatus,
                     data.date,
+                    nextSchStatus,
                     nextSch.id,
                   );
                 }
@@ -324,11 +360,13 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
               remainingPayment = Number((remainingPayment - applied).toFixed(2));
               const isSchPaid = (sch.amount - nextPaidAmount) <= 1.0;
               const finalSchPaid = isSchPaid ? sch.amount : nextPaidAmount;
+              const schStatus = isSchPaid ? 'paid' : (finalSchPaid > 0 ? 'partial' : 'unpaid');
               await tx.run(
-                `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?`,
+                `UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ?, notes = CASE WHEN ? = 'paid' THEN NULL ELSE notes END WHERE id = ?`,
                 finalSchPaid,
-                isSchPaid ? 'paid' : (finalSchPaid > 0 ? 'partial' : 'unpaid'),
+                schStatus,
                 data.date,
+                schStatus,
                 sch.id,
               );
             }
@@ -431,9 +469,19 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
         type: data.type,
       });
 
-      const installmentMatch = data.description?.match(/قسط\s+(\d+)/);
-      const installmentNo = installmentMatch ? installmentMatch[1] : (data.installmentId ?? '');
-      const detailedMessage = `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - سداد القسط ${installmentNo} من الفاتورة ${data.invoiceNumber || ''} - إيصال ${receiptNumber} - عميل ${clientName}`;
+      let actionLabel = '';
+      if (data.description?.includes('مقدم') || data.description?.includes('دفعة مقدمة')) {
+        actionLabel = `تحصيل دفعة مقدمة للفاتورة ${data.invoiceNumber || ''}`.trim();
+      } else {
+        const installmentMatch = data.description?.match(/قسط\s+(\d+)/);
+        const installmentNo = installmentMatch ? installmentMatch[1] : (data.installmentId ?? '');
+        if (installmentNo) {
+          actionLabel = `سداد القسط رقم ${installmentNo} من الفاتورة ${data.invoiceNumber || ''}`.trim();
+        } else {
+          actionLabel = `${data.description || 'حركة خزينة'} ${data.invoiceNumber ? `للفاتورة ${data.invoiceNumber}` : ''}`.trim();
+        }
+      }
+      const detailedMessage = `${financialMovementLabel(data.type)} ${formatMoney(data.amount)} - ${actionLabel} - إيصال ${receiptNumber}${clientName ? ` - عميل ${clientName}` : ''}`;
       await createSystemNotification(
         data.type === 'in' ? 'success' : 'warning',
         `حركة خزينة ${financialMovementLabel(data.type)}`,
@@ -443,7 +491,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
     return res.status(201).json({ id, receiptNumber });
   } catch (error: any) {
-    return res.status(500).json({ message: error.message || 'Database error' });
+    return res.status(error?.statusCode || 500).json({ message: error.message || 'Database error' });
   }
 });
 

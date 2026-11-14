@@ -279,6 +279,7 @@ export default function Settings() {
   const [networkLoading, setNetworkLoading] = useState(false);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [machineMode, setMachineMode] = useState<'server' | 'client'>('server');
+  const [allowModeSwitch, setAllowModeSwitch] = useState(false);
   const [clientIp, setClientIp] = useState(() => {
     const saved = localStorage.getItem('server_api_url');
     if (saved) return saved.replace(/^https?:\/\//, '').replace(/:4000$/, '');
@@ -744,58 +745,125 @@ export default function Settings() {
               </div>
             )}
 
-            {/* Mode Selection Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => setMachineMode('server')}
-                className={`flex flex-col items-start p-5 rounded-2xl border-2 transition-all cursor-pointer text-right ${
-                  machineMode === 'server'
-                    ? 'border-blue-600 bg-blue-50/60 shadow-sm'
-                    : 'border-slate-200 bg-white hover:border-slate-300'
-                }`}
-              >
-                <div className="flex items-center justify-between w-full mb-3">
-                  <div className={`p-2.5 rounded-xl ${machineMode === 'server' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                    <Server size={22} />
+            {/* Mode Status (Read-Only by default) or Selection Cards (when unlocked) */}
+            {!allowModeSwitch ? (
+              <div className={`flex flex-wrap items-center justify-between gap-4 p-5 rounded-2xl border-2 ${
+                machineMode === 'server'
+                  ? 'border-blue-200 bg-blue-50/50'
+                  : 'border-indigo-200 bg-indigo-50/50'
+              }`}>
+                <div className="flex items-start gap-3.5">
+                  <div className={`p-3 rounded-xl shrink-0 ${
+                    machineMode === 'server' ? 'bg-blue-600 text-white' : 'bg-indigo-600 text-white'
+                  }`}>
+                    {machineMode === 'server' ? <Server size={22} /> : <Monitor size={22} />}
                   </div>
-                  {machineMode === 'server' && (
-                    <span className="text-xs font-black text-blue-700 bg-blue-100 border border-blue-200 px-2.5 py-0.5 rounded-full">
-                      الوضع النشط
-                    </span>
-                  )}
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-black text-base text-slate-800">
+                        {machineMode === 'server' ? 'جهاز رئيسي (Server)' : 'جهاز فرعي (Client)'}
+                      </span>
+                      <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border ${
+                        machineMode === 'server'
+                          ? 'text-blue-700 bg-blue-100 border-blue-200'
+                          : 'text-indigo-700 bg-indigo-100 border-indigo-200'
+                      }`}>
+                        الوضع النشط
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
+                      {machineMode === 'server'
+                        ? 'الجهاز الأساسي الذي يحمل قاعدة البيانات ومحرك النظام. تشارك منه الرابط لبقية الأجهزة في المكتب.'
+                        : 'جهاز فرعي يتصل بالجهاز الرئيسي عبر الشبكة لحفظ واستعراض الفواتير والبيانات.'}
+                    </p>
+                  </div>
                 </div>
-                <span className="font-black text-base text-slate-800">جهاز رئيسي (Server)</span>
-                <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
-                  الجهاز الأساسي الذي يحمل قاعدة البيانات ومحرك النظام. تشارك منه الرابط لبقية الأجهزة في المكتب.
-                </p>
-              </button>
 
-              <button
-                type="button"
-                onClick={() => setMachineMode('client')}
-                className={`flex flex-col items-start p-5 rounded-2xl border-2 transition-all cursor-pointer text-right ${
-                  machineMode === 'client'
-                    ? 'border-indigo-600 bg-indigo-50/60 shadow-sm'
-                    : 'border-slate-200 bg-white hover:border-slate-300'
-                }`}
-              >
-                <div className="flex items-center justify-between w-full mb-3">
-                  <div className={`p-2.5 rounded-xl ${machineMode === 'client' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                    <Monitor size={22} />
-                  </div>
-                  {machineMode === 'client' && (
-                    <span className="text-xs font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-2.5 py-0.5 rounded-full">
-                      الوضع النشط
-                    </span>
-                  )}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await confirmDialog({
+                      title: 'تغيير وضع الجهاز (إعداد متقدم)',
+                      message: 'يتم تحديد وضع الجهاز (رئيسي أو فرعي) أثناء التثبيت الأولي للنظام.',
+                      subMessage: 'تغيير هذا الوضع قد يقطع الاتصال بقاعدة البيانات إذا تم عن طريق الخطأ. هل تريد فتح خيارات التبديل؟',
+                    });
+                    if (ok) {
+                      setAllowModeSwitch(true);
+                    }
+                  }}
+                  className="text-xs font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-2xs shrink-0"
+                >
+                  تغيير وضع الجهاز (متقدم)
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs">
+                  <span className="font-bold text-amber-800">
+                    وضع التعديل المتقدم مفتوح — اختر وضع الجهاز ثم قم بالتأكيد
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAllowModeSwitch(false)}
+                    className="font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3 py-1 rounded-lg cursor-pointer"
+                  >
+                    إلغاء / قفل التعديل
+                  </button>
                 </div>
-                <span className="font-black text-base text-slate-800">جهاز فرعي (Client)</span>
-                <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
-                  جهاز كمبيوتر آخر أو لابتوب في المكتب يتصل بالجهاز الرئيسي عبر الشبكة لحفظ واستعراض الفواتير والبيانات.
-                </p>
-              </button>
-            </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setMachineMode('server')}
+                    className={`flex flex-col items-start p-5 rounded-2xl border-2 transition-all cursor-pointer text-right ${
+                      machineMode === 'server'
+                        ? 'border-blue-600 bg-blue-50/60 shadow-sm'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-3">
+                      <div className={`p-2.5 rounded-xl ${machineMode === 'server' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        <Server size={22} />
+                      </div>
+                      {machineMode === 'server' && (
+                        <span className="text-xs font-black text-blue-700 bg-blue-100 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                          الوضع النشط
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-black text-base text-slate-800">جهاز رئيسي (Server)</span>
+                    <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
+                      الجهاز الأساسي الذي يحمل قاعدة البيانات ومحرك النظام. تشارك منه الرابط لبقية الأجهزة في المكتب.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setMachineMode('client')}
+                    className={`flex flex-col items-start p-5 rounded-2xl border-2 transition-all cursor-pointer text-right ${
+                      machineMode === 'client'
+                        ? 'border-indigo-600 bg-indigo-50/60 shadow-sm'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-3">
+                      <div className={`p-2.5 rounded-xl ${machineMode === 'client' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        <Monitor size={22} />
+                      </div>
+                      {machineMode === 'client' && (
+                        <span className="text-xs font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-2.5 py-0.5 rounded-full">
+                          الوضع النشط
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-black text-base text-slate-800">جهاز فرعي (Client)</span>
+                    <p className="mt-1 text-xs text-slate-500 leading-relaxed font-semibold">
+                      جهاز كمبيوتر آخر أو لابتوب في المكتب يتصل بالجهاز الرئيسي عبر الشبكة لحفظ واستعراض الفواتير والبيانات.
+                    </p>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* SERVER MODE DETAILS */}
             {machineMode === 'server' && (
@@ -865,23 +933,25 @@ export default function Settings() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleSaveModeServer()}
-                    disabled={networkLoading}
-                    className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-colors text-xs font-bold cursor-pointer shadow-sm"
-                  >
-                    <Save size={15} />
-                    تأكيد وتثبيت وضع الجهاز الرئيسي
-                  </button>
-                  {connSaved && (
-                    <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-                      <CheckCircle2 size={15} />
-                      تم تثبيت وضع الجهاز الرئيسي بنجاح
-                    </span>
-                  )}
-                </div>
+                {allowModeSwitch && (
+                  <div className="flex items-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveModeServer()}
+                      disabled={networkLoading}
+                      className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-colors text-xs font-bold cursor-pointer shadow-sm"
+                    >
+                      <Save size={15} />
+                      تأكيد وتثبيت وضع الجهاز الرئيسي
+                    </button>
+                    {connSaved && (
+                      <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                        <CheckCircle2 size={15} />
+                        تم تثبيت وضع الجهاز الرئيسي بنجاح
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

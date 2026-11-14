@@ -28,6 +28,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     try {
+      // Purge legacy persistent tokens from localStorage on startup to enforce per-session login
+      try {
+        localStorage.removeItem('api_token');
+        localStorage.removeItem('api_user');
+        localStorage.removeItem('almuttahida_auth');
+      } catch (_) {}
+
       if (isApiMode()) {
         setUser(getApiUser<User>());
       } else {

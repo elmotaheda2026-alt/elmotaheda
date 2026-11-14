@@ -223,10 +223,30 @@ export const dbPromise = (async () => {
 
   // ── MSSQL path (pool is connected) ────────────────────────────────────
 
+  let activePool = pool;
+
+  async function getHealthyPool(): Promise<any> {
+    if (activePool && activePool.connected) {
+      return activePool;
+    }
+    console.log('[DB] MSSQL pool disconnected or dead. Reconnecting...');
+    try {
+      const newPool = await tryConnectMssql();
+      if (newPool && newPool.connected) {
+        activePool = newPool;
+        mssqlPool = newPool;
+        return activePool;
+      }
+    } catch (err: any) {
+      console.warn('[DB] Reconnection attempt failed:', err?.message || err);
+    }
+    return activePool || pool;
+  }
+
   // Simulated critical alert hook for database latency/timeouts
   async function triggerCriticalAlert(errorMsg: string, query: string, params: QueryParams) {
     // eslint-disable-next-line no-console
-    console.error('\x1b[41m\x1b[37m ًںڑ¨ CRITICAL DB TIMEOUT ALERT ًںڑ¨ \x1b[0m');
+    console.error('\x1b[41m\x1b[37m 🚨 CRITICAL DB TIMEOUT ALERT 🚨 \x1b[0m');
     // eslint-disable-next-line no-console
     console.error(`Error: ${errorMsg}`);
     // eslint-disable-next-line no-console
@@ -244,8 +264,22 @@ export const dbPromise = (async () => {
     try {
       return await queryFn();
     } catch (error: any) {
+      const errMsg = String(error?.message || '').toLowerCase();
+      const isConnectionDead =
+        !activePool?.connected ||
+        errMsg.includes('closed') ||
+        errMsg.includes('connection') ||
+        errMsg.includes('socket') ||
+        error?.code === 'ECONNRESET';
+
+      if (isConnectionDead) {
+        console.warn('[DB] Broken DB connection detected (e.g. sleep/wake). Reconnecting and retrying...');
+        await getHealthyPool();
+        return await queryFn();
+      }
+
       const elapsed = Date.now() - startTime;
-      const isTimeout = error.message?.toLowerCase().includes('timeout') || elapsed >= config.sql.requestTimeout;
+      const isTimeout = errMsg.includes('timeout') || elapsed >= config.sql.requestTimeout;
       if (isTimeout) {
         await triggerCriticalAlert(
           `Database query timed out after ${elapsed}ms (Limit: ${config.sql.requestTimeout}ms)`,
@@ -257,10 +291,9 @@ export const dbPromise = (async () => {
     }
   }
 
-
-
   function prepareRequest(query: string, params: QueryParams, request?: RequestLike) {
-    return prepareSqlRequest(query, params, request || pool.request());
+    const currentPool = activePool || pool;
+    return prepareSqlRequest(query, params, request || currentPool.request());
   }
 
   function isPaginationOptions(value: QueryParam): value is PaginationOptions {
@@ -576,6 +609,7 @@ export async function initDb(): Promise<void> {
   IF COL_LENGTH('sales', 'discount') IS NULL ALTER TABLE sales ADD discount DECIMAL(18,2);
   IF COL_LENGTH('sales', 'tax') IS NULL ALTER TABLE sales ADD tax DECIMAL(18,2);
   IF COL_LENGTH('sales', 'notes') IS NULL ALTER TABLE sales ADD notes NVARCHAR(1000);
+  IF COL_LENGTH('sales', 'collection_note') IS NULL ALTER TABLE sales ADD collection_note NVARCHAR(500) NULL;
   IF COL_LENGTH('sales', 'payment_method') IS NULL ALTER TABLE sales ADD payment_method NVARCHAR(30);
   IF COL_LENGTH('sales', 'manual_invoice_ref') IS NULL ALTER TABLE sales ADD manual_invoice_ref NVARCHAR(100);
   IF COL_LENGTH('sales', 'sales_rep_id') IS NULL ALTER TABLE sales ADD sales_rep_id NVARCHAR(64);
@@ -643,10 +677,6 @@ export async function initDb(): Promise<void> {
   );
 
   IF COL_LENGTH('purchase_items', 'barcode') IS NOT NULL ALTER TABLE purchase_items ALTER COLUMN barcode NVARCHAR(100) NULL;
-  IF COL_LENGTH('installment_schedules', 'paid_at') IS NULL ALTER TABLE installment_schedules ADD paid_at NVARCHAR(50) NULL;
-  IF COL_LENGTH('installment_schedules', 'deferred') IS NULL ALTER TABLE installment_schedules ADD deferred BIT NOT NULL DEFAULT 0;
-  IF COL_LENGTH('installment_schedules', 'deferred_at') IS NULL ALTER TABLE installment_schedules ADD deferred_at NVARCHAR(50) NULL;
-  IF COL_LENGTH('installment_schedules', 'notes') IS NULL ALTER TABLE installment_schedules ADD notes NVARCHAR(255) NULL;
 
   -- 9. Installment Schedules
   IF OBJECT_ID('installment_schedules', 'U') IS NULL
@@ -663,6 +693,12 @@ export async function initDb(): Promise<void> {
     deferred_at NVARCHAR(50) NULL,
     notes NVARCHAR(255) NULL
   );
+
+  -- Upgrade older installment_schedules tables (must run AFTER the CREATE above)
+  IF COL_LENGTH('installment_schedules', 'paid_at') IS NULL ALTER TABLE installment_schedules ADD paid_at NVARCHAR(50) NULL;
+  IF COL_LENGTH('installment_schedules', 'deferred') IS NULL ALTER TABLE installment_schedules ADD deferred BIT NOT NULL DEFAULT 0;
+  IF COL_LENGTH('installment_schedules', 'deferred_at') IS NULL ALTER TABLE installment_schedules ADD deferred_at NVARCHAR(50) NULL;
+  IF COL_LENGTH('installment_schedules', 'notes') IS NULL ALTER TABLE installment_schedules ADD notes NVARCHAR(255) NULL;
 
   -- 10. Payments
   IF OBJECT_ID('payments', 'U') IS NULL

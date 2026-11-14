@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Edit, Trash2, Search, Phone, MapPin, DollarSign, Truck } from 'lucide-react';
+import { Plus, Edit, Trash2, Search, Phone, MapPin, DollarSign, Truck, FileText } from 'lucide-react';
 import { Supplier } from '../types';
 import { getSuppliers, createSupplier, updateSupplier, deleteSupplier, syncSuppliers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
@@ -7,12 +7,14 @@ import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
+import SupplierStatementModal from '../components/SupplierStatementModal';
 
 export default function Suppliers() {
   const { confirmDialog, showToast } = useDialog();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [inspectingSupplier, setInspectingSupplier] = useState<Supplier | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [formData, setFormData] = useState({
@@ -153,9 +155,69 @@ export default function Suppliers() {
         )}
       </div>
 
-      {/* Suppliers High-Density Table */}
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
-        <div className="overflow-auto h-[calc(100vh-210px)]">
+      {/* Suppliers High-Density Table (Desktop) & Cards (Mobile) */}
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs flex flex-col flex-1 min-h-0">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden flex-1 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+          {filteredSuppliers.length === 0 ? (
+            <div className="py-12 px-4 text-center text-slate-400 text-xs font-bold">لا يوجد موردين مطابِقين للبحث</div>
+          ) : (
+            filteredSuppliers.map((supplier) => (
+              <div key={`mob-sup-${supplier.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-black text-slate-900 text-sm break-words">{supplier.name}</p>
+                    {supplier.address && (
+                      <p className="text-xs text-slate-500 mt-0.5 break-words flex items-center gap-1">
+                        <MapPin size={11} className="text-slate-400 shrink-0" />
+                        <span>{supplier.address}</span>
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setInspectingSupplier(supplier)}
+                    className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}
+                  >
+                    {formatCurrency(supplier.balance)}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                  {supplier.phone ? (
+                    <a href={`tel:${supplier.phone}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-mono font-bold text-xs">
+                      <Phone size={12} className="text-emerald-600 shrink-0" />
+                      <span dir="ltr">{supplier.phone}</span>
+                    </a>
+                  ) : <span />}
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setInspectingSupplier(supplier)}
+                      className="px-2.5 py-1 text-indigo-700 bg-indigo-50 rounded-lg text-xs font-bold inline-flex items-center gap-1"
+                    >
+                      <FileText size={13} />
+                      كشف الحساب
+                    </button>
+                    {hasPermission(user, 'sales:write') && user?.role !== 'manager' && (
+                      <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
+                        <Edit size={14} />
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button onClick={() => handleDelete(supplier)} className="p-1.5 text-rose-600 bg-rose-50 rounded-lg" title="حذف">
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-auto h-[calc(100vh-210px)]">
           <table className="w-full min-w-[700px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -183,12 +245,31 @@ export default function Suppliers() {
                     <td className="py-2.5 px-4 text-xs md:text-sm text-slate-700 font-mono">{supplier.phone}</td>
                     <td className="py-2.5 px-4 text-xs md:text-sm text-slate-600 truncate max-w-[240px]">{supplier.address || '—'}</td>
                     <td className="py-2.5 px-4 text-xs md:text-sm font-bold">
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setInspectingSupplier(supplier);
+                        }}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer hover:opacity-85 transition-opacity ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}
+                        title="انقر لعرض سجل المحاسبات وكشف الحساب"
+                      >
                         {formatCurrency(supplier.balance)}
-                      </span>
+                      </button>
                     </td>
                     <td className="py-2.5 px-4 text-center">
                       <div className="erp-icon-actions">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setInspectingSupplier(supplier);
+                          }}
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                          title="سجل محاسبات وكشف حساب المورد"
+                        >
+                          <FileText size={15} />
+                        </button>
                         {hasPermission(user, 'sales:write') && user?.role !== 'manager' && (
                           <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="تعديل">
                             <Edit size={15} />
@@ -198,9 +279,6 @@ export default function Suppliers() {
                           <button onClick={() => handleDelete(supplier)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors" title="حذف">
                             <Trash2 size={15} />
                           </button>
-                        )}
-                        {user?.role === 'manager' && (
-                          <span className="text-xs text-slate-400 font-bold">—</span>
                         )}
                       </div>
                     </td>
@@ -298,6 +376,13 @@ export default function Suppliers() {
           </div>
         </div>
       )}
+      {/* Supplier Statement Ledger Modal */}
+      <SupplierStatementModal
+        supplier={inspectingSupplier}
+        isOpen={!!inspectingSupplier}
+        onClose={() => setInspectingSupplier(null)}
+        onBalanceUpdated={loadSuppliers}
+      />
     </div>
   );
 }

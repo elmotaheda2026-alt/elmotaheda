@@ -14,7 +14,7 @@
     "preview": "pnpm install --prefer-offline && vite preview",
     "install-deps": "pnpm install --prefer-offline",
     "clean": "rimraf node_modules .pnpm-store pnpm-lock.yaml && pnpm store prune",
-    "electron:dev": "cross-env NODE_ENV=development electron .",
+    "electron:dev": "cross-env ELECTRON_RUN_AS_NODE= NODE_ENV=development electron .",
     "electron:build": "pnpm build && cross-env NODE_ENV=production electron .",
     "build:backend": "cd ../al-muttahida-backend && pnpm build",
     "generate:icons": "node scripts/create-all-icons.cjs",
@@ -113,6 +113,9 @@
       "dist/**/*",
       "electron/**/*"
     ],
+    "asarUnpack": [
+      "electron/init-sql-login.ps1"
+    ],
     "extraResources": [
       {
         "from": "../al-muttahida-backend/dist",
@@ -155,7 +158,7 @@
           ]
         }
       ],
-      "requestedExecutionLevel": "requireAdministrator"
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "oneClick": false,

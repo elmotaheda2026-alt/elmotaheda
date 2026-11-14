@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Edit, Trash2, Search, UserCheck } from 'lucide-react';
+import { Plus, Edit, Trash2, Search, UserCheck, Phone } from 'lucide-react';
 import { SalesRep } from '../types';
 import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSalesReps } from '../lib/storage';
 import { isApiMode } from '../lib/apiClient';
@@ -145,9 +145,69 @@ export default function SalesReps() {
         )}
       </div>
 
-      {/* Reps Table */}
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-auto h-[calc(100vh-210px)]">
+      {/* Reps Table (Desktop) & Cards (Mobile) */}
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm flex flex-col flex-1 min-h-0">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden flex-1 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+          {filteredReps.length === 0 ? (
+            <div className="py-12 text-center text-slate-500 text-sm font-bold">لا يوجد مناديب مطابِقين</div>
+          ) : (
+            filteredReps.map((rep) => {
+              const percentage = rep.target > 0 ? Math.min((rep.achieved / rep.target) * 100, 100) : 0;
+              return (
+                <div key={`mob-rep-${rep.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-black text-slate-900 text-sm">{rep.name}</p>
+                      <p className="text-xs text-slate-500 font-semibold mt-0.5">{rep.area || 'بدون منطقة'}</p>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold shrink-0 ${rep.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-100 text-slate-500'}`}>
+                      {rep.isActive ? 'نشط' : 'موقوف'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-1.5 bg-slate-50 rounded-xl p-2 text-center text-xs border border-slate-100">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-bold">الهدف</span>
+                      <span className="font-bold text-slate-800">{rep.target.toLocaleString()}</span>
+                    </div>
+                    <div className="border-x border-slate-200">
+                      <span className="text-[10px] text-slate-400 block font-bold">المحقق</span>
+                      <span className="font-bold text-emerald-600">{rep.achieved.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-bold">النسبة</span>
+                      <span className="font-black text-slate-700">{percentage.toFixed(0)}%</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
+                    {rep.phone ? (
+                      <a href={`tel:${rep.phone}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-mono font-bold text-xs">
+                        <Phone size={12} className="text-emerald-600 shrink-0" />
+                        <span dir="ltr">{rep.phone}</span>
+                      </a>
+                    ) : <span />}
+                    <div className="flex items-center gap-1.5">
+                      {user?.role !== 'manager' && (
+                        <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
+                          <Edit size={14} />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 bg-red-50 rounded-lg" title="حذف">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-auto h-[calc(100vh-210px)]">
           <table className="w-full min-w-[800px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>

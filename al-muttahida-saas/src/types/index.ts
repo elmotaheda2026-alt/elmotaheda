@@ -79,6 +79,44 @@ export interface Supplier {
   updatedAt: string;
 }
 
+export interface SupplierLedgerItem {
+  productName: string;
+  barcode?: string;
+  quantity: number;
+  unitPrice: number;
+  discount?: number;
+  tax?: number;
+  total: number;
+}
+
+export interface SupplierLedgerTransaction {
+  id: string;
+  date: string;
+  rawDate: string;
+  type: 'opening_balance' | 'purchase' | 'payment_out' | 'payment_in' | 'purchase_downpayment';
+  typeLabel: string;
+  docNumber: string;
+  description: string;
+  credit: number;
+  debit: number;
+  runningBalance: number;
+  items?: SupplierLedgerItem[];
+  createdBy?: string;
+}
+
+export interface SupplierStatement {
+  supplier: Supplier;
+  summary: {
+    openingBalance: number;
+    totalPurchasesAmount: number;
+    totalPaymentsAmount: number;
+    currentBalance: number;
+    purchasesCount: number;
+    paymentsCount: number;
+  };
+  transactions: SupplierLedgerTransaction[];
+}
+
 export interface Product {
   id: string;
   name: string;

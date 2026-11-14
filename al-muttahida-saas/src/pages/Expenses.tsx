@@ -441,7 +441,44 @@ export default function Expenses() {
 
       {/* Tier 3: Flexible & Scrollable Table Card */}
       <div className="desktop-table-card print:border print:border-slate-300 print:rounded-lg print:p-0 print:shadow-none">
-        <div className="desktop-table-scroll print:overflow-visible print:h-auto">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar print:hidden">
+          {isLoading ? (
+            <div className="py-10 text-center text-slate-400 text-xs font-bold">جاري التحميل...</div>
+          ) : filteredExpenses.length === 0 ? (
+            <div className="py-10 px-4 text-center text-slate-400 text-xs font-bold">
+              {error ? 'تعذر جلب البيانات بسبب انقطاع الاتصال بقاعدة البيانات' : 'لا توجد سندات صرف مطابِقة للبحث والفترة المحددة'}
+            </div>
+          ) : (
+            filteredExpenses.map((expense) => (
+              <div key={`mob-exp-${expense.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="inline-block px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[11px] font-bold mb-1">
+                      {expense.category}
+                    </span>
+                    <p className="text-sm text-slate-800 font-bold break-words">{expense.description}</p>
+                  </div>
+                  <span className="text-sm font-black text-rose-700 font-mono shrink-0">{formatCurrency(expense.amount)}</span>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                  <span className="text-slate-500 font-mono font-semibold">{formatDateDisplay(expense.date)}</span>
+                  {user?.role !== 'manager' && (
+                    <button
+                      onClick={() => handleDelete(expense.id, expense.description)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors"
+                    >
+                      <Trash2 size={13} />
+                      حذف
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block desktop-table-scroll print:block print:overflow-visible print:h-auto">
           <table className="w-full text-right border-collapse print:min-w-0 print:w-full">
             <thead className="desktop-sticky-header print:static">
               <tr>

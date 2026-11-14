@@ -13,13 +13,27 @@ import {
   Sparkles,
   ShieldCheck,
   Building2,
-  Loader2
+  Loader2,
+  Settings,
+  ChevronDown,
+  ChevronUp,
+  Save,
+  KeyRound
 } from 'lucide-react';
 
 interface ElectronAPI {
   startApp: (config: { mode: 'server' | 'client'; serverIp?: string }) => void;
   checkSqlStatus: () => Promise<{ running: boolean; port?: number; error?: string }>;
   downloadAndInstallSql: () => Promise<{ success: boolean; error?: string }>;
+  saveCustomSqlConfig?: (cfg: {
+    host?: string;
+    instanceName?: string;
+    port?: number;
+    dbUser?: string;
+    dbPassword?: string;
+    database?: string;
+    lastSuccessfulServer?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   onSqlProgress: (callback: (data: { step: string; percent: number; msg: string }) => void) => void;
   scanNetwork: () => Promise<string | null>;
   testServerIp: (ip: string) => Promise<{ ok: boolean; error?: string }>;
@@ -27,6 +41,7 @@ interface ElectronAPI {
   onStatus?: (callback: (msg: string) => void) => void;
   onError?: (callback: (err: string) => void) => void;
   onAppStarted?: (callback: (data: { success: boolean; mode: string; apiUrl: string }) => void) => void;
+  onNavigate?: (callback: (route: string) => void) => void;
 }
 
 declare global {
@@ -47,6 +62,17 @@ export default function OnboardingWizard() {
   const [sqlStatus, setSqlStatus] = useState<'idle' | 'checking' | 'ready' | 'error'>('idle');
   const [sqlMessage, setSqlMessage] = useState<string>('جاري اختبار محرك البيانات...');
   const [installProgress, setInstallProgress] = useState<{ percent: number; msg: string } | null>(null);
+
+  // Advanced SQL configuration
+  const [showAdvancedSql, setShowAdvancedSql] = useState<boolean>(false);
+  const [customHost, setCustomHost] = useState<string>('localhost');
+  const [customInstance, setCustomInstance] = useState<string>('SQLEXPRESS');
+  const [customPort, setCustomPort] = useState<string>('1433');
+  const [customUser, setCustomUser] = useState<string>('alm_app');
+  const [customPassword, setCustomPassword] = useState<string>('Alm@2026#App');
+  const [customDbName, setCustomDbName] = useState<string>('AlMuttahida_New');
+  const [isSavingCustomSql, setIsSavingCustomSql] = useState<boolean>(false);
+  const [customSqlMsg, setCustomSqlMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Client state
   const [serverIp, setServerIp] = useState<string>('');
@@ -143,6 +169,48 @@ export default function OnboardingWizard() {
     }
   };
 
+  // Save custom SQL connection settings
+  const handleSaveCustomSql = async () => {
+    setIsSavingCustomSql(true);
+    setCustomSqlMsg(null);
+    try {
+      const host = customHost.trim() || 'localhost';
+      const instance = customInstance.trim();
+      const portNum = customPort.trim() ? Number(customPort.trim()) : 1433;
+      const fullTarget = instance ? `${host}\\${instance}` : host;
+
+      if (window.electronAPI?.saveCustomSqlConfig) {
+        const res = await window.electronAPI.saveCustomSqlConfig({
+          host,
+          instanceName: instance || undefined,
+          port: portNum,
+          dbUser: customUser.trim() || 'alm_app',
+          dbPassword: customPassword,
+          database: customDbName.trim() || 'AlMuttahida_New',
+          lastSuccessfulServer: fullTarget,
+        });
+
+        if (res && res.success) {
+          setCustomSqlMsg({ type: 'success', text: 'تم حفظ إعدادات الاتصال بنجاح! جاري فحص الاتصال الآن...' });
+          setTimeout(() => {
+            checkSqlEngine();
+          }, 800);
+        } else {
+          setCustomSqlMsg({ type: 'error', text: res?.error || 'فشل حفظ الإعدادات' });
+        }
+      } else {
+        setCustomSqlMsg({ type: 'success', text: 'تم حفظ الإعدادات تجريبياً! جاري فحص الاتصال...' });
+        setTimeout(() => {
+          checkSqlEngine();
+        }, 800);
+      }
+    } catch (err: any) {
+      setCustomSqlMsg({ type: 'error', text: 'خطأ: ' + (err.message || String(err)) });
+    } finally {
+      setIsSavingCustomSql(false);
+    }
+  };
+
   // Scan network for Server IP (Client Mode)
   const handleAutoScanNetwork = async () => {
     setClientChecking(true);
@@ -234,6 +302,8 @@ export default function OnboardingWizard() {
 
     if (selectedMode === 'client' && serverIp.trim()) {
       localStorage.setItem('server_api_url', `http://${serverIp.trim()}:4000`);
+    } else if (selectedMode === 'server') {
+      localStorage.removeItem('server_api_url');
     }
 
     if (window.electronAPI && window.electronAPI.startApp) {
@@ -252,12 +322,12 @@ export default function OnboardingWizard() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col justify-between p-4 md:p-8" dir="rtl">
+    <div className="h-[100dvh] overflow-y-auto overflow-x-hidden bg-slate-50 text-slate-800 flex flex-col justify-between p-4 md:p-8 custom-scrollbar" dir="rtl">
       {/* Top Header */}
       <div className="max-w-3xl mx-auto w-full pt-4">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-700 to-indigo-800 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
               <Building2 className="w-6 h-6" />
             </div>
             <div>
@@ -265,7 +335,7 @@ export default function OnboardingWizard() {
               <p className="text-xs text-slate-500 font-medium">معالج الإعداد والتهيئة التلقائية للنظام</p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
             <Sparkles className="w-3.5 h-3.5" />
             الإصدار 2.0 المحدث
           </span>
@@ -274,21 +344,22 @@ export default function OnboardingWizard() {
         {/* Stepper Progress Bar */}
         <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-sm mb-6">
           <div className="flex items-center justify-between relative">
-            <div className="absolute top-1/2 right-6 left-6 -translate-y-1/2 h-0.5 bg-slate-100 -z-0" />
-            <div
-              className="absolute top-1/2 right-6 -translate-y-1/2 h-0.5 bg-emerald-500 transition-all duration-500 -z-0"
-              style={{
-                width: currentStep === 'role' ? '0%' : currentStep === 'connection' ? '50%' : '100%'
-              }}
-            />
+            <div className="absolute top-[18px] right-8 left-8 -translate-y-1/2 h-0.5 bg-slate-100 -z-0 overflow-hidden rounded-full">
+              <div
+                className="h-full bg-blue-600 transition-all duration-500 rounded-full"
+                style={{
+                  width: currentStep === 'role' ? '0%' : currentStep === 'connection' ? '50%' : '100%'
+                }}
+              />
+            </div>
 
             {/* Step 1 */}
             <div className="relative z-10 flex flex-col items-center gap-1.5 bg-white px-2">
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                   currentStep === 'role'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'bg-emerald-100 text-emerald-800'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'bg-blue-100 text-blue-800'
                 }`}
               >
                 1
@@ -301,9 +372,9 @@ export default function OnboardingWizard() {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                   currentStep === 'connection'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
                     : currentStep === 'launch'
-                    ? 'bg-emerald-100 text-emerald-800'
+                    ? 'bg-blue-100 text-blue-800'
                     : 'bg-slate-100 text-slate-400'
                 }`}
               >
@@ -317,7 +388,7 @@ export default function OnboardingWizard() {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                   currentStep === 'launch'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
                     : 'bg-slate-100 text-slate-400'
                 }`}
               >
@@ -348,17 +419,17 @@ export default function OnboardingWizard() {
                   onClick={() => setSelectedMode('server')}
                   className={`p-6 rounded-2xl border-2 cursor-pointer transition-all relative flex flex-col justify-between ${
                     selectedMode === 'server'
-                      ? 'border-emerald-500 bg-emerald-50/40 shadow-sm'
+                      ? 'border-blue-600 bg-blue-50/40 shadow-sm'
                       : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
                   }`}
                 >
                   {selectedMode === 'server' && (
-                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs">
+                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs">
                       <CheckCircle2 className="w-4 h-4" />
                     </span>
                   )}
                   <div>
-                    <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-4">
+                    <div className="w-12 h-12 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center mb-4">
                       <Server className="w-6 h-6" />
                     </div>
                     <h3 className="text-base font-bold text-slate-900 mb-1.5">جهاز رئيسي (خادم / Server)</h3>
@@ -366,7 +437,7 @@ export default function OnboardingWizard() {
                       الجهاز الأساسي اللي عليه البيانات والمعاملات. يشغل محرك SQL Server وتتصل به باقي الأجهزة في المنشأة.
                     </p>
                   </div>
-                  <span className="mt-4 text-[11px] font-semibold text-emerald-700 bg-emerald-100/70 py-1 px-2.5 rounded-lg w-fit">
+                  <span className="mt-4 text-[11px] font-semibold text-blue-700 bg-blue-100/70 py-1 px-2.5 rounded-lg w-fit">
                     موصى به للجهاز الرئيسي
                   </span>
                 </div>
@@ -376,17 +447,17 @@ export default function OnboardingWizard() {
                   onClick={() => setSelectedMode('client')}
                   className={`p-6 rounded-2xl border-2 cursor-pointer transition-all relative flex flex-col justify-between ${
                     selectedMode === 'client'
-                      ? 'border-emerald-500 bg-emerald-50/40 shadow-sm'
+                      ? 'border-blue-600 bg-blue-50/40 shadow-sm'
                       : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
                   }`}
                 >
                   {selectedMode === 'client' && (
-                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs">
+                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs">
                       <CheckCircle2 className="w-4 h-4" />
                     </span>
                   )}
                   <div>
-                    <div className="w-12 h-12 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center mb-4">
+                    <div className="w-12 h-12 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center mb-4">
                       <Laptop className="w-6 h-6" />
                     </div>
                     <h3 className="text-base font-bold text-slate-900 mb-1.5">جهاز فرعي (عميل / Client)</h3>
@@ -394,7 +465,7 @@ export default function OnboardingWizard() {
                       أي جهاز كاشير أو كمبيوتر آخر في المحل. لا يحتاج تثبيت SQL Server ويتصل مباشرة بالسيرفر عبر الراوتر.
                     </p>
                   </div>
-                  <span className="mt-4 text-[11px] font-semibold text-blue-700 bg-blue-100/70 py-1 px-2.5 rounded-lg w-fit">
+                  <span className="mt-4 text-[11px] font-semibold text-indigo-700 bg-indigo-100/70 py-1 px-2.5 rounded-lg w-fit">
                     إعداد فوري بدون تسطيب
                   </span>
                 </div>
@@ -469,11 +540,11 @@ export default function OnboardingWizard() {
                       <div className="mt-4 pt-4 border-t border-slate-200">
                         <div className="flex justify-between text-xs text-slate-600 font-medium mb-1.5">
                           <span>{installProgress.msg}</span>
-                          <span className="font-bold text-emerald-700">{installProgress.percent}%</span>
+                          <span className="font-bold text-blue-700">{installProgress.percent}%</span>
                         </div>
                         <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-300"
+                            className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
                             style={{ width: `${installProgress.percent}%` }}
                           />
                         </div>
@@ -483,9 +554,9 @@ export default function OnboardingWizard() {
 
                   {/* Auto Provision Card when error or offline */}
                   {sqlStatus === 'error' && !installProgress && (
-                    <div className="p-5 rounded-2xl bg-emerald-50/60 border border-emerald-200 mb-6">
-                      <div className="flex items-center gap-2 text-emerald-900 font-bold text-sm mb-1">
-                        <Sparkles className="w-4 h-4 text-emerald-600" />
+                    <div className="p-5 rounded-2xl bg-blue-50/60 border border-blue-200 mb-6">
+                      <div className="flex items-center gap-2 text-blue-900 font-bold text-sm mb-1">
+                        <Sparkles className="w-4 h-4 text-blue-600" />
                         <span>التهيئة الآلية بضغطة زر واحدة</span>
                       </div>
                       <p className="text-xs text-slate-600 mb-4 leading-relaxed">
@@ -493,13 +564,140 @@ export default function OnboardingWizard() {
                       </p>
                       <button
                         onClick={handleAutoProvisionSql}
-                        className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm shadow-emerald-600/30 transition flex items-center justify-center gap-2"
+                        className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm shadow-blue-600/30 transition flex items-center justify-center gap-2"
                       >
                         <ShieldCheck className="w-4 h-4" />
                         بدء التهيئة والربط الآلي الآن
                       </button>
                     </div>
                   )}
+
+                  {/* Advanced Custom SQL Configuration Card */}
+                  <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white mb-4">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdvancedSql(!showAdvancedSql)}
+                      className="w-full px-5 py-3.5 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between text-xs font-bold text-slate-700 transition"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4 text-slate-500" />
+                        <span>إعدادات الاتصال المتقدمة بمحرك SQL Server (تخصيص الخادم / النسخة / المستخدم)</span>
+                      </div>
+                      {showAdvancedSql ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                    </button>
+
+                    {showAdvancedSql && (
+                      <div className="p-5 border-t border-slate-200 space-y-4 bg-slate-50/30">
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          إذا قمت بتثبيت SQL Server بشكل يدوي باسم نسخة معين (مثل <code className="font-mono bg-slate-100 px-1 py-0.5 rounded text-blue-700">SQLEXPRESS</code>) أو مستخدم مخصص، يمكنك حفظ إعداداته هنا مباشرة وسيقوم النظام بربطها فوراً.
+                        </p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">اسم الخادم / Server Host:</label>
+                            <input
+                              type="text"
+                              value={customHost}
+                              onChange={(e) => setCustomHost(e.target.value)}
+                              placeholder="localhost أو 127.0.0.1"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              dir="ltr"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">اسم النسخة / Instance Name (اختياري):</label>
+                            <input
+                              type="text"
+                              value={customInstance}
+                              onChange={(e) => setCustomInstance(e.target.value)}
+                              placeholder="SQLEXPRESS أو اتركه فارغاً"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              dir="ltr"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">المستخدم / DB User:</label>
+                            <input
+                              type="text"
+                              value={customUser}
+                              onChange={(e) => setCustomUser(e.target.value)}
+                              placeholder="alm_app أو sa"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              dir="ltr"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">كلمة المرور / Password:</label>
+                            <div className="relative">
+                              <input
+                                type="password"
+                                value={customPassword}
+                                onChange={(e) => setCustomPassword(e.target.value)}
+                                placeholder="Alm@2026#App"
+                                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                dir="ltr"
+                              />
+                              <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">منفذ TCP Port (افتراضي 1433):</label>
+                            <input
+                              type="text"
+                              value={customPort}
+                              onChange={(e) => setCustomPort(e.target.value)}
+                              placeholder="1433"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              dir="ltr"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-slate-700 mb-1">اسم قاعدة البيانات / Database Name:</label>
+                            <input
+                              type="text"
+                              value={customDbName}
+                              onChange={(e) => setCustomDbName(e.target.value)}
+                              placeholder="AlMuttahida_New"
+                              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              dir="ltr"
+                            />
+                          </div>
+                        </div>
+
+                        {customSqlMsg && (
+                          <div
+                            className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                              customSqlMsg.type === 'success'
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                : 'bg-rose-50 text-rose-700 border border-rose-200'
+                            }`}
+                          >
+                            {customSqlMsg.type === 'success' ? (
+                              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                            )}
+                            <span>{customSqlMsg.text}</span>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={handleSaveCustomSql}
+                          disabled={isSavingCustomSql}
+                          className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                        >
+                          {isSavingCustomSql ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                          حفظ الإعدادات وفحص الاتصال
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 /* Client Mode Section */
@@ -517,7 +715,7 @@ export default function OnboardingWizard() {
                       <button
                         onClick={handleAutoScanNetwork}
                         disabled={clientChecking}
-                        className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200"
+                        className="text-xs font-semibold text-blue-700 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200"
                       >
                         <Wifi className="w-3.5 h-3.5" />
                         بحث تلقائي بالشبكة
@@ -530,7 +728,7 @@ export default function OnboardingWizard() {
                         value={serverIp}
                         onChange={(e) => setServerIp(e.target.value)}
                         placeholder="مثال: 192.168.1.10 أو localhost"
-                        className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-sm font-mono text-left focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white"
+                        className="flex-1 px-4 py-2.5 rounded-xl border border-slate-300 text-sm font-mono text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                         dir="ltr"
                       />
                       <button
@@ -615,7 +813,7 @@ export default function OnboardingWizard() {
               <button
                 onClick={goToNextStep}
                 disabled={selectedMode === 'server' && currentStep === 'connection' && sqlStatus !== 'ready'}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+                className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
               >
                 متابعة
                 <ArrowLeft className="w-4 h-4" />
@@ -624,7 +822,7 @@ export default function OnboardingWizard() {
               <button
                 onClick={handleLaunchApp}
                 disabled={isLaunching}
-                className="w-full md:w-auto px-8 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-bold shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2"
+                className="w-full md:w-auto px-8 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white text-sm font-bold shadow-lg shadow-blue-600/25 transition flex items-center justify-center gap-2"
               >
                 {isLaunching ? (
                   <>
@@ -633,7 +831,6 @@ export default function OnboardingWizard() {
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-4 h-4" />
                     دخول لوحة التحكم والبدء
                   </>
                 )}

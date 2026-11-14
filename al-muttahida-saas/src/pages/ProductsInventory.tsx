@@ -385,7 +385,70 @@ export default function ProductsInventory() {
 
       {/* Flexible & Scrollable Products Table Card */}
       <section className="desktop-table-card">
-        <div className="desktop-table-scroll">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+          {filteredProducts.length === 0 ? (
+            <div className="py-12 px-4 text-center text-slate-400 flex flex-col items-center">
+              <Package size={36} className="mb-2 text-slate-300" />
+              <p className="text-sm font-bold text-slate-600">لا توجد أصناف مطابقة للبحث أو الفلتر</p>
+            </div>
+          ) : (
+            visibleProducts.map((product) => {
+              const isStocked = product.fulfillmentType === 'stocked';
+              const qty = Number(product.quantity || 0);
+              return (
+                <div
+                  key={`mob-prod-${product.id}`}
+                  onClick={() => user?.role !== 'manager' && handleEdit(product)}
+                  className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5 cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-black text-slate-900 text-sm break-words">{product.name}</p>
+                      <span className="text-[11px] font-mono text-slate-400 font-bold">
+                        {product.barcode || '---'} • {product.unit || 'قطعة'}
+                      </span>
+                    </div>
+                    {isStocked ? (
+                      qty > 0 ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 shrink-0">
+                          {qty} {product.unit || 'قطعة'}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black text-rose-800 bg-rose-100 border border-rose-300 shrink-0">
+                          0 (نافد)
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-slate-500 font-bold text-xs bg-slate-100 px-2 py-0.5 rounded-full shrink-0">حسب الطلب</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                    <div className="flex items-center gap-3">
+                      <span>الشراء: <strong className="text-slate-800">{formatCurrency(product.purchasePrice)}</strong></span>
+                      <span>البيع: <strong className="text-blue-700">{formatCurrency(product.salePrice)}</strong></span>
+                    </div>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {user?.role !== 'manager' && (
+                        <button onClick={() => handleEdit(product)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
+                          <Edit size={14} />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button onClick={() => handleDelete(product.id)} className="p-1.5 text-rose-600 bg-rose-50 rounded-lg" title="حذف">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block desktop-table-scroll">
           <table className="w-full min-w-[750px] border-collapse">
             <thead className="desktop-sticky-header">
               <tr>

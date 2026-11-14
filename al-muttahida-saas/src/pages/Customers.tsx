@@ -719,7 +719,101 @@ export default function Customers() {
       {/* Tier 3: Flexible & Scrollable Customers Table */}
       {viewMode === 'table' ? (
         <div className="desktop-table-card">
-          <div className="desktop-table-scroll">
+          {/* Mobile Cards View (< md) */}
+          <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+            {filteredCustomers.length === 0 ? (
+              <div className="py-12 px-4 text-center text-slate-400 flex flex-col items-center gap-2">
+                <Users size={28} className="text-slate-300" />
+                <p className="text-sm font-bold text-slate-700">لا يوجد عملاء مطابِقين للبحث الحالي</p>
+              </div>
+            ) : (
+              visibleCustomers.map((customer) => (
+                <div
+                  key={`mob-${customer.id}`}
+                  onClick={() => handleEdit(customer)}
+                  className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5 cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${customer.isSued ? 'bg-red-50 text-red-600 border-red-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                        {customer.isSued ? <Gavel size={14} /> : <User size={14} />}
+                      </div>
+                      <div className="min-w-0">
+                        <p className={`font-black text-sm leading-snug break-words ${customer.isSued ? 'text-red-600 line-through' : 'text-slate-800'}`}>
+                          {customer.name}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 font-mono border border-blue-100">
+                            {customer.customerNumber}
+                          </span>
+                          {customer.isSued && (
+                            <span className="text-[10px] text-red-500 font-bold inline-flex items-center gap-0.5">
+                              <AlertTriangle size={10} /> محال للقضاء
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-bold shrink-0 ${Number(customer.balance) > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-slate-100 text-slate-600'}`}>
+                      {formatCurrency(customer.balance)} {Math.round(Number(customer.balance)) > 0 ? 'مدين' : ''}
+                    </span>
+                  </div>
+
+                  {customer.address && (
+                    <div className="flex items-start gap-1.5 text-xs text-slate-500">
+                      <MapPin size={12} className="text-slate-400 shrink-0 mt-0.5" />
+                      <span className="break-words">{customer.address}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
+                    {customer.phone ? (
+                      <a
+                        href={`tel:${customer.phone}`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-mono font-bold text-xs"
+                      >
+                        <Phone size={12} className="text-emerald-600 shrink-0" />
+                        <span dir="ltr">{customer.phone}</span>
+                      </a>
+                    ) : <span />}
+
+                    <div className="flex items-center gap-1">
+                      {canModify && (
+                        <>
+                          <button
+                            onClick={() => void handleToggleSued(customer)}
+                            className={`p-1.5 rounded-lg transition-colors ${customer.isSued ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'}`}
+                            title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء'}
+                          >
+                            <Gavel size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleEdit(customer)}
+                            className="p-1.5 text-blue-600 bg-blue-50 rounded-lg transition-colors"
+                            title="تعديل"
+                          >
+                            <Edit size={14} />
+                          </button>
+                        </>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => handleDelete(customer.id)}
+                          className="p-1.5 text-rose-600 bg-rose-50 rounded-lg transition-colors"
+                          title="حذف"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block desktop-table-scroll">
             <table className="w-full border-collapse">
               <thead className="desktop-sticky-header">
                 <tr>

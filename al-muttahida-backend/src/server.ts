@@ -9,7 +9,7 @@ import { requestLogger } from './middleware/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
-import { initDb } from './db.js';
+import { initDb, mssqlPool } from './db.js';
 import authRoutes from './routes/auth.js';
 import salesRoutes from './routes/sales.js';
 import paymentRoutes from './routes/payments.js';
@@ -40,7 +40,11 @@ async function bootstrap() {
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        // Allow requests with no origin, null origin (file://), or local file schemes (Electron packaged apps)
+        if (!origin || origin === 'null' || origin.startsWith('file:') || origin.startsWith('vscode-file:')) {
+          return callback(null, true);
+        }
+        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
         try {
@@ -60,16 +64,61 @@ async function bootstrap() {
           }
         } catch {}
 
-        return callback(new Error(`CORS origin '${origin}' not allowed.`));
+        // Reject unknown external internet origins (allow * only if explicitly configured via CORS_ORIGIN=*)
+        if (process.env.CORS_ORIGIN && allowedOrigins.includes('*')) {
+          return callback(null, true);
+        }
+        return callback(new Error('Origin not allowed by CORS'));
       },
       credentials: true,
     })
   );
   app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(
+    rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 600, // generous for ERP LAN polling & normal usage while blocking floods
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'تم إرسال عدد كبير جداً من الطلبات، يرجى الانتظار لحظة ثم المحاولة.' },
+    })
+  );
   app.use(express.json({ limit: '5mb' }));
   app.use(morgan('dev'));
   // Request logging
   app.use(requestLogger);
+
+  // Enforce strict read-only mode for mobile devices (blocks all mutations except login/logout)
+  app.use((req, res, next) => {
+    const method = req.method.toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+      return next();
+    }
+
+    const normalizedPath = req.path.toLowerCase();
+    if (
+      normalizedPath === '/auth/login' ||
+      normalizedPath === '/api/auth/login' ||
+      normalizedPath === '/auth/logout' ||
+      normalizedPath === '/api/auth/logout'
+    ) {
+      return next();
+    }
+
+    const userAgent = String(req.headers['user-agent'] || '');
+    const clientDeviceHeader = String(req.headers['x-client-device'] || '').toLowerCase();
+    const isMobileClient =
+      clientDeviceHeader === 'mobile' ||
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(userAgent);
+
+    if (isMobileClient) {
+      return res.status(403).json({
+        error: 'وضع العرض فقط: التعديل أو الإضافة أو الحذف غير مسموح من الموبايل لحماية البيانات.',
+      });
+    }
+
+    return next();
+  });
 
   // Track database connection state for health checks
   let dbStatus: { connected: boolean; error: string | null } = { connected: false, error: null };
@@ -96,15 +145,17 @@ async function bootstrap() {
   app.get('/health/db', dbHealthHandler);
   app.get('/api/health/db', dbHealthHandler);
 
-  // Swagger setup
-  const swaggerSpec = swaggerJsdoc({
-    definition: {
-      openapi: '3.0.0',
-      info: { title: 'Al-Muttahida API', version: '1.0.0' },
-    },
-    apis: ['./src/routes/*.ts'],
-  });
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  // Swagger setup (development only)
+  if (process.env.NODE_ENV !== 'production') {
+    const swaggerSpec = swaggerJsdoc({
+      definition: {
+        openapi: '3.0.0',
+        info: { title: 'Al-Muttahida API', version: '1.0.0' },
+      },
+      apis: ['./src/routes/*.ts'],
+    });
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  }
 
   // System & Network configuration routes
   app.use('/system', systemRoutes);
@@ -195,6 +246,26 @@ async function bootstrap() {
       // eslint-disable-next-line no-console
       console.error('Database initialization warning (can be configured via settings):', err.message);
     });
+
+  // Graceful shutdown: close mssql pool and stop processes cleanly to prevent zombie tasks
+  const gracefulShutdown = async (signal: string) => {
+    // eslint-disable-next-line no-console
+    console.log(`[Backend] Received ${signal}. Closing MSSQL connection pool and exiting cleanly...`);
+    try {
+      if (mssqlPool) {
+        await mssqlPool.close();
+      }
+    } catch (_) {}
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+  process.on('message', (msg) => {
+    if (msg === 'shutdown') {
+      void gracefulShutdown('message shutdown');
+    }
+  });
 }
 
 bootstrap().catch((err) => {

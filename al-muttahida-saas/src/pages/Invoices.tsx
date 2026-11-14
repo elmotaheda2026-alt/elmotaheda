@@ -278,6 +278,7 @@ export default function Invoices() {
   const [paymentDate, setPaymentDate] = useState(today());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('installment');
   const [paidAmount, setPaidAmount] = useState(0);
+  const [collectUpfrontNow, setCollectUpfrontNow] = useState(true);
   const [installmentMonths, setInstallmentMonths] = useState(12);
   const [invoiceNotes, setInvoiceNotes] = useState('');
   const [lineProductId, setLineProductId] = useState('');
@@ -721,7 +722,8 @@ export default function Invoices() {
     setOnDemandSalePrice('');
     setOnDemandQuantity(1);
     setOnDemandDiscount('');
-    setOnDemandTax('');
+    setOnDemandTax(settings.taxRate || '');
+    setCollectUpfrontNow(true);
   };
 
   const addWarehouseItem = async () => {
@@ -1170,7 +1172,7 @@ export default function Invoices() {
         }
       }
 
-      if (paid > 0) {
+      if (paid > 0 && collectUpfrontNow) {
         if (isApiMode()) {
           await api.createPayment({
             type: 'in',
@@ -1395,17 +1397,34 @@ export default function Invoices() {
                 </select>
               </Field>
 
-              <Field label="المدفوع الآن">
+              <Field label={paymentMethod === 'installment' ? 'المقدم المتفق عليه (ج.م)' : 'المبلغ المدفوع (ج.م)'}>
                 <input
                   type="number"
                   min="0"
                   step="0.01"
+                  placeholder="0"
                   value={paidAmount === 0 ? '' : paidAmount}
                   onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
-                  className="input-ui"
+                  className="input-ui font-black text-slate-800"
                   onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                 />
               </Field>
+
+              {paidAmount > 0 && (
+                <div className="flex flex-col justify-end">
+                  <label className="flex items-center gap-2 cursor-pointer select-none bg-blue-50/70 border border-blue-200/80 rounded-xl px-3 py-2.5 hover:bg-blue-100/70 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={collectUpfrontNow}
+                      onChange={(e) => setCollectUpfrontNow(e.target.checked)}
+                      className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-blue-900">
+                      تم تحصيل المبلغ نقداً في الخزينة الآن
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {paymentMethod === 'installment' && (
                 <>
@@ -1577,7 +1596,7 @@ export default function Invoices() {
                         />
                       </Field>
 
-                      <Field label="الضريبة %">
+                      <Field label="الفائدة %">
                         <input
                           type="number"
                           min="0"
@@ -1614,7 +1633,7 @@ export default function Invoices() {
             {itemSourceMode === 'on_demand' && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50/20 p-4">
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12 items-end">
-                  <div className="lg:col-span-4">
+                  <div className="lg:col-span-3">
                     <Field label="اسم الصنف">
                       <input
                         type="text"
@@ -1668,11 +1687,25 @@ export default function Invoices() {
                     </Field>
                   </div>
 
+                  <div className="lg:col-span-1">
+                    <Field label="الفائدة %">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        placeholder="0"
+                        value={onDemandTax}
+                        onChange={(e) => setOnDemandTax(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="input-ui font-black text-slate-800"
+                      />
+                    </Field>
+                  </div>
+
                   <div className="lg:col-span-2">
                     <button
                       type="button"
                       onClick={addOnDemandItem}
-                      className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 font-black text-white hover:bg-amber-700 transition-colors shadow-2xs"
+                      className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 font-black text-white hover:bg-amber-700 transition-colors shadow-2xs cursor-pointer"
                     >
                       <Plus size={18} />
                       إضافة الصنف
@@ -1682,9 +1715,67 @@ export default function Invoices() {
               </div>
             )}
 
-            {/* Draft Items Table */}
+            {/* Draft Items Table (Desktop) & Cards (Mobile) */}
             <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 shadow-xs">
-              <div className="overflow-x-auto">
+              {/* Mobile Draft Item Cards (< md) */}
+              <div className="md:hidden p-2.5 space-y-2.5 bg-white">
+                {draftRows.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-xs text-slate-500 font-bold">
+                    لا توجد أصناف مضافة بعد. اختر صنفاً من المخزن أو أضف صنفاً حسب الطلب أعلاه.
+                  </div>
+                ) : (
+                  draftRows.map((item, index) => {
+                    const isStocked = item.fulfillmentType === 'stocked';
+                    return (
+                      <div key={`mob-draft-${item.productId}-${index}`} className="border border-slate-200 rounded-xl p-3 space-y-2 bg-slate-50/40">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-black text-slate-900 text-sm break-words">{item.productName}</p>
+                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              {isStocked ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                  من المخزن ({item.availableStock} متاح)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                  حسب الطلب {item.supplierName ? `• ${item.supplierName}` : ''}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setDraftItems((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                            className="p-1.5 rounded-lg bg-rose-50 text-rose-600 shrink-0"
+                            title="حذف البند"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-500">الكمية:</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={item.quantity === 0 ? '' : item.quantity}
+                              onChange={(e) => updateLine(index, { quantity: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-16 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-black text-slate-800"
+                            />
+                          </div>
+                          <div className="text-left">
+                            <span className="text-[10px] text-slate-400 block font-bold">السعر: {formatCurrency(item.unitPrice)}</span>
+                            <span className="font-black text-emerald-700 text-sm">{formatCurrency(item.total)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full min-w-[850px] bg-white">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
@@ -1902,7 +1993,27 @@ export default function Invoices() {
                   </div>
 
                   <div className="overflow-hidden rounded-xl border border-slate-200 shadow-2xs">
-                    <div className="overflow-x-auto">
+                    {/* Mobile Procurement Cards (< md) */}
+                    <div className="md:hidden p-2.5 space-y-2 bg-white">
+                      {procurementRows.map((item, idx) => {
+                        const unitCost = item.product?.purchasePrice || item.unitPrice || 0;
+                        return (
+                          <div key={`mob-proc-${item.productId}-${idx}`} className="border border-slate-200 rounded-xl p-3 space-y-1.5 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="font-black text-slate-800 break-words">{item.productName}</p>
+                              <span className="font-black text-amber-700 shrink-0">{formatCurrency(item.shortageQuantity * unitCost)}</span>
+                            </div>
+                            <p className="text-slate-600 font-bold">المورد: {item.supplierName || 'المورد الافتراضي'}</p>
+                            <div className="flex items-center justify-between text-slate-500 pt-1 border-t border-slate-100">
+                              <span>الكمية: <strong className="text-slate-800">{item.shortageQuantity}</strong></span>
+                              <span>التكلفة: <strong className="text-slate-800">{formatCurrency(unitCost)}</strong></span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="hidden md:block overflow-x-auto">
                       <table className="w-full min-w-[620px] bg-white">
                         <thead className="bg-slate-50 text-slate-700 border-b border-slate-200 text-xs">
                           <tr>
@@ -1952,9 +2063,9 @@ export default function Invoices() {
               <SummaryRow label="العميل" value={selectedCustomer?.name || 'غير محدد'} />
               <SummaryRow label="الإجمالي قبل الخصم" value={formatCurrency(subtotal)} />
               <SummaryRow label="الخصم" value={formatCurrency(discountAmount)} tone="red" />
-              <SummaryRow label="الضريبة" value={formatCurrency(taxAmount)} />
+              <SummaryRow label="إجمالي الفائدة" value={formatCurrency(taxAmount)} />
               <SummaryRow label="صافي الفاتورة" value={formatCurrency(total)} tone="green" strong />
-              <SummaryRow label="المدفوع" value={formatCurrency(paid)} />
+              <SummaryRow label="المقدم / المدفوع" value={formatCurrency(paid)} />
               <SummaryRow label="المتبقي" value={formatCurrency(remaining)} tone="amber" strong />
               <SummaryRow label="شراء مطلوب" value={formatCurrency(procurementSubtotal)} tone="slate" />
             </div>
@@ -2081,20 +2192,24 @@ export default function Invoices() {
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 px-5 py-3.5 text-white flex items-center justify-between shrink-0">
-              <div>
-                <h3 className="text-base font-bold flex items-center gap-2 text-right">
-                  <Search size={18} />
-                  <span>البحث في سجل التعاقدات</span>
-                </h3>
-                <p className="text-[11px] text-blue-100 mt-0.5 text-right">
-                  اكتب اسم العميل أو رقم العقد للبحث الفوري، ثم اختر الإجراء المطلوب (تعديل أو طباعة أو ترحيل قسط).
-                </p>
+            <div className="bg-white border-b border-slate-200 px-5 py-3.5 text-slate-900 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-slate-700 shrink-0">
+                  <Search size={17} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 text-right">
+                    البحث في سجل التعاقدات
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5 text-right font-medium">
+                    اكتب اسم العميل أو رقم العقد للبحث الفوري، ثم اختر الإجراء المطلوب.
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowSearchModal(false)}
-                className="text-white/80 hover:text-white text-2xl font-light p-1 leading-none transition-colors outline-none cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg text-2xl font-light w-8 h-8 flex items-center justify-center leading-none transition-colors outline-none cursor-pointer"
                 title="إغلاق النافذة"
               >
                 &times;
@@ -2139,16 +2254,16 @@ export default function Invoices() {
                           <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-bold">
                             {formatDateDisplay(sale.date)}
                           </span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-violet-50 text-violet-700 border border-violet-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             }`}>
                             {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
                           </span>
                         </div>
                         <p className="font-bold text-slate-900 text-sm truncate">{sale.customerName}</p>
                         <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
-                          <span>الإجمالي: <b className="text-emerald-700 font-bold">{formatCurrency(sale.total)}</b></span>
+                          <span>الإجمالي: <b className="text-slate-800 font-bold">{formatCurrency(sale.total)}</b></span>
                           <span>•</span>
-                          <span>المتبقي: <b className="text-rose-600 font-bold">{formatCurrency(sale.remaining)}</b></span>
+                          <span>المتبقي: <b className={`font-bold ${sale.remaining > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{formatCurrency(sale.remaining)}</b></span>
                         </div>
                       </div>
 
@@ -2161,9 +2276,9 @@ export default function Invoices() {
                               handleLoadForEdit(sale);
                               setShowSearchModal(false);
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <Edit3 size={12} className="text-amber-600" />
+                            <Edit3 size={12} className="text-slate-500" />
                             <span>تعديل البيانات</span>
                           </button>
                         )}
@@ -2171,9 +2286,9 @@ export default function Invoices() {
                           <button
                             type="button"
                             onClick={() => handleDeleteContract(sale)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-rose-50 text-slate-500 hover:text-rose-600 border border-slate-200 hover:border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <Trash2 size={12} className="text-rose-600" />
+                            <Trash2 size={12} />
                             <span>حذف التعاقد</span>
                           </button>
                         )}
@@ -2190,9 +2305,9 @@ export default function Invoices() {
                               setDeferMessage(null);
                               setShowSearchModal(false);
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <CalendarCheck size={12} className="text-indigo-600" />
+                            <CalendarCheck size={12} className="text-slate-500" />
                             <span>ترحيل قسط</span>
                           </button>
                         )}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DialogProvider } from './context/DialogContext';
@@ -25,15 +25,55 @@ import OnboardingWizard from './pages/OnboardingWizard';
 import ProtectedRoute from './components/ProtectedRoute';
 import WhatsappReminderRunner from './components/WhatsappReminderRunner';
 import LoadingState from './components/LoadingState';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { Building2 } from 'lucide-react';
 
 function AppRoutes() {
   const { isAuthenticated, settings, isLoading } = useAuth();
-  const isConfigured = localStorage.getItem('almuttahida_configured') === 'true' || settings.isConfigured;
+  const isNetworkWebBrowser =
+    typeof window !== 'undefined' &&
+    !(window as any).electronAPI &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1';
+  const isConfigured =
+    isNetworkWebBrowser ||
+    localStorage.getItem('almuttahida_configured') === 'true' ||
+    settings.isConfigured;
+
+  useEffect(() => {
+    // Keyboard shortcut (Ctrl + Shift + S or F2) to open Setup / Onboarding anytime
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.ctrlKey && e.shiftKey && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'o')) ||
+        e.key === 'F2'
+      ) {
+        window.location.hash = '#/onboarding';
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    if (window.electronAPI && (window.electronAPI as any).onNavigate) {
+      (window.electronAPI as any).onNavigate((route: string) => {
+        window.location.hash = `#${route}`;
+      });
+    }
+
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6" dir="rtl">
-        <LoadingState size="lg" />
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6" dir="rtl">
+        <div className="flex flex-col items-center gap-4 text-center max-w-sm">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-700 to-indigo-800 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 animate-pulse">
+            <Building2 className="w-7 h-7" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-base font-bold text-slate-800">شركة المتحدة ERP</h2>
+            <p className="text-xs text-slate-500">جاري التحقق من الجلسة ومزامنة النظام...</p>
+          </div>
+          <LoadingState size="lg" />
+        </div>
       </div>
     );
   }
@@ -81,12 +121,14 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <DialogProvider>
-        <HashRouter>
-          <AppRoutes />
-        </HashRouter>
-      </DialogProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <DialogProvider>
+          <HashRouter>
+            <AppRoutes />
+          </HashRouter>
+        </DialogProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

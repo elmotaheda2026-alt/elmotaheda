@@ -1,4 +1,5 @@
 import { Permission, User } from '../types';
+import { isMobileDevice } from './apiClient';
 
 type LegacyPermission =
   | 'dashboard'
@@ -74,16 +75,27 @@ const rolePermissions: Record<User['role'], Permission[]> = {
   finance_manager: ['dashboard:view', 'sales:read', 'payments:read', 'payments:reverse', 'reports:read', 'closing:write', 'notifications:read'],
 };
 
+const MOBILE_BLOCKED_WRITE_PERMISSIONS: ReadonlySet<Permission> = new Set([
+  'sales:write',
+  'sales:reschedule',
+  'payments:write',
+  'payments:reverse',
+  'closing:write',
+]);
+
 export const isAdmin = (user: User | null): boolean => user?.role === 'admin';
 export const isSupervisor = (user: User | null): boolean => user?.role === 'manager';
-export const isReadOnlyUser = (user: User | null): boolean => user?.role === 'manager';
-export const canModify = (user: User | null): boolean => Boolean(user && user.role !== 'manager');
+export const isReadOnlyUser = (user: User | null): boolean => isMobileDevice() || user?.role === 'manager';
+export const canModify = (user: User | null): boolean => !isMobileDevice() && Boolean(user && user.role !== 'manager');
 
 /**
  * Checks if the current authenticated user has the given permission.
  */
 export const hasPermission = (user: User | null, permission: Permission): boolean => {
   if (!user) return false;
+  if (isMobileDevice() && MOBILE_BLOCKED_WRITE_PERMISSIONS.has(permission)) {
+    return false;
+  }
   if (user.role === 'admin') return true;
 
   // If user has explicit permissions object, respect its boolean values directly

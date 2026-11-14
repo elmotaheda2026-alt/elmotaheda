@@ -8,18 +8,20 @@ export function login(username: string, password: string): User | null {
   if (user) {
     user.lastLogin = new Date().toISOString();
     setStorage(DB_KEYS.USERS, users);
-    localStorage.setItem(DB_KEYS.AUTH, JSON.stringify(user));
+    sessionStorage.setItem(DB_KEYS.AUTH, JSON.stringify(user));
+    try { localStorage.removeItem(DB_KEYS.AUTH); } catch (_) {}
     return user;
   }
   return null;
 }
 
 export function logout(): void {
-  localStorage.removeItem(DB_KEYS.AUTH);
+  sessionStorage.removeItem(DB_KEYS.AUTH);
+  try { localStorage.removeItem(DB_KEYS.AUTH); } catch (_) {}
 }
 
 export function getCurrentUser(): User | null {
-  const auth = localStorage.getItem(DB_KEYS.AUTH);
+  const auth = sessionStorage.getItem(DB_KEYS.AUTH);
   return auth ? JSON.parse(auth) : null;
 }
 

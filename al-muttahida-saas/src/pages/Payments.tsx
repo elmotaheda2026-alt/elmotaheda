@@ -51,12 +51,13 @@ const today = () => new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 }).format(new Date());
 
-const normalizeArabic = (str: string): string => {
+const normalizeArabic = (str?: string | null): string => {
   if (!str) return '';
   return str
     .replace(/[أإآا]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/[ىي]/g, 'ي')
+    .replace(/[\u064B-\u065F]/g, '')
     .trim()
     .toLowerCase();
 };
@@ -372,15 +373,6 @@ export default function Payments() {
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
   const formatDate = formatDateDisplay;
-
-  const normalizeArabic = (str: string) =>
-    (str || '')
-      .replace(/[أإآ]/g, 'ا')
-      .replace(/ى/g, 'ي')
-      .replace(/ة/g, 'ه')
-      .replace(/[\u064B-\u065F]/g, '')
-      .trim()
-      .toLowerCase();
 
   const selectedCustomer = customers.find((customer) => customer.id === incomingForm.customerId) || null;
 
@@ -1522,7 +1514,96 @@ export default function Payments() {
 
       {/* Tier 3: Flexible & Scrollable Data Table Card */}
       <div className="desktop-table-card">
-        <div className="desktop-table-scroll">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
+          {loading ? (
+            <div className="py-10 text-center text-slate-400 text-xs font-bold">جاري التحميل...</div>
+          ) : todayPayments.length === 0 ? (
+            <div className="py-12 px-4 text-center text-slate-400 flex flex-col items-center gap-2">
+              <Banknote size={28} className="text-slate-300" />
+              <p className="text-sm font-bold text-slate-700">لا توجد معاملات مضافة بتاريخ اليوم</p>
+            </div>
+          ) : (
+            todayPayments.map((payment) => {
+              const customerName =
+                customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
+              const supplierName =
+                suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '-';
+              const linkedSchedule = payment.saleId
+                ? sales
+                    .find((sale) => sale.id === payment.saleId)
+                    ?.financing?.schedules?.find((schedule) => schedule.id === payment.installmentId)
+                : null;
+
+              return (
+                <div key={`mob-pay-${payment.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${payment.type === 'in' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                          {payment.type === 'in' ? 'قبض وارد' : 'صرف صادرات'}
+                        </span>
+                        {payment.invoiceNumber && (
+                          <span className="text-[11px] font-mono font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {payment.invoiceNumber}
+                          </span>
+                        )}
+                      </div>
+                      <p className="font-black text-slate-900 text-sm break-words">
+                        {displayArabic(payment.type === 'in' ? customerName : supplierName)}
+                      </p>
+                      {linkedSchedule?.label && (
+                        <p className="text-[11px] text-slate-500 font-semibold">{displayArabic(linkedSchedule.label)}</p>
+                      )}
+                    </div>
+                    <span className={`font-black text-sm shrink-0 ${payment.type === 'in' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      {payment.type === 'in' ? '+' : '-'} {formatCurrency(payment.amount)}
+                    </span>
+                  </div>
+
+                  {payment.description && (
+                    <p className="text-xs text-slate-600 break-words">{displayArabic(payment.description)}</p>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                    <span className="text-slate-500 font-mono">{formatDateDisplay(payment.date)}</span>
+                    <div className="flex items-center gap-1.5">
+                      {payment.status !== 'voided' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handlePrintPayment(payment)}
+                            className="p-1.5 rounded-lg text-slate-600 bg-slate-100"
+                            title="طباعة إيصال السداد"
+                          >
+                            <Printer size={14} />
+                          </button>
+                          {hasPermission(user, 'payments:reverse') && (
+                            <button
+                              type="button"
+                              onClick={() => handleReversePayment(payment.id)}
+                              disabled={reversingPaymentId === payment.id}
+                              className="p-1.5 rounded-lg text-rose-600 bg-rose-50"
+                              title="عكس / إلغاء الإيصال"
+                            >
+                              <RotateCcw size={14} className={reversingPaymentId === payment.id ? 'animate-spin' : ''} />
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-400 line-through">
+                          معكوس
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden md:block desktop-table-scroll">
           <table className="w-full min-w-[850px] border-collapse">
             <thead className="desktop-sticky-header">
               <tr>

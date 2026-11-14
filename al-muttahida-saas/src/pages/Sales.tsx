@@ -288,7 +288,44 @@ export default function Sales() {
 
       {/* Tier 3: Flexible & Scrollable Table Card */}
       <div className="desktop-table-card print:border print:border-slate-300 print:rounded-lg print:p-0 print:shadow-none">
-        <div className="desktop-table-scroll print:overflow-visible print:h-auto">
+        {/* Mobile Cards View (< md) */}
+        <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar print:hidden">
+          {isLoading ? (
+            <div className="py-10 text-center text-slate-400 text-xs font-bold">جاري التحميل...</div>
+          ) : saleLineRows.length === 0 ? (
+            <div className="py-12 px-4 text-center text-xs font-bold text-slate-400">
+              لا توجد مبيعات مطابقة للفترة المحددة
+            </div>
+          ) : (
+            saleLineRows.map((row) => (
+              <div key={`mob-sale-${row.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-black text-slate-900 text-sm break-words">{row.customerName}</p>
+                    <p className="text-xs font-bold text-slate-700 mt-0.5">{row.productName} (الكمية: {row.quantity})</p>
+                  </div>
+                  <span className="text-[11px] font-mono text-slate-500 shrink-0">{formatDateDisplay(row.date)}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 bg-slate-50 rounded-xl p-2 text-center text-xs border border-slate-100">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-bold">سعر الشراء</span>
+                    <span className="font-bold text-slate-700">{formatCurrency(row.purchaseUnitPrice)}</span>
+                  </div>
+                  <div className="border-x border-slate-200">
+                    <span className="text-[10px] text-slate-400 block font-bold">التكلفة</span>
+                    <span className="font-bold text-slate-600">{formatCurrency(row.amountAfterUpfront)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-bold">الربح</span>
+                    <span className={`font-black ${row.profit >= 0 ? 'text-sky-700' : 'text-rose-700'}`}>{formatCurrency(row.profit)}</span>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block desktop-table-scroll print:block print:overflow-visible print:h-auto">
           <table className="w-full min-w-[860px] border-collapse print:min-w-0 print:w-full">
             <thead className="desktop-sticky-header print:static">
               <tr>

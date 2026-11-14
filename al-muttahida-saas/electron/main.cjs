@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -66,8 +66,9 @@ let currentApiUrl = 'http://127.0.0.1:4000';
 
 function ensureFirewallRules() {
   if (process.platform !== 'win32') return;
-  const cmd = 'netsh advfirewall firewall add rule name="AlMuttahida ERP Ports" dir=in action=allow protocol=TCP localport=1433,5000,4000,5173';
-  exec(cmd, (error, stdout, stderr) => {
+  const cmdTcp = 'netsh advfirewall firewall add rule name="AlMuttahida ERP Ports TCP" dir=in action=allow protocol=TCP localport=1433,4000,5000,5173';
+  const cmdUdp = 'netsh advfirewall firewall add rule name="AlMuttahida ERP Ports UDP" dir=in action=allow protocol=UDP localport=4001';
+  exec(`${cmdTcp} & ${cmdUdp}`, (error) => {
     if (error) {
       console.warn('Firewall rule notice (requires admin if not previously granted):', error.message);
     } else {
@@ -83,7 +84,8 @@ function ensureSqlConfigured() {
     // 1. Ensure SQL Server services are started
     exec('sc config MSSQLSERVER start= auto & net start MSSQLSERVER & sc config "MSSQL$SQLEXPRESS" start= auto & net start "MSSQL$SQLEXPRESS"', () => {
       // 2. Run PowerShell init script to ensure alm_app login & AlMuttahida_New database exist
-      const psScript = path.join(__dirname, 'init-sql-login.ps1');
+      const unpackedPs = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'init-sql-login.ps1');
+      const psScript = fs.existsSync(unpackedPs) ? unpackedPs : path.join(__dirname, 'init-sql-login.ps1');
       if (fs.existsSync(psScript)) {
         exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}"`, (err, stdout) => {
           if (stdout) console.log('[init-sql-login]', stdout.trim());
@@ -175,7 +177,7 @@ ipcMain.handle('select-directory', async () => {
   }
 });
 
-function createMainWindow(apiBaseUrl) {
+async function createMainWindow(apiBaseUrl) {
   currentApiUrl = apiBaseUrl;
 
   mainWindow = new BrowserWindow({
@@ -200,12 +202,24 @@ function createMainWindow(apiBaseUrl) {
     }
   });
 
-  // Safety fallback: if ready-to-show takes more than 1.5s, force display window so it doesn't get stuck hidden
+  // Ensure backend is healthy before loading the page (avoids blank/white screen on startup)
+  if (apiBaseUrl && apiBaseUrl.startsWith('http')) {
+    for (let i = 0; i < 15; i++) {
+      try {
+        await checkHealth(`${apiBaseUrl}/health`);
+        break;
+      } catch (_) {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+  }
+
+  // Safety fallback: if ready-to-show takes more than 3s, force display window so it doesn't get stuck hidden
   setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
       mainWindow.show();
     }
-  }, 1500);
+  }, 3000);
 
   // If page load fails, retry after a short delay instead of staying blank
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
@@ -256,7 +270,54 @@ function createMainWindow(apiBaseUrl) {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // Handle render-process-gone (GPU/Renderer crash on sleep or memory pressure)
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.warn('[Main Window] Render process gone:', details.reason);
+    if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
+      setTimeout(() => {
+        try { mainWindow.webContents.reload(); } catch (_) {}
+      }, 1000);
+    }
+  });
 }
+
+// ── Power Monitor: Sleep / Resume Recovery (Prevents White Screen) ──
+app.whenReady().then(() => {
+  if (powerMonitor) {
+    powerMonitor.on('resume', async () => {
+      console.log('[PowerMonitor] System resumed from sleep. Recovering UI and backend connection...');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          mainWindow.webContents.invalidate();
+        } catch (_) {}
+
+        if (currentApiUrl) {
+          let healthy = false;
+          for (let i = 0; i < 5; i++) {
+            try {
+              await checkHealth(`${currentApiUrl}/health`);
+              healthy = true;
+              break;
+            } catch (_) {
+              await new Promise((r) => setTimeout(r, 600));
+            }
+          }
+          if (!healthy) {
+            console.warn('[PowerMonitor] Backend unreachable after resume. Reloading window to reconnect...');
+            try { mainWindow.webContents.reload(); } catch (_) {}
+          }
+        }
+      }
+    });
+
+    powerMonitor.on('unlock-screen', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.webContents.invalidate(); } catch (_) {}
+      }
+    });
+  }
+});
 
 // ── IPC: Setup Window Helpers ────────────────────────────────────
 
@@ -288,6 +349,15 @@ ipcMain.handle('run-firewall-setup', async () => {
     ensureFirewallRules();
     resolve({ success: true });
   });
+});
+
+ipcMain.handle('save-custom-sql-config', async (_event, customSql) => {
+  try {
+    saveConfig(customSql);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('download-and-install-sql', async (event) => {
@@ -434,7 +504,8 @@ ipcMain.handle('check-sql-status', async () => {
   }
 
   // If port 1433 did not respond, check if SQL Server service is present and try init script
-  const psScript = path.join(__dirname, 'init-sql-login.ps1');
+  const unpackedPsCheck = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'init-sql-login.ps1');
+  const psScript = fs.existsSync(unpackedPsCheck) ? unpackedPsCheck : path.join(__dirname, 'init-sql-login.ps1');
   if (fs.existsSync(psScript)) {
     const psOk = await new Promise((resolve) => {
       exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}"`, (err, stdout) => {

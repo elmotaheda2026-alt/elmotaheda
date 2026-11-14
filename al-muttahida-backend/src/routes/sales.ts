@@ -557,7 +557,7 @@ async function generateNextSaleInvoiceNumber(db: any): Promise<string> {
   const prefix = settings?.invoice_prefix || 'PB';
 
   const rows = (await db.all(
-    `SELECT TOP 100 invoice_number FROM sales WHERE invoice_number LIKE ? ORDER BY created_at DESC`,
+    `SELECT TOP 100 invoice_number FROM sales WITH (UPDLOCK, HOLDLOCK) WHERE invoice_number LIKE ? ORDER BY created_at DESC`,
     `${prefix}-%`
   )) as { invoice_number: string }[];
   let maxNum = 1000;
@@ -628,13 +628,13 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
       return res.status(400).json({ message: 'Customer not found' });
     }
 
-    // Auto-generate next invoice number if missing, empty or colliding with existing record
-    const existingInvoice = await db.get('SELECT 1 FROM sales WHERE invoice_number = ?', data.invoiceNumber);
-    if (existingInvoice || !data.invoiceNumber || !data.invoiceNumber.trim()) {
-      data.invoiceNumber = await generateNextSaleInvoiceNumber(db);
-    }
-
     await db.withTransaction(async (txDb: typeof db) => {
+      // Auto-generate next invoice number atomically inside transaction to prevent multi-device collisions
+      const existingInvoice = await txDb.get('SELECT 1 FROM sales WITH (UPDLOCK, HOLDLOCK) WHERE invoice_number = ?', data.invoiceNumber);
+      if (existingInvoice || !data.invoiceNumber || !data.invoiceNumber.trim()) {
+        data.invoiceNumber = await generateNextSaleInvoiceNumber(txDb);
+      }
+
       await txDb.run(
         `INSERT INTO sales (
           id, invoice_number, customer_id, customer_name, total, paid, remaining, status, date, notes, version, locked,
@@ -1223,6 +1223,65 @@ router.post('/:id/installments/postpone', requirePermission('sales:write'), requ
 router.put('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.post('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.put('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+
+// Update or clear a collection follow-up note on a specific installment schedule
+const handleUpdateInstallmentNote = async (req: any, res: any) => {
+  try {
+    const installmentId = String(req.params.id || '').trim();
+    if (!installmentId) {
+      return res.status(400).json({ message: 'معرف القسط مطلوب' });
+    }
+    const rawNote = typeof req.body?.notes === 'string' ? req.body.notes.trim() : '';
+    const noteValue = rawNote.length > 0 ? rawNote.slice(0, 255) : null;
+
+    const db = await dbPromise;
+    const existing = await db.get<{ id: string }>(
+      'SELECT id FROM installment_schedules WHERE id = ?',
+      installmentId,
+    );
+    if (!existing) {
+      return res.status(404).json({ message: 'القسط غير موجود أو لا يملك جدول أقساط منفصل' });
+    }
+
+    await db.run(
+      'UPDATE installment_schedules SET notes = ? WHERE id = ?',
+      noteValue,
+      installmentId,
+    );
+    return res.json({ ok: true, id: installmentId, notes: noteValue });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+};
+
+router.patch('/:id/note', handleUpdateInstallmentNote);
+router.post('/:id/note', handleUpdateInstallmentNote);
+
+// Update or clear a pinned collection follow-up note on the entire sale/invoice (persists until invoice is paid off)
+const handleUpdateSaleCollectionNote = async (req: any, res: any) => {
+  try {
+    const saleId = String(req.params.id || '').trim();
+    if (!saleId) {
+      return res.status(400).json({ message: 'معرف الفاتورة مطلوب' });
+    }
+    const rawNote = typeof req.body?.notes === 'string' ? req.body.notes.trim() : '';
+    const noteValue = rawNote.length > 0 ? rawNote.slice(0, 500) : null;
+
+    const db = await dbPromise;
+    const existing = await db.get<{ id: string }>('SELECT id FROM sales WHERE id = ?', saleId);
+    if (!existing) {
+      return res.status(404).json({ message: 'الفاتورة غير موجودة' });
+    }
+
+    await db.run('UPDATE sales SET collection_note = ? WHERE id = ?', noteValue, saleId);
+    return res.json({ ok: true, id: saleId, invoiceNote: noteValue });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+};
+
+router.patch('/:id/collection-note', handleUpdateSaleCollectionNote);
+router.post('/:id/collection-note', handleUpdateSaleCollectionNote);
 
 export default router;
 

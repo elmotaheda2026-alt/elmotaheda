@@ -3,6 +3,22 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config.js';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
+
+function isLoopbackRequest(req: any): boolean {
+  const ip = String(req.ip || req.socket?.remoteAddress || '');
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+function sanitizeConfigForResponse(cfg: any): any {
+  if (!cfg || typeof cfg !== 'object') return cfg;
+  const { jwtSecret: _j, dbPassword: _p, password: _pw, ...safe } = cfg;
+  if (safe.db && typeof safe.db === 'object') {
+    const { password: _dbPw, ...safeDb } = safe.db;
+    safe.db = safeDb;
+  }
+  return safe;
+}
 
 const router = Router();
 
@@ -75,7 +91,7 @@ router.get('/network-info', (_req, res) => {
       backendPort: config.port,
       frontendUrl: `http://${net.primary}:5173`,
       apiUrl: `http://${net.primary}:${config.port}`,
-      dbConfig: saved || {
+      dbConfig: sanitizeConfigForResponse(saved) || {
         mode: 'server',
         db: {
           host: '127.0.0.1',
@@ -89,18 +105,24 @@ router.get('/network-info', (_req, res) => {
   }
 });
 
-// GET /db-config
-router.get('/db-config', (_req, res) => {
+// GET /db-config (Protected: requires authenticated settings:manage permission)
+router.get('/db-config', requireAuth, requirePermission('settings:manage'), (_req, res) => {
   try {
     const saved = readConfig();
-    res.json({ ok: true, config: saved });
+    res.json({ ok: true, config: sanitizeConfigForResponse(saved) });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// POST /db-config
-router.post('/db-config', (req, res) => {
+// POST /db-config (Protected: allows unauthenticated ONLY on loopback during initial unconfigured setup)
+router.post('/db-config', (req, res, next) => {
+  const current = readConfig();
+  if (!current?.mode && isLoopbackRequest(req)) {
+    return next();
+  }
+  return requireAuth(req as any, res, () => requirePermission('settings:manage')(req as any, res, next));
+}, (req, res) => {
   try {
     const { host, port, database, mode } = req.body;
     const isServerMode = mode === 'server';
@@ -120,7 +142,7 @@ router.post('/db-config', (req, res) => {
       updatedAt: new Date().toISOString(),
     };
     writeConfig(updated);
-    res.json({ ok: true, message: 'Configuration saved successfully', config: updated });
+    res.json({ ok: true, message: 'Configuration saved successfully', config: sanitizeConfigForResponse(updated) });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
