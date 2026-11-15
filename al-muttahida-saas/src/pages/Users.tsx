@@ -137,7 +137,7 @@ export default function Users() {
         {currentUser?.role !== 'manager' && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
-            className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs cursor-pointer"
+            className="flex items-center gap-1.5 bg-[#1e40af] text-white px-4 py-2 rounded-lg hover:bg-[#1d4ed8] transition-colors text-sm font-bold shadow-2xs cursor-pointer"
           >
             <Plus size={16} />
             <span>إضافة مستخدم</span>
@@ -481,7 +481,7 @@ export default function Users() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-bold shadow-2xs cursor-pointer"
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold shadow-2xs cursor-pointer"
                 >
                   {editingUser ? 'تحديث' : 'إضافة'}
                 </button>

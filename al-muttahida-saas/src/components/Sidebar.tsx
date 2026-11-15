@@ -173,12 +173,21 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
       <aside
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col border-l border-slate-200 bg-white text-slate-800 transition-all duration-200 ${
+        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${
           isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
         } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
-        {/* Header / Branding with Custom Corporate Logo */}
-        <div className={`flex items-center justify-between border-b border-slate-200 ${isExpanded ? 'px-3.5 py-3.5' : 'px-2 py-3.5 justify-center'}`}>
+        {/* Header / Branding with Custom Corporate Logo (exact h-14 match & seamless fade into Header) */}
+        <div
+          className={`relative overflow-hidden h-14 shrink-0 flex items-center justify-between border-b border-slate-200 ${
+            isExpanded ? 'px-3' : 'px-2 justify-center border-l border-slate-200'
+          }`}
+          style={{
+            background: isExpanded
+              ? 'linear-gradient(to left, #0f1f4a 0%, #162b61 42%, #476299 66%, #9fb0d1 83%, #e5ebf5 94%, #ffffff 100%)'
+              : 'linear-gradient(to bottom, #0f1f4a 0%, #162b61 100%)',
+          }}
+        >
           <button
             type="button"
             onClick={() => {
@@ -186,19 +195,20 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
               setIsHovered(false);
               if (window.innerWidth < 1024) onClose();
             }}
-            className="flex items-center gap-2.5 overflow-hidden text-right transition-opacity hover:opacity-85 cursor-pointer"
+            className="relative z-10 flex items-center overflow-hidden text-right transition-opacity hover:opacity-90 cursor-pointer"
             title={settings.companyName || 'شركة المتحدة'}
           >
             <CompanyLogo
-              size={40}
+              size={38}
               variant={isExpanded ? 'full' : 'emblem'}
               companyName={settings.companyName || 'شركة المتحدة'}
+              theme="dark"
             />
           </button>
         </div>
 
         {/* Navigation Items */}
-        <nav className={`flex-1 overflow-y-auto py-3 custom-scrollbar ${isExpanded ? 'px-2.5' : 'px-2'}`}>
+        <nav className={`flex-1 overflow-y-auto border-l border-slate-200 py-3 custom-scrollbar ${isExpanded ? 'px-2.5' : 'px-2'}`}>
           <div className="space-y-3">
             {menuGroups.map((group) => {
               const allowedItems = group.items.filter(
@@ -274,7 +284,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
         </nav>
 
         {/* Footer / Toggle & Pin Button */}
-        <div className="border-t border-slate-200 p-2.5 bg-slate-50/70">
+        <div className="border-t border-l border-slate-200 p-2.5 bg-slate-50/70">
           <button
             type="button"
             onClick={() => {

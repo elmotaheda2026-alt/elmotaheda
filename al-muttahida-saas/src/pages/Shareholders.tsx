@@ -944,17 +944,17 @@ export default function Shareholders() {
                 });
                 setShowShareholderModal(true);
               }}
-              className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
+              className="flex items-center gap-1 bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-2.5 py-1 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
             >
               <Plus size={13} />
-              <span>+ إضافة شريك</span>
+              <span>إضافة شريك</span>
             </button>
           )}
         </div>
       </section>
 
       {/* Financial Health & Equity vs Supplier Debt Summary Banner */}
-      <section className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-md border border-slate-800 shrink-0">
+      <section className="bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] text-white rounded-2xl p-4 shadow-sm border border-slate-800/70 shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3 mb-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 font-bold">
@@ -1725,8 +1725,8 @@ export default function Shareholders() {
                     </div>
                     <p className="text-slate-700 font-medium break-words">{entry.description}</p>
                     <div className="flex items-center justify-between pt-1 border-t border-slate-100 font-bold">
-                      <span>رأس المال: {formatCurrency(entry.capitalBalance)}</span>
-                      <span className="text-emerald-700">الأرباح: {formatCurrency(entry.profitBalance)}</span>
+                      <span>رأس المال: {formatCurrency(entry.runningCapital)}</span>
+                      <span className="text-emerald-700">الأرباح: {formatCurrency(entry.runningProfit)}</span>
                     </div>
                   </div>
                 ))
@@ -1836,7 +1836,7 @@ export default function Shareholders() {
                 <button
                   type="button"
                   onClick={() => openTxModal(inspectingPartner.id, 'capital_deposit')}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95"
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-[#1e40af] hover:bg-[#1d4ed8] text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95"
                 >
                   <ArrowDownToLine size={13} />
                   <span>+ إيداع رأس مال</span>
@@ -2099,7 +2099,7 @@ export default function Shareholders() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-bold"
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-xs font-bold"
                 >
                   {editingShareholder ? 'حفظ التعديلات' : 'إضافة الشريك'}
                 </button>
@@ -2262,7 +2262,7 @@ export default function Shareholders() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-bold"
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-xs font-bold"
                 >
                   تأكيد وتنفيذ الحركة
                 </button>

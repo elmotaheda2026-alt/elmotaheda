@@ -75,5 +75,5 @@ export function calculateTotalCashBalance(
     .filter((exp) => exp.id && !payments.some((p) => p.referenceId === exp.id || (p.description && exp.id && p.description.includes(exp.id))))
     .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
 
-  return roundMoney(Number(openingCashBalance || 0) + cumulativeInflow - (paymentOutflow + standaloneExpenseOutflow));
+  return Math.max(0, roundMoney(Number(openingCashBalance || 0) + cumulativeInflow - (paymentOutflow + standaloneExpenseOutflow)));
 }

@@ -26,6 +26,7 @@ import { formatDateDisplay, today } from '../lib/dateUtils';
 import { api, isApiMode } from '../lib/apiClient';
 import { createPayment } from '../lib/storage/payments';
 import { DatePicker } from './DatePicker';
+import { printHtmlDocument } from '../lib/printHelper';
 
 interface SupplierStatementModalProps {
   supplier: Supplier | null;
@@ -114,11 +115,11 @@ export default function SupplierStatementModal({
 
   const formatCurrency = (amt: number) => formatWholeCurrency(amt, settings?.currency || 'ج.م');
 
-  // Filter transactions
+  // Filter transactions (newest first so today's movements appear at the top while keeping chronological runningBalance)
   const filteredTransactions = useMemo(() => {
     if (!statement?.transactions) return [];
 
-    return statement.transactions.filter((tx) => {
+    return [...statement.transactions].reverse().filter((tx) => {
       // Type filter
       if (typeFilter === 'purchases' && tx.type !== 'purchase') return false;
       if (typeFilter === 'payments' && tx.type !== 'payment_out' && tx.type !== 'payment_in' && tx.type !== 'purchase_downpayment') return false;
@@ -191,14 +192,8 @@ export default function SupplierStatementModal({
   };
 
   // Generate & Print Formal Account Statement Sheet (كشف حساب رسمي)
-  const handlePrintStatement = () => {
+  const handlePrintStatement = async () => {
     if (!supplier) return;
-
-    const printWin = window.open('', '_blank', 'width=900,height=800');
-    if (!printWin) {
-      showToast('يرجى السماح بالنوافذ المنبثقة لطباعة كشف الحساب', 'warning');
-      return;
-    }
 
     const companyName = settings?.companyName || 'شركة المتحدة لتجارة وتوزيع البضائع';
     const companyPhone = settings?.companyPhone || '';
@@ -425,13 +420,15 @@ export default function SupplierStatementModal({
       </html>
     `;
 
-    printWin.document.open();
-    printWin.document.write(htmlContent);
-    printWin.document.close();
-    printWin.focus();
-    setTimeout(() => {
-      printWin.print();
-    }, 250);
+    const opened = await printHtmlDocument(htmlContent, {
+      title: `كشف حساب المورد - ${supplier.name}`,
+      width: 900,
+      height: 800,
+      delayMs: 250,
+    });
+    if (!opened) {
+      showToast('يرجى السماح بالنوافذ المنبثقة لطباعة كشف الحساب', 'warning');
+    }
   };
 
   if (!isOpen || !supplier) return null;
@@ -455,7 +452,7 @@ export default function SupplierStatementModal({
         {/* Harmonious Header Bar */}
         <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shrink-0 shadow-xs">
+            <div className="w-10 h-10 rounded-xl bg-[#1e40af] text-white flex items-center justify-center font-bold shrink-0 shadow-xs">
               <Truck size={20} />
             </div>
             <div className="min-w-0">
@@ -727,7 +724,7 @@ export default function SupplierStatementModal({
                 onClick={() => setTypeFilter('all')}
                 className={`px-2.5 py-1 rounded-md transition-all ${
                   typeFilter === 'all'
-                    ? 'bg-blue-600 text-white shadow-2xs'
+                    ? 'bg-[#1e40af] text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -738,7 +735,7 @@ export default function SupplierStatementModal({
                 onClick={() => setTypeFilter('purchases')}
                 className={`px-2.5 py-1 rounded-md transition-all ${
                   typeFilter === 'purchases'
-                    ? 'bg-blue-600 text-white shadow-2xs'
+                    ? 'bg-[#1e40af] text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -749,7 +746,7 @@ export default function SupplierStatementModal({
                 onClick={() => setTypeFilter('payments')}
                 className={`px-2.5 py-1 rounded-md transition-all ${
                   typeFilter === 'payments'
-                    ? 'bg-blue-600 text-white shadow-2xs'
+                    ? 'bg-[#1e40af] text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >

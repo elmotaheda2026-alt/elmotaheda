@@ -13,6 +13,10 @@ import {
   Search,
   CheckCircle2,
   RotateCcw,
+  Pencil,
+  X,
+  Save,
+  Trash2,
 } from 'lucide-react';
 import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
 import { createPayment, reversePayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, getOpeningBalances } from '../lib/storage';
@@ -24,6 +28,7 @@ import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { calculateTotalCashBalance } from '../lib/accounting';
 import LoadingState from '../components/LoadingState';
+import { printHtmlDocument } from '../lib/printHelper';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -132,6 +137,18 @@ export default function Payments() {
   const [closingDate, setClosingDate] = useState(today());
   const [closingNotes, setClosingNotes] = useState('');
   const [closedPeriods, setClosedPeriods] = useState<ClosingPeriod[]>([]);
+
+  // Direct Edit / Cancel Installment Modal state
+  const [editingInstallmentModal, setEditingInstallmentModal] = useState<{
+    schedule: InstallmentSchedule;
+    payment: Payment;
+    amount: number;
+    date: string;
+    description: string;
+    confirmCancel: boolean;
+    saving: boolean;
+    error: string;
+  } | null>(null);
 
   const [incomingForm, setIncomingForm] = useState<IncomingPaymentForm>({
     customerId: '',
@@ -280,7 +297,7 @@ export default function Payments() {
       )
       .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
 
-    return startingCash + inflowUpToDate - (paymentOutflowUpToDate + standaloneExpensesUpToDate);
+    return Math.max(0, startingCash + inflowUpToDate - (paymentOutflowUpToDate + standaloneExpensesUpToDate));
   };
 
   const expectedTreasuryClosingBalance = calculateAccumulatedCashUpToDate(closingDateYYYYMMDD);
@@ -589,12 +606,6 @@ export default function Payments() {
     const companyName = settings.companyName || 'شركة المتحدة';
     const companyPhone = settings.companyPhone || '';
 
-    const printWindow = window.open('', '_blank', 'width=420,height=760');
-    if (!printWindow) {
-      setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
-      return;
-    }
-
     const html = `
       <!doctype html>
       <html lang="ar" dir="rtl">
@@ -712,13 +723,15 @@ export default function Payments() {
       </html>
     `;
 
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.onload = () => {
-      printWindow.print();
-    };
+    void printHtmlDocument(html, {
+      title: 'إيصال سداد قسط',
+      width: 420,
+      height: 760,
+    }).then((opened) => {
+      if (!opened) {
+        setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
+      }
+    });
   };
 
   const printSettlementReceipt = (params: {
@@ -751,12 +764,6 @@ export default function Payments() {
     const contractDate = sale.date;
     const companyName = settings.companyName || 'شركة المتحدة للتجارة والتوزيع';
     const companyPhone = settings.companyPhone || '';
-
-    const printWindow = window.open('', '_blank', 'width=900,height=1000');
-    if (!printWindow) {
-      setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
-      return;
-    }
 
     const discountLabel = discountAmount > 0
       ? (discountType === 'percent' ? `${discountValue}% (${formatCurrency(discountAmount)})` : formatCurrency(discountAmount))
@@ -952,20 +959,31 @@ export default function Payments() {
       </html>
     `;
 
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.onload = () => {
-      printWindow.print();
-    };
+    void printHtmlDocument(html, {
+      title: 'شهادة تسوية وتكييش حساب عميل',
+      width: 900,
+      height: 1000,
+    }).then((opened) => {
+      if (!opened) {
+        setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
+      }
+    });
   };
+
+  const isValidInstallmentReceipt = (p: Payment) =>
+    p.status === 'posted' &&
+    p.type === 'in' &&
+    p.affectsCustomerBalance !== false &&
+    !p.voidRef &&
+    !String(p.description || '').startsWith('Reverse of') &&
+    !String(p.description || '').includes('تكييش');
 
   const getPaymentForSchedule = (scheduleId: string) => {
     const targetSchedule = selectedSchedules.find((s) => s.id === scheduleId);
+
     // 1. Direct match by installmentId
     const byId = payments.find(
-      (p) => p.status !== 'voided' && p.installmentId && p.installmentId === scheduleId
+      (p) => isValidInstallmentReceipt(p) && p.installmentId && p.installmentId === scheduleId
     );
     if (byId) return byId;
 
@@ -975,84 +993,133 @@ export default function Payments() {
     if (targetSchedule?.label) {
       const byLabel = payments.find(
         (p) =>
-          p.status !== 'voided' &&
+          isValidInstallmentReceipt(p) &&
           p.saleId === selectedSale.id &&
           p.description?.includes(targetSchedule.label)
       );
       if (byLabel) return byLabel;
     }
 
-    // 3. Match by saleId and exact schedule amount / paid amount
-    if (targetSchedule && targetSchedule.paidAmount > 0) {
-      const byAmount = payments.find(
+    // 3. Only if a single schedule is paid on this sale, match by exact amount
+    const paidSchedules = selectedSchedules.filter((s) => s.paidAmount > 0 || s.status === 'paid');
+    if (paidSchedules.length === 1 && paidSchedules[0].id === scheduleId && targetSchedule) {
+      return payments.find(
         (p) =>
-          p.status !== 'voided' &&
+          isValidInstallmentReceipt(p) &&
           p.saleId === selectedSale.id &&
           (Math.abs(Number(p.amount) - Number(targetSchedule.paidAmount)) < 0.01 ||
-           Math.abs(Number(p.amount) - Number(targetSchedule.amount)) < 0.01)
+            Math.abs(Number(p.amount) - Number(targetSchedule.amount)) < 0.01)
       );
-      if (byAmount) return byAmount;
     }
 
-    // 4. If only 1 paid schedule exists in this sale, match any active payment for this sale
-    const paidSchedules = selectedSchedules.filter((s) => s.paidAmount > 0 || s.status === 'paid');
-    if (paidSchedules.length === 1 && paidSchedules[0].id === scheduleId) {
-      const bySale = payments.find(
-        (p) => p.status !== 'voided' && p.saleId === selectedSale.id
-      );
-      if (bySale) return bySale;
-    }
-
-    // 5. Fallback: most recent payment for this sale
-    return payments.find(
-      (p) => p.status !== 'voided' && p.saleId === selectedSale.id
-    );
+    return undefined;
   };
 
-  const handleReverseInstallmentPayment = async (schedule: InstallmentSchedule) => {
+  const openEditInstallmentModal = (schedule: InstallmentSchedule) => {
     const linkedPmt = getPaymentForSchedule(schedule.id);
     if (!linkedPmt) {
-      alert('لم يتم العثور على حركة السداد المرتبطة بهذا القسط في السجلات.');
+      setMessage({ type: 'error', text: 'لم يتم العثور على إيصال تحصيل فعلي مرتبط بهذا القسط.' });
       return;
     }
-
     if (user?.role !== 'admin' && isDateClosed(linkedPmt.date)) {
-      alert('لا يمكن إلغاء سداد في تاريخ مغلق مالياً.');
+      setMessage({ type: 'error', text: 'لا يمكن تعديل أو إلغاء سداد في تاريخ مغلق مالياً.' });
+      return;
+    }
+    setEditingInstallmentModal({
+      schedule,
+      payment: linkedPmt,
+      amount: Number(linkedPmt.amount),
+      date: String(linkedPmt.date || today()).slice(0, 10),
+      description: linkedPmt.description || '',
+      confirmCancel: false,
+      saving: false,
+      error: '',
+    });
+  };
+
+  const handleSaveInstallmentEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingInstallmentModal) return;
+    const { schedule, payment, amount, date, description } = editingInstallmentModal;
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setEditingInstallmentModal((prev) => prev && { ...prev, error: 'أدخل مبلغاً صحيحاً أكبر من الصفر.' });
+      return;
+    }
+    if (user?.role !== 'admin' && isDateClosed(date)) {
+      setEditingInstallmentModal((prev) => prev && { ...prev, error: 'التاريخ المختار مغلق مالياً.' });
       return;
     }
 
-    const ok = window.confirm(
-      `هل أنت متأكد من إلغاء سداد ${schedule.label} بمبلغ (${formatCurrency(linkedPmt.amount)})؟\n\n` +
-      `سيتم إعادة القسط إلى قائمة الأقساط المفتوحة فوراً وتعديل رصيد الفاتورة والعميل لتتمكن من إعادة سداده بالقيمة والتاريخ الصحيح.`
-    );
-    if (!ok) return;
-
-    setReversingScheduleId(schedule.id);
+    setEditingInstallmentModal((prev) => prev && { ...prev, saving: true, error: '' });
     try {
       if (isApiMode()) {
-        await api.reversePayment(linkedPmt.id);
+        await api.updatePayment(payment.id, {
+          amount,
+          date,
+          description: description.trim() || payment.description,
+        });
       } else {
-        reversePayment(linkedPmt, 'إلغاء سداد قسط لإعادة تعديله', user?.name || 'مدير النظام');
+        // Offline fallback: reverse and recreate cleanly
+        reversePayment(payment, 'تعديل سداد قسط', user?.name || 'مدير النظام');
+        createPayment({
+          type: 'in',
+          amount,
+          saleId: payment.saleId,
+          installmentId: payment.installmentId || schedule.id,
+          customerId: payment.customerId,
+          referenceId: payment.referenceId,
+          referenceType: payment.referenceType || 'customer',
+          description: description.trim() || payment.description,
+          date,
+          channel: payment.channel || 'cash',
+          approvedBy: user?.name || 'مدير النظام',
+          createdBy: user?.name || 'مدير النظام',
+        });
       }
 
       await loadData();
+      setEditingInstallmentModal(null);
+      setMessage({
+        type: 'success',
+        text: `تم تعديل سداد ${schedule.label} إلى ${formatCurrency(amount)} بنجاح.`,
+      });
+    } catch (err: any) {
+      setEditingInstallmentModal((prev) =>
+        prev && { ...prev, saving: false, error: err?.message || 'تعذر حفظ التعديل.' }
+      );
+    }
+  };
 
-      // Automatically preselect the reopened schedule in the form for immediate editing/re-payment
-      const originalAmount = schedule.amount;
+  const handleCancelInstallmentFromModal = async () => {
+    if (!editingInstallmentModal) return;
+    const { schedule, payment } = editingInstallmentModal;
+
+    setEditingInstallmentModal((prev) => prev && { ...prev, saving: true, error: '' });
+    setReversingScheduleId(schedule.id);
+    try {
+      if (isApiMode()) {
+        await api.reversePayment(payment.id);
+      } else {
+        reversePayment(payment, 'إلغاء سداد قسط لإعادة تعديله', user?.name || 'مدير النظام');
+      }
+
+      await loadData();
+      setEditingInstallmentModal(null);
       setIncomingForm((curr) => ({
         ...curr,
         installmentId: schedule.id,
-        amount: originalAmount,
+        amount: schedule.amount,
         description: selectedSale ? `سداد ${schedule.label} من الفاتورة ${selectedSale.invoiceNumber}` : '',
       }));
-
       setMessage({
         type: 'success',
-        text: `تم إلغاء سداد ${schedule.label} بنجاح. تم اختياره تلقائياً في النموذج لتعديل المبلغ أو التاريخ وإعادة الحفظ.`,
+        text: `تم إلغاء سداد ${schedule.label} وإعادة فتحه كقسط غير مدفوع.`,
       });
     } catch (err: any) {
-      console.error('Failed to reverse installment payment:', err);
-      alert(`فشل التراجع عن سداد القسط: ${err?.message || 'خطأ غير معروف'}`);
+      setEditingInstallmentModal((prev) =>
+        prev && { ...prev, saving: false, error: err?.message || 'فشل إلغاء سداد القسط.' }
+      );
     } finally {
       setReversingScheduleId(null);
     }
@@ -1094,10 +1161,107 @@ export default function Payments() {
     }
   };
 
+  const printCashVoucherReceipt = (params: {
+    payment: Payment;
+    partyName: string;
+    isSupplier: boolean;
+    supplierBalanceAfter?: number;
+  }) => {
+    const { payment, partyName, isSupplier, supplierBalanceAfter } = params;
+    const receiptNo = payment.receiptNumber || payment.id.slice(-8).toUpperCase();
+    const isOutflow = payment.type === 'out';
+    const docTitle = isSupplier
+      ? isOutflow
+        ? 'سند صرف دفعة لمورد'
+        : 'سند استرداد من مورد'
+      : isOutflow
+        ? 'سند صرف نقدي'
+        : 'سند قبض نقدي';
+    const companyName = settings.companyName || 'شركة المتحدة';
+    const companyPhone = settings.companyPhone || '';
+
+    const html = `
+      <!doctype html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="utf-8" />
+        <title>${docTitle}</title>
+        <style>
+          @page { size: 80mm auto; margin: 0; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 0;
+            width: 80mm;
+            background: #fff;
+            color: #000;
+            font-family: Tahoma, Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          .receipt { width: 72mm; margin: 0 auto; padding: 3mm 0 4mm; }
+          .head { text-align: center; border: 1.5px solid #000; padding: 2.5mm 2mm 2mm; margin-bottom: 2.5mm; }
+          .company { font-size: 14px; font-weight: 700; margin-bottom: 1mm; }
+          .title { font-size: 13px; font-weight: 700; border-top: 1px dashed #000; padding-top: 1.5mm; margin-top: 1mm; }
+          .meta { font-size: 10.5px; margin-top: 1mm; color: #222; }
+          .box { border: 1px solid #000; padding: 2mm 2.5mm; margin-bottom: 2.5mm; }
+          .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; padding: 1.4mm 0; border-bottom: 1px dotted #999; font-size: 11.5px; }
+          .row:last-child { border-bottom: none; }
+          .label { font-weight: 700; color: #333; white-space: nowrap; }
+          .value { font-weight: 700; text-align: left; word-break: break-word; }
+          .amount-row { background: #f3f4f6; border: 1px solid #000 !important; padding: 2mm !important; margin: 1.5mm 0; font-size: 13px; }
+          .note { font-size: 10.5px; text-align: center; margin: 2mm 0 3mm; color: #222; }
+          .signatures { display: flex; justify-content: space-between; gap: 10px; margin-top: 5mm; padding-top: 2mm; }
+          .sig { width: 46%; text-align: center; border-top: 1px solid #000; padding-top: 1.5mm; font-size: 10.5px; font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <main class="receipt">
+          <header class="head">
+            <div class="company">${companyName}</div>
+            ${companyPhone ? `<div class="meta">هاتف: ${companyPhone}</div>` : ''}
+            <div class="title">${docTitle}</div>
+            <div class="meta">رقم السند: ${receiptNo}</div>
+          </header>
+
+          <section class="box">
+            <div class="row"><div class="label">${isSupplier ? 'اسم المورد' : 'الطرف المستفيد'}</div><div class="value">${partyName}</div></div>
+            <div class="row"><div class="label">تاريخ الحركة</div><div class="value">${formatDate(payment.date)}</div></div>
+            <div class="row amount-row"><div class="label">المبلغ ${isOutflow ? 'المنصرف' : 'المستلم'}</div><div class="value">${formatCurrency(payment.amount)}</div></div>
+            ${isSupplier && typeof supplierBalanceAfter === 'number' ? `<div class="row"><div class="label">الرصيد المتبقي للمورد</div><div class="value">${formatCurrency(supplierBalanceAfter)}</div></div>` : ''}
+            <div class="row"><div class="label">البيان</div><div class="value">${payment.description || '-'}</div></div>
+            <div class="row"><div class="label">المسؤول</div><div class="value">${payment.createdBy || '-'}</div></div>
+          </section>
+
+          <div class="note">${isOutflow ? 'تم صرف المبلغ المذكور نقداً من الخزينة.' : 'تم استلام المبلغ المذكور نقداً في الخزينة.'}</div>
+
+          <section class="signatures">
+            <div class="sig">توقيع المستلم</div>
+            <div class="sig">اعتماد الخزينة</div>
+          </section>
+        </main>
+      </body>
+      </html>
+    `;
+
+    void printHtmlDocument(html, {
+      title: docTitle,
+      width: 420,
+      height: 680,
+    }).then((opened) => {
+      if (!opened) {
+        setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
+      }
+    });
+  };
+
   const handlePrintPayment = (payment: Payment) => {
     const sale = payment.saleId ? sales.find((s) => s.id === payment.saleId) : null;
     const installment = sale?.financing?.schedules?.find((sch) => sch.id === payment.installmentId) || null;
     const customer = customers.find((c) => c.id === (payment.customerId || payment.referenceId));
+    const supplier = suppliers.find((s) => s.id === (payment.supplierId || payment.referenceId));
     const customerName = customer?.name || (sale ? sale.customerName : 'عميل نقدي');
 
     if (sale) {
@@ -1110,7 +1274,14 @@ export default function Payments() {
         remainingInstallments: remainingSchedules,
       });
     } else {
-      window.print();
+      const isSupplierPayment = Boolean(supplier || payment.supplierId || payment.referenceType === 'supplier');
+      const partyName = supplier?.name || customer?.name || (payment.type === 'out' ? 'مورد / مصروف' : 'عميل');
+      printCashVoucherReceipt({
+        payment,
+        partyName,
+        isSupplier: isSupplierPayment,
+        supplierBalanceAfter: supplier ? Number(supplier.balance || 0) : undefined,
+      });
     }
   };
 
@@ -1445,14 +1616,14 @@ export default function Payments() {
               className="flex items-center gap-1.5 bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
             >
               <Plus size={15} />
-              <span>+ سداد عميل</span>
+              <span>سداد عميل</span>
             </button>
             <button
               onClick={() => openModal('out')}
               className="flex items-center gap-1.5 bg-rose-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-rose-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
             >
               <Plus size={15} />
-              <span>+ دفعة مورد</span>
+              <span>دفعة مورد</span>
             </button>
             {hasPermission(user, 'closing:write') && (
               <button
@@ -2141,18 +2312,18 @@ export default function Payments() {
                                         {formatCurrency(Math.max(schedule.amount - schedule.paidAmount, 0))}
                                       </td>
                                       <td className="px-3 py-3">
-                                        <div className="flex items-center gap-2 flex-wrap">
+                                        <div className="flex items-center gap-1.5 whitespace-nowrap">
                                           <StatusBadge status={schedule.status} />
-                                          {(schedule.paidAmount > 0 || schedule.status === 'paid') && (
+                                          {(schedule.paidAmount > 0 || schedule.status === 'paid') && getPaymentForSchedule(schedule.id) && (
                                             <button
                                               type="button"
-                                              onClick={() => handleReverseInstallmentPayment(schedule)}
+                                              onClick={() => openEditInstallmentModal(schedule)}
                                               disabled={reversingScheduleId === schedule.id}
-                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 transition-colors cursor-pointer shadow-xs"
-                                              title="إلغاء السداد وإعادة فتح هذا القسط لتعديل قيمته أو تاريخه"
+                                              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300 transition-colors cursor-pointer whitespace-nowrap"
+                                              title="تعديل مبلغ أو تاريخ السداد أو إلغاء السداد"
                                             >
-                                              <RotateCcw size={11} className={reversingScheduleId === schedule.id ? 'animate-spin' : ''} />
-                                              <span>تراجع وتعديل</span>
+                                              <Pencil size={11} />
+                                              <span>تعديل / تراجع</span>
                                             </button>
                                           )}
                                         </div>
@@ -2193,8 +2364,8 @@ export default function Payments() {
                         onClick={() => setIncomingSubmitMode('save_print')}
                         className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-bold text-white transition-all shadow-xs active:scale-95 sm:w-56 ${
                           paymentMode === 'early_settlement'
-                            ? 'bg-blue-600 hover:bg-blue-700'
-                            : 'bg-blue-600 hover:bg-blue-700'
+                            ? 'bg-[#1e40af] hover:bg-[#1d4ed8]'
+                            : 'bg-[#1e40af] hover:bg-[#1d4ed8]'
                         }`}
                       >
                         <Printer size={17} />
@@ -2431,6 +2602,148 @@ export default function Payments() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Direct Edit / Cancel Installment Payment Modal */}
+      {editingInstallmentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center">
+                  <Pencil size={18} className="text-blue-200" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black">تعديل أو إلغاء سداد {editingInstallmentModal.schedule.label}</h3>
+                  <p className="text-[11px] text-blue-200 font-mono">
+                    إيصال: {editingInstallmentModal.payment.receiptNumber || editingInstallmentModal.payment.id.slice(-8)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingInstallmentModal(null)}
+                disabled={editingInstallmentModal.saving}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveInstallmentEdit} className="p-5 space-y-4">
+              {editingInstallmentModal.error && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+                  {editingInstallmentModal.error}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs">
+                <div>
+                  <span className="text-slate-500 block">قيمة القسط الأصلي</span>
+                  <span className="font-black text-slate-900">{formatCurrency(editingInstallmentModal.schedule.amount)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">المسدد الحالي</span>
+                  <span className="font-black text-emerald-700">{formatCurrency(editingInstallmentModal.payment.amount)}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">المبلغ المدفوع الجديد</label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    required
+                    value={editingInstallmentModal.amount || ''}
+                    onChange={(e) =>
+                      setEditingInstallmentModal((prev) =>
+                        prev && { ...prev, amount: Number(e.target.value), error: '' }
+                      )
+                    }
+                    className="w-full h-10 rounded-xl border border-slate-300 px-3 text-sm font-bold text-slate-900 focus:border-blue-600 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">تاريخ السداد</label>
+                  <DatePicker
+                    value={editingInstallmentModal.date}
+                    onChange={(val) =>
+                      setEditingInstallmentModal((prev) => prev && { ...prev, date: val, error: '' })
+                    }
+                    className="w-full"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">البيان / الملاحظة</label>
+                <input
+                  type="text"
+                  value={editingInstallmentModal.description}
+                  onChange={(e) =>
+                    setEditingInstallmentModal((prev) =>
+                      prev && { ...prev, description: e.target.value }
+                    )
+                  }
+                  className="w-full h-10 rounded-xl border border-slate-300 px-3 text-sm text-slate-800 focus:border-blue-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="submit"
+                  disabled={editingInstallmentModal.saving}
+                  className="w-full h-10 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-sm font-bold flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <Save size={15} />
+                  <span>{editingInstallmentModal.saving ? 'جاري الحفظ...' : 'حفظ التعديل مباشرة'}</span>
+                </button>
+
+                {!editingInstallmentModal.confirmCancel ? (
+                  <button
+                    type="button"
+                    disabled={editingInstallmentModal.saving}
+                    onClick={() =>
+                      setEditingInstallmentModal((prev) => prev && { ...prev, confirmCancel: true })
+                    }
+                    className="w-full h-9 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Trash2 size={14} />
+                    <span>إلغاء السداد بالكامل وإعادة فتح القسط</span>
+                  </button>
+                ) : (
+                  <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 space-y-2">
+                    <p className="text-xs font-bold text-rose-800 text-center">
+                      تأكيد إلغاء الإيصال وإعادة القسط إلى قائمة الأقساط المفتوحة؟
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={editingInstallmentModal.saving}
+                        onClick={handleCancelInstallmentFromModal}
+                        className="flex-1 h-8 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+                      >
+                        نعم، إلغاء السداد
+                      </button>
+                      <button
+                        type="button"
+                        disabled={editingInstallmentModal.saving}
+                        onClick={() =>
+                          setEditingInstallmentModal((prev) => prev && { ...prev, confirmCancel: false })
+                        }
+                        className="flex-1 h-8 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
+                      >
+                        تراجع
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </form>
           </div>
         </div>
       )}

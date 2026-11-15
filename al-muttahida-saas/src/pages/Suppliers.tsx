@@ -126,13 +126,13 @@ export default function Suppliers() {
   const totalSuppliersBalance = suppliers.reduce((sum, s) => sum + Number(s.balance || 0), 0);
 
   return (
-    <div className="space-y-2">
+    <div className="desktop-view-container">
       {/* Unified Compact Action Bar Header Strip */}
-      <div className="erp-action-bar">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="erp-action-bar shrink-0">
+        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
           <h2 className="text-lg font-black text-slate-900 shrink-0">الموردين</h2>
-          <div className="relative flex-1 min-w-[240px] max-w-md">
-            <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <div className="relative flex-1 min-w-[240px] max-w-sm">
+            <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
               ref={searchInputRef}
@@ -140,23 +140,23 @@ export default function Suppliers() {
               placeholder="بحث باسم المورد أو رقم الهاتف..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="input-ui h-9 w-full pr-9 pl-3 text-xs bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="input-ui h-9 w-full pr-10 pl-3.5 text-xs font-semibold bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 placeholder:text-slate-400"
             />
           </div>
         </div>
         {user?.role !== 'manager' && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
-            className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+            className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs shrink-0 cursor-pointer"
           >
             <Plus size={15} />
-            <span>+ إضافة مورد</span>
+            <span>إضافة مورد</span>
           </button>
         )}
       </div>
 
       {/* Suppliers High-Density Table (Desktop) & Cards (Mobile) */}
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs flex flex-col flex-1 min-h-0">
+      <section className="desktop-table-card">
         {/* Mobile Cards View (< md) */}
         <div className="md:hidden flex-1 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
           {filteredSuppliers.length === 0 ? (
@@ -217,15 +217,15 @@ export default function Suppliers() {
           )}
         </div>
 
-        <div className="hidden md:block overflow-auto h-[calc(100vh-210px)]">
-          <table className="w-full min-w-[700px]">
-            <thead className="bg-slate-50 border-b border-slate-200">
+        <div className="hidden md:block desktop-table-scroll">
+          <table className="w-full min-w-[700px] border-collapse">
+            <thead className="desktop-sticky-header">
               <tr>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">اسم المورد</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الهاتف</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">العنوان</th>
-                <th className="py-2.5 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رصيد المورد</th>
-                <th className="py-2.5 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">اسم المورد</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الهاتف</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">العنوان</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رصيد المورد</th>
+                <th className="py-3 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -241,23 +241,23 @@ export default function Suppliers() {
                     title={user?.role !== 'manager' ? 'انقر مرتين للتعديل' : ''}
                     className="group cursor-pointer hover:bg-slate-50 transition-colors"
                   >
-                    <td className="py-2.5 px-4 font-bold text-slate-900 text-xs md:text-sm">{supplier.name}</td>
-                    <td className="py-2.5 px-4 text-xs md:text-sm text-slate-700 font-mono">{supplier.phone}</td>
-                    <td className="py-2.5 px-4 text-xs md:text-sm text-slate-600 truncate max-w-[240px]">{supplier.address || '—'}</td>
-                    <td className="py-2.5 px-4 text-xs md:text-sm font-bold">
+                    <td className="py-3 px-4 font-bold text-slate-900 text-xs sm:text-sm">{supplier.name}</td>
+                    <td className="py-3 px-4 text-xs sm:text-sm text-slate-700 font-mono">{supplier.phone}</td>
+                    <td className="py-3 px-4 text-xs sm:text-sm text-slate-600 truncate max-w-[240px]">{supplier.address || '—'}</td>
+                    <td className="py-3 px-4 text-xs sm:text-sm font-bold">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setInspectingSupplier(supplier);
                         }}
-                        className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer hover:opacity-85 transition-opacity ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer hover:opacity-85 transition-opacity ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}
                         title="انقر لعرض سجل المحاسبات وكشف الحساب"
                       >
                         {formatCurrency(supplier.balance)}
                       </button>
                     </td>
-                    <td className="py-2.5 px-4 text-center">
+                    <td className="py-3 px-4 text-center">
                       <div className="erp-icon-actions">
                         <button
                           type="button"
@@ -265,18 +265,18 @@ export default function Suppliers() {
                             e.stopPropagation();
                             setInspectingSupplier(supplier);
                           }}
-                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
                           title="سجل محاسبات وكشف حساب المورد"
                         >
                           <FileText size={15} />
                         </button>
                         {hasPermission(user, 'sales:write') && user?.role !== 'manager' && (
-                          <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="تعديل">
+                          <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="تعديل">
                             <Edit size={15} />
                           </button>
                         )}
                         {canDelete && (
-                          <button onClick={() => handleDelete(supplier)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors" title="حذف">
+                          <button onClick={() => handleDelete(supplier)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer" title="حذف">
                             <Trash2 size={15} />
                           </button>
                         )}
@@ -288,7 +288,7 @@ export default function Suppliers() {
             </tbody>
           </table>
         </div>
-        <div className="erp-status-bar">
+        <div className="erp-status-bar shrink-0">
           <span className="font-bold text-slate-700">إجمالي الموردين: <span className="text-blue-700 font-extrabold">{suppliers.length}</span> (المعروض: {filteredSuppliers.length})</span>
           <span className="font-bold text-slate-700">إجمالي مستحقات الموردين: <span className="text-rose-700 font-extrabold">{formatCurrency(totalSuppliersBalance)}</span></span>
         </div>
@@ -367,7 +367,7 @@ export default function Suppliers() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-2xs"
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-2xs"
                 >
                   {editingSupplier ? 'تحديث' : 'إضافة'}
                 </button>

@@ -1,4 +1,6 @@
 import React from 'react';
+import companyLogo from '../assets/company-logo-sm.jpg';
+import companyMark from '../assets/company-mark.png';
 
 interface CompanyLogoProps {
   size?: number;
@@ -6,6 +8,7 @@ interface CompanyLogoProps {
   variant?: 'emblem' | 'full';
   companyName?: string;
   subTitle?: string;
+  theme?: 'light' | 'dark';
 }
 
 export default function CompanyLogo({
@@ -13,67 +16,45 @@ export default function CompanyLogo({
   className = '',
   variant = 'emblem',
   companyName = 'شركة المتحدة',
+  theme = 'light',
 }: CompanyLogoProps) {
+  const isDark = theme === 'dark';
+
   return (
-    <div className={`inline-flex items-center gap-3 select-none ${className}`}>
-      {/* Executive Geometric Unity Emblem for Al-Muttahida */}
+    <div className={`inline-flex items-center ${isDark ? 'gap-0.5' : 'gap-3'} select-none ${className}`}>
+      {/* Al-Muttahida Brand Logo */}
       <div
-        className="relative shrink-0 flex items-center justify-center rounded-xl overflow-hidden shadow-sm shadow-blue-900/20 ring-1 ring-blue-900/10 transition-transform duration-200 hover:scale-105"
+        className={`relative shrink-0 flex items-center justify-center overflow-hidden transition-transform duration-200 hover:scale-105 ${
+          isDark
+            ? '-ml-1'
+            : 'rounded-xl shadow-sm shadow-slate-900/20 ring-1 ring-slate-900/10 bg-[#0f245c]'
+        }`}
         style={{
           width: size,
           height: size,
-          background: 'linear-gradient(145deg, #2563eb 0%, #1d4ed8 50%, #1e3a8a 100%)',
         }}
       >
-        {/* Subtle top edge highlight */}
-        <div
-          className="absolute inset-0 pointer-events-none opacity-25"
-          style={{
-            background: 'linear-gradient(180deg, rgba(255,255,255,0.5) 0%, transparent 45%)',
-          }}
+        <img
+          src={isDark ? companyMark : companyLogo}
+          alt={companyName}
+          className={
+            isDark
+              ? 'w-full h-full object-contain scale-125 drop-shadow-[0_2px_6px_rgba(16,185,129,0.22)]'
+              : 'w-full h-full object-cover'
+          }
         />
-
-        <svg
-          viewBox="0 0 64 64"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          className="w-[68%] h-[68%]"
-        >
-          {/* Left rising architectural pillar */}
-          <path
-            d="M12 48V22L24 14V48H12Z"
-            fill="#FFFFFF"
-          />
-          {/* Right rising architectural pillar */}
-          <path
-            d="M40 48V14L52 22V48H40Z"
-            fill="#BFDBFE"
-          />
-          {/* Central interlocking bridge / unity chevron */}
-          <path
-            d="M24 22L32 30L40 22V34L32 42L24 34V22Z"
-            fill="#FFFFFF"
-          />
-          {/* Base foundation bar */}
-          <rect
-            x="12"
-            y="50"
-            width="40"
-            height="3.5"
-            rx="1.75"
-            fill="#FFFFFF"
-            fillOpacity="0.85"
-          />
-        </svg>
       </div>
 
-      {/* Clean Corporate Wordmark */}
+      {/* Unified Corporate Wordmark (No Subtitle) */}
       {variant === 'full' && (
-        <span className="truncate text-[17px] font-black leading-normal py-0.5 text-slate-900">
+        <span
+          className={`truncate text-[17px] font-black leading-normal py-0.5 ${
+            isDark ? 'text-white tracking-tight drop-shadow-xs' : 'text-slate-900'
+          }`}
+        >
           {companyName}
         </span>
       )}
     </div>
   );
 }
-

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import companyLogo from './assets/company-logo-sm.jpg';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DialogProvider } from './context/DialogContext';
@@ -63,16 +64,24 @@ function AppRoutes() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6" dir="rtl">
+      <div
+        className="min-h-screen flex flex-col items-center justify-center p-6"
+        style={{ background: 'linear-gradient(135deg, #0f172a 0%, #0f1f4a 55%, #172959 100%)' }}
+        dir="rtl"
+      >
         <div className="flex flex-col items-center gap-4 text-center max-w-sm">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-700 to-indigo-800 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 animate-pulse">
-            <Building2 className="w-7 h-7" />
+          <div className="w-[76px] h-[76px] rounded-[18px] overflow-hidden shadow-2xl border border-white/20 bg-[#0f245c]">
+            <img
+              src={companyLogo}
+              alt="شركة المتحدة"
+              className="w-full h-full object-cover"
+            />
           </div>
-          <div className="space-y-1">
-            <h2 className="text-base font-bold text-slate-800">شركة المتحدة ERP</h2>
-            <p className="text-xs text-slate-500">جاري التحقق من الجلسة ومزامنة النظام...</p>
+          <div className="space-y-1.5">
+            <h2 className="text-[22px] font-bold text-white">شركة المتحدة</h2>
+            <p className="text-xs text-slate-200/90">جاري التحقق من الجلسة ومزامنة النظام...</p>
           </div>
-          <LoadingState size="lg" />
+          <LoadingState size="md" />
         </div>
       </div>
     );

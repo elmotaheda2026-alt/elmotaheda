@@ -46,7 +46,7 @@ export class ErrorBoundary extends Component<Props, State> {
             )}
             <button
               onClick={this.handleReload}
-              className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors font-medium text-sm"
+              className="w-full flex items-center justify-center gap-2 bg-[#1e40af] text-white px-5 py-2.5 rounded-xl hover:bg-[#1d4ed8] transition-colors font-medium text-sm"
             >
               <RefreshCw size={16} />
               <span>إعادة تحميل الصفحة</span>

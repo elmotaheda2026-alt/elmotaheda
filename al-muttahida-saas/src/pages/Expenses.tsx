@@ -275,132 +275,144 @@ export default function Expenses() {
       </div>
 
       {/* Tier 1: Fixed Compact Header & Filters */}
-      <div className="erp-action-bar shrink-0 no-print print:hidden">
-        <div className="flex flex-wrap items-center gap-3">
-          <div>
-            <h2 className="text-lg font-black text-slate-900">المصروفات</h2>
-            <p className="text-xs text-slate-500 hidden sm:block">سندات الصرف والتحكم في المصروفات التشغيلية</p>
+      <div className="bg-white border border-slate-200/90 rounded-2xl px-4 py-3 space-y-2.5 shadow-xs shrink-0 no-print print:hidden">
+        {/* Row 1: Title, Search & Primary Actions */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+            <div className="shrink-0">
+              <h2 className="text-lg font-black text-slate-900 leading-tight">المصروفات</h2>
+              <p className="text-[11px] text-slate-500 hidden sm:block">سندات الصرف والتحكم في المصروفات التشغيلية</p>
+            </div>
+
+            <div className="relative flex-1 min-w-[220px] max-w-sm">
+              <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                ref={searchInputRef}
+                autoFocus
+                placeholder="بحث في الوصف أو التصنيف..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="input-ui h-9 w-full pr-10 pl-3.5 text-xs font-semibold bg-slate-50/70 hover:bg-white focus:bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 placeholder:text-slate-400"
+              />
+            </div>
           </div>
 
-          <div className="relative w-52 sm:w-60">
-            <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-            <input
-              type="text"
-              ref={searchInputRef}
-              autoFocus
-              placeholder="بحث في الوصف أو التصنيف..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="input-ui h-9 w-full pr-9 pl-3 text-xs bg-slate-50/70 border-slate-200 focus:bg-white"
-            />
-          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="h-9 px-3.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl transition-colors text-xs font-bold border border-slate-200 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              title="طباعة كشف المصروفات"
+            >
+              <Printer size={14} className="text-slate-500" />
+              <span>طباعة</span>
+            </button>
 
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="h-9 px-3 text-xs font-bold rounded-xl border border-slate-200 bg-white text-slate-700 outline-none hover:border-slate-300 focus:border-blue-500 transition-all cursor-pointer shadow-2xs min-w-[125px]"
-          >
-            <option value="">كل التصنيفات</option>
-            {categories.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
+            {user?.role !== 'manager' && (
+              <button
+                type="button"
+                onClick={() => setShowModal(true)}
+                className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs whitespace-nowrap cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>إضافة سند صرف</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Quick Period Presets */}
-          <div className="flex items-center rounded-xl bg-slate-100 p-0.5 border border-slate-200">
-            <button
-              type="button"
-              onClick={() => handlePresetClick('all')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                isPresetActive('all') ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
+        {/* Row 2: Period Presets, Category & Date Range */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Period Presets */}
+            <div className="inline-flex h-9 items-center rounded-xl bg-slate-100/90 p-0.5 border border-slate-200/70">
+              <button
+                type="button"
+                onClick={() => handlePresetClick('all')}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                  isPresetActive('all') ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                الكل
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePresetClick('year')}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                  isPresetActive('year') ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                هذا العام
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePresetClick('quarter')}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                  isPresetActive('quarter') ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                هذا الربع
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePresetClick('month')}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                  isPresetActive('month') ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                هذا الشهر
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePresetClick('today')}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                  isPresetActive('today') ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                اليوم
+              </button>
+            </div>
+
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="h-9 px-3 text-xs font-bold rounded-xl border border-slate-200/90 bg-slate-50/70 hover:bg-white focus:bg-white text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition-all cursor-pointer min-w-[135px]"
             >
-              الكل
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetClick('year')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                isPresetActive('year') ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              هذا العام
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetClick('quarter')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                isPresetActive('quarter') ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              هذا الربع
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetClick('month')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                isPresetActive('month') ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              هذا الشهر
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetClick('today')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                isPresetActive('today') ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              اليوم
-            </button>
+              <option value="">كل التصنيفات</option>
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
           </div>
 
-          {/* Date Range Inputs */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-bold text-slate-500">من:</span>
-            <DatePicker
-              value={dateFrom}
-              onChange={setDateFrom}
-              className="h-9 w-[130px] rounded-xl border-slate-200 text-xs font-bold bg-white"
-            />
-            <span className="text-xs font-bold text-slate-500">إلى:</span>
-            <DatePicker
-              value={dateTo}
-              onChange={setDateTo}
-              className="h-9 w-[130px] rounded-xl border-slate-200 text-xs font-bold bg-white"
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Unified Date Range Pill */}
+            <div className="flex h-9 items-center gap-1.5 bg-slate-50/70 border border-slate-200/90 rounded-xl px-2.5 text-xs">
+              <span className="text-[11px] font-semibold text-slate-500">الفترة:</span>
+              <DatePicker
+                value={dateFrom}
+                onChange={setDateFrom}
+                className="h-7 w-[112px] rounded-lg border border-slate-200/70 bg-white text-xs font-bold text-slate-700 text-center"
+              />
+              <span className="text-[11px] font-bold text-slate-400">←</span>
+              <DatePicker
+                value={dateTo}
+                onChange={setDateTo}
+                className="h-7 w-[112px] rounded-lg border border-slate-200/70 bg-white text-xs font-bold text-slate-700 text-center"
+              />
+            </div>
+
+            {(dateFrom || dateTo || selectedCategory || searchTerm) && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="h-9 px-3 text-xs font-bold text-rose-600 bg-rose-50/70 hover:bg-rose-100/80 rounded-xl transition-colors border border-rose-200/80 whitespace-nowrap cursor-pointer"
+              >
+                مسح الفلاتر
+              </button>
+            )}
           </div>
-
-          {(dateFrom || dateTo || selectedCategory || searchTerm) && (
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="px-2.5 py-1.5 text-xs font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-200"
-            >
-              مسح الفلاتر
-            </button>
-          )}
-
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg transition-colors text-xs font-bold border border-slate-200"
-            title="طباعة كشف المصروفات"
-          >
-            <Printer size={14} />
-            <span>طباعة</span>
-          </button>
-
-          {user?.role !== 'manager' && (
-            <button
-              onClick={() => setShowModal(true)}
-              className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs whitespace-nowrap cursor-pointer"
-            >
-              <Plus size={15} />
-              <span>+ إضافة سند صرف</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -617,7 +629,7 @@ export default function Expenses() {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-xs font-bold shadow-2xs disabled:opacity-50 transition-colors"
+                  className="flex-1 px-4 py-2.5 bg-[#1e40af] text-white rounded-xl hover:bg-[#1d4ed8] text-xs font-bold shadow-2xs disabled:opacity-50 transition-colors"
                 >
                   {isSubmitting ? 'جاري الحفظ...' : 'حفظ سند الصرف'}
                 </button>

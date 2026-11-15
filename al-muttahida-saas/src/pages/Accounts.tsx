@@ -257,7 +257,7 @@ export default function Accounts() {
                 onClick={() => handlePresetClick(preset.key)}
                 className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all duration-150 ${
                   activePreset === preset.key
-                    ? 'bg-blue-600 text-white shadow-none'
+                    ? 'bg-[#1e40af] text-white shadow-none'
                     : 'border border-slate-200 bg-slate-50 text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
                 }`}
               >

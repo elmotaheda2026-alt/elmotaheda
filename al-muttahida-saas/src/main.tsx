@@ -6,6 +6,22 @@ import App from './App.tsx'
 
 // HelmetProvider removed; not needed
 
+// In Electron, route window.print() through Chromium's PDF print preview so Windows 11
+// does not show "This app doesn't support print preview".
+const electronApi = (window as unknown as {
+  electronAPI?: {
+    printPreviewCurrent?: (payload?: { title?: string }) => Promise<{ success: boolean; error?: string }>;
+  };
+}).electronAPI;
+
+if (electronApi?.printPreviewCurrent) {
+  window.print = () => {
+    void electronApi.printPreviewCurrent({
+      title: document.title || 'معاينة الطباعة - شركة المتحدة',
+    });
+  };
+}
+
 // Disable accidental value changes when scrolling the mouse wheel over any number input
 document.addEventListener(
   'wheel',

@@ -662,10 +662,10 @@ export default function Customers() {
           {canModify && (
             <button
               onClick={handleNew}
-              className="flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+              className="flex items-center gap-1.5 bg-[#1e40af] text-white px-3.5 py-1.5 rounded-lg hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs cursor-pointer"
             >
               <Plus size={15} />
-              <span>+ عميل جديد</span>
+              <span>عميل جديد</span>
             </button>
           )}
         </div>
@@ -1667,7 +1667,7 @@ export default function Customers() {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-bold flex items-center gap-1.5 shadow-2xs"
+                  className="px-6 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold flex items-center gap-1.5 shadow-2xs"
                 >
                   <Save size={16} />
                   <span>حفظ البيانات</span>

@@ -193,6 +193,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     let finalCustomerId = data.customerId || null;
     let finalSupplierId = data.supplierId || null;
     let saleRemainingBeforeSettlement = 0;
+    const isDownPayment = data.type === 'in' && Boolean(data.saleId) && data.affectsCustomerBalance === false;
 
     if (data.type === 'in' && data.saleId) {
       const sale = await db.get<{ id: string; customer_id: string; paid: number; remaining: number; total: number; invoice_number: string }>(
@@ -202,18 +203,20 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       if (!sale) return res.status(404).json({ message: 'Sale invoice not found' });
       saleRemainingBeforeSettlement = Number(sale.remaining || 0);
 
-      if (data.isEarlySettlement) {
-        const discount = Number(data.settlementDiscount || 0);
-        if (discount > saleRemainingBeforeSettlement) {
-          return res.status(400).json({ message: 'قيمة خصم التعجيل لا يمكن أن تتجاوز المبلغ المتبقي' });
-        }
-        const expectedNet = Math.max(0, Number((saleRemainingBeforeSettlement - discount).toFixed(2)));
-        if (roundMoney(data.amount) > roundMoney(expectedNet)) {
-          return res.status(400).json({ message: 'مبلغ السداد لا يمكن أن يتجاوز صافي التسوية المطلوب' });
-        }
-      } else {
-        if (roundMoney(data.amount) > roundMoney(sale.remaining)) {
-          return res.status(400).json({ message: 'Payment amount cannot exceed the remaining sale balance' });
+      if (!isDownPayment) {
+        if (data.isEarlySettlement) {
+          const discount = Number(data.settlementDiscount || 0);
+          if (discount > saleRemainingBeforeSettlement) {
+            return res.status(400).json({ message: 'قيمة خصم التعجيل لا يمكن أن تتجاوز المبلغ المتبقي' });
+          }
+          const expectedNet = Math.max(0, Number((saleRemainingBeforeSettlement - discount).toFixed(2)));
+          if (roundMoney(data.amount) > roundMoney(expectedNet)) {
+            return res.status(400).json({ message: 'مبلغ السداد لا يمكن أن يتجاوز صافي التسوية المطلوب' });
+          }
+        } else {
+          if (roundMoney(data.amount) > roundMoney(sale.remaining)) {
+            return res.status(400).json({ message: 'Payment amount cannot exceed the remaining sale balance' });
+          }
         }
       }
       finalCustomerId = sale.customer_id;
@@ -221,8 +224,8 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
     // Run all DB mutations inside a single transaction with row-level locks to prevent double-payment races
     await db.withTransaction(async (tx) => {
-      // 1. If paying for a sale, lock the sale row and verify balance atomically
-      if (data.type === 'in' && data.saleId) {
+      // 1. If paying installments/balance for a sale (not a down-payment treasury record), lock sale row & update installments
+      if (data.type === 'in' && data.saleId && !isDownPayment) {
         const lockedSale = await tx.get(
           'SELECT id, paid, remaining, total, status FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
           data.saleId,
@@ -504,6 +507,9 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
   );
   if (!original) return res.status(404).json({ message: 'Payment not found' });
   if (original.status === 'voided') return res.status(409).json({ message: 'Payment is already voided' });
+  if (original.void_ref || String(original.description || '').startsWith('Reverse of ')) {
+    return res.status(409).json({ message: 'لا يمكن عكس حركة عكسية مرة أخرى.' });
+  }
 
   const now = new Date().toISOString();
   const reverseId = uid();
@@ -515,11 +521,12 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
       return res.status(400).json({ message: 'لا يمكن عكس حركة مالية في تاريخ مغلق مالياً' });
     }
     await db.withTransaction(async (tx) => {
-      // 1. If reversing a sale payment, deduct from paid and add back to remaining
+      // 1. If reversing a sale payment (excluding upfront down-payment treasury record), deduct from paid and add back to remaining
       let isEarlySettlementReversal = false;
       let restoredEarlyRemaining = 0;
+      const isDownPaymentReversal = !(original.affects_customer_balance === 1 || original.affects_customer_balance === true);
 
-      if (original.sale_id && original.type === 'in') {
+      if (original.sale_id && original.type === 'in' && !isDownPaymentReversal) {
         const linkedSale = (await tx.get(
           'SELECT id, status, discount, total, paid, remaining FROM sales WHERE id = ?',
           original.sale_id,
@@ -720,6 +727,130 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
     return res.json({ message: 'Reversed', reverseId });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+const editInstallmentPaymentSchema = z.object({
+  amount: z.number().positive(),
+  date: z.string().min(8),
+  description: z.string().min(1).optional(),
+});
+
+// PATCH /payments/:id — Direct edit of an installment payment (amount/date/description) without duplicate reversal entries
+router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequest, res) => {
+  const parsed = editInstallmentPaymentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid payment edit payload', issues: parsed.error.issues });
+  }
+
+  const db = await dbPromise;
+  const original = await db.get<any>('SELECT * FROM payments WHERE id = ?', req.params.id);
+  if (!original) return res.status(404).json({ message: 'Payment not found' });
+  if (original.status === 'voided') return res.status(409).json({ message: 'لا يمكن تعديل حركة ملغاة.' });
+  if (original.void_ref || String(original.description || '').startsWith('Reverse of ')) {
+    return res.status(409).json({ message: 'لا يمكن تعديل حركة عكسية.' });
+  }
+  if (original.type !== 'in' || !original.sale_id || original.affects_customer_balance === 0) {
+    return res.status(400).json({ message: 'التعديل المباشر متاح لحركات سداد الأقساط فقط.' });
+  }
+
+  const newAmount = roundMoney(parsed.data.amount);
+  const newDate = parseDateInput(parsed.data.date);
+  const newDescription = parsed.data.description?.trim() || original.description;
+  const oldAmount = roundMoney(Number(original.amount || 0));
+  const delta = roundMoney(newAmount - oldAmount);
+  const now = new Date().toISOString();
+
+  if (req.user?.role !== 'admin') {
+    const oldDate = String(original.date || '').slice(0, 10);
+    if ((oldDate && await isPeriodClosed(db, oldDate)) || await isPeriodClosed(db, newDate)) {
+      return res.status(403).json({ message: 'لا يمكن تعديل حركة في فترة مغلقة مالياً.' });
+    }
+  }
+
+  try {
+    await db.withTransaction(async (tx: any) => {
+      const sale = await tx.get('SELECT * FROM sales WHERE id = ?', original.sale_id);
+      if (!sale) throw new Error('الفاتورة المرتبطة غير موجودة.');
+
+      if (delta !== 0) {
+        if (delta > roundMoney(Number(sale.remaining || 0)) + 0.01) {
+          throw new Error('المبلغ الجديد يتجاوز الرصيد المتبقي على الفاتورة.');
+        }
+
+        const nextPaid = roundMoney(Math.max(0, Number(sale.paid || 0) + delta));
+        const nextRemaining = roundMoney(Math.max(0, Number(sale.remaining || 0) - delta));
+        const nextStatus = nextRemaining <= 0.01 ? 'paid' : nextPaid > 0.01 ? 'partial' : 'pending';
+
+        await tx.run(
+          'UPDATE sales SET paid = ?, remaining = ?, status = ? WHERE id = ?',
+          nextPaid,
+          nextRemaining,
+          nextStatus,
+          sale.id
+        );
+
+        if (original.customer_id) {
+          await tx.run(
+            'UPDATE customers SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ? WHERE id = ?',
+            delta,
+            delta,
+            now,
+            original.customer_id
+          );
+        }
+
+        if (original.installment_id) {
+          const schedule = await tx.get(
+            'SELECT * FROM installment_schedules WHERE id = ?',
+            original.installment_id
+          );
+          if (schedule) {
+            const schedAmount = roundMoney(Number(schedule.amount || 0));
+            const nextSchedPaid = roundMoney(
+              Math.max(0, Math.min(schedAmount, Number(schedule.paid_amount || 0) + delta))
+            );
+            const nextSchedStatus =
+              nextSchedPaid >= schedAmount - 0.01
+                ? 'paid'
+                : nextSchedPaid > 0.01
+                  ? 'partial'
+                  : 'pending';
+            await tx.run(
+              'UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?',
+              nextSchedPaid,
+              nextSchedStatus,
+              nextSchedPaid > 0 ? newDate : null,
+              schedule.id
+            );
+          }
+        }
+      } else if (original.installment_id) {
+        await tx.run(
+          'UPDATE installment_schedules SET paid_at = ? WHERE id = ? AND paid_amount > 0',
+          newDate,
+          original.installment_id
+        );
+      }
+
+      await tx.run(
+        'UPDATE payments SET amount = ?, date = ?, description = ?, approved_by = ? WHERE id = ?',
+        newAmount,
+        newDate,
+        newDescription,
+        req.user?.name || 'system',
+        original.id
+      );
+    });
+
+    await audit('payment.update', 'payment', original.id, req.user?.name || 'system', {
+      oldAmount,
+      newAmount,
+      newDate,
+    });
+    return res.json({ message: 'Updated' });
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message || 'Failed to update payment' });
   }
 });
 

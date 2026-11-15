@@ -4,6 +4,7 @@ import { Sale, Customer } from '../types';
 import { getCustomers } from '../lib/storage';
 import { tafqeet } from '../lib/tafqeet';
 import { formatDateDisplay } from '../lib/dateUtils';
+import { printHtmlDocument } from '../lib/printHelper';
 
 interface LegalDocumentsPrintModalProps {
   isOpen: boolean;
@@ -760,13 +761,7 @@ export default function LegalDocumentsPrintModal({
   };
 
   // Main printing dispatcher (either prints active party or batch prints everything)
-  const handlePrint = (mode: 'active' | 'all-parties') => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.');
-      return;
-    }
-
+  const handlePrint = async (mode: 'active' | 'all-parties') => {
     const todayDate = formatDateDisplay(new Date());
     const formattedInvoiceDate = formatDateDisplay(sale.date);
 
@@ -1008,15 +1003,13 @@ export default function LegalDocumentsPrintModal({
       </html>
     `;
 
-    printWindow.document.open();
-    printWindow.document.write(printHtml);
-    printWindow.document.close();
-    printWindow.focus();
-
-    // Small delay to ensure styles and fonts are loaded before triggering print
-    printWindow.onload = () => {
-      printWindow.print();
-    };
+    const opened = await printHtmlDocument(printHtml, {
+      title: `طباعة الأوراق القانونية - ${sale.customerName}`,
+    });
+    if (!opened) {
+      alert('تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.');
+      return;
+    }
 
     if (onSuccess) {
       onSuccess();
@@ -1024,8 +1017,8 @@ export default function LegalDocumentsPrintModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm p-4 sm:p-6 flex items-center justify-center">
-      <div className="relative bg-slate-900 border border-slate-800 text-white rounded-[28px] w-full max-w-6xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm p-3 sm:p-5 flex items-center justify-center">
+      <div className="relative bg-slate-900 border border-slate-800 text-white rounded-[28px] w-full max-w-7xl shadow-2xl flex flex-col max-h-[94vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-slate-950 border-b border-slate-800 shrink-0">
@@ -1047,7 +1040,7 @@ export default function LegalDocumentsPrintModal({
         </div>
 
         {/* Modal Body */}
-        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 xl:grid-cols-[400px_1fr] gap-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-[350px_1fr] xl:grid-cols-[380px_1fr] gap-5 min-h-0">
           
           {/* Controls Panel */}
           <div className="space-y-5 flex flex-col justify-start">
@@ -1236,7 +1229,7 @@ export default function LegalDocumentsPrintModal({
           </div>
 
           {/* Live Preview Panel */}
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl flex flex-col h-[650px] overflow-hidden">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl flex flex-col min-w-0 min-h-[540px] lg:h-[calc(94vh-140px)] overflow-hidden">
             
             {/* Preview Navigation Tabs */}
             <div className="flex border-b border-slate-800 bg-slate-950 p-2 gap-2 shrink-0 overflow-x-auto">
@@ -1281,11 +1274,11 @@ export default function LegalDocumentsPrintModal({
             </div>
 
             {/* Simulated Printed Page Wrapper */}
-            <div className="flex-1 overflow-y-auto p-6 bg-slate-900/60 flex justify-center items-start">
+            <div className="flex-1 overflow-auto p-4 sm:p-6 bg-slate-900/60">
               
               {/* Credit Application Preview */}
               {activePreviewTab === 'creditApplication' && (
-                <div className="bg-white text-black p-6 shadow-xl border border-slate-300 w-full max-w-[650px] rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '9px', lineHeight: '1.4' }}>
+                <div className="bg-white text-black p-5 sm:p-6 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '9.5px', lineHeight: '1.4' }}>
                   
                   {/* Header Row */}
                   <div className="flex justify-between items-start border-b-2 border-black pb-1 mb-1">
@@ -1445,7 +1438,7 @@ export default function LegalDocumentsPrintModal({
 
               {/* NEW: Installment Statement Preview */}
               {activePreviewTab === 'installmentStatement' && (
-                <div className="bg-white text-black p-8 shadow-xl border border-slate-300 w-full max-w-[650px] space-y-6 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '12px' }}>
+                <div className="bg-white text-black p-6 sm:p-8 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-6 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '12px' }}>
                   
                   {/* Header Row */}
                   <div className="flex justify-between items-start border-b-2 border-black pb-3 mb-3">
@@ -1547,7 +1540,7 @@ export default function LegalDocumentsPrintModal({
 
               {/* Customer/Guarantor File Preview */}
               {activePreviewTab === 'customerFile' && (
-                <div className="bg-white text-black p-6 shadow-xl border border-slate-300 w-full max-w-[650px] space-y-4 rounded animate-in fade-in duration-200 font-bold" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '12px' }}>
+                <div className="bg-white text-black p-5 sm:p-6 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-4 rounded animate-in fade-in duration-200 font-bold" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '12px' }}>
                   
                   {/* Combined Header */}
                   <div className="text-center">
@@ -1612,7 +1605,7 @@ export default function LegalDocumentsPrintModal({
 
               {/* Trust Receipt Preview */}
               {activePreviewTab === 'trustReceipt' && (
-                <div className="bg-white text-black p-8 shadow-xl border border-slate-300 w-full max-w-[650px] space-y-8 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
+                <div className="bg-white text-black p-6 sm:p-8 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-8 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
                   <div className="text-center">
                     <span className="border-2 border-black px-6 py-1.5 font-bold text-lg inline-block shadow-[3px_3px_0_black]">ايصال استلام نقدية على سبيل الامانه</span>
                   </div>
@@ -1638,7 +1631,7 @@ export default function LegalDocumentsPrintModal({
 
               {/* Receipt Acknowledgment Preview */}
               {activePreviewTab === 'receiptAck' && (
-                <div className="bg-white text-black p-8 shadow-xl border border-slate-300 w-full max-w-[650px] space-y-8 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
+                <div className="bg-white text-black p-6 sm:p-8 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-8 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
                   <div className="text-center">
                     <span className="border-2 border-black px-6 py-1.5 font-bold text-lg inline-block shadow-[3px_3px_0_black]">إقـــــــرار إستلام</span>
                   </div>
@@ -1658,7 +1651,7 @@ export default function LegalDocumentsPrintModal({
 
               {/* Lawyer Representation Preview */}
               {activePreviewTab === 'lawyerAck' && (
-                <div className="bg-white text-black p-6 shadow-xl border border-slate-300 w-full max-w-[650px] space-y-4 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
+                <div className="bg-white text-black p-5 sm:p-6 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-4 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
                   
                   {/* Repeated 3 times */}
                   {[1, 2, 3].map((num) => {

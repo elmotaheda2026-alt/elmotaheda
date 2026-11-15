@@ -246,7 +246,6 @@ export default function Invoices() {
   const [showWarehouseSuggestions, setShowWarehouseSuggestions] = useState(false);
   const [selectedWarehouseProductId, setSelectedWarehouseProductId] = useState('');
   const [warehouseQuantity, setWarehouseQuantity] = useState<number | ''>(1);
-  const [warehouseDiscount, setWarehouseDiscount] = useState<number | ''>('');
   const [warehouseTax, setWarehouseTax] = useState<number | ''>('');
   const [warehouseSalePrice, setWarehouseSalePrice] = useState<number | ''>('');
   const warehouseSearchContainerRef = useRef<HTMLDivElement>(null);
@@ -256,8 +255,26 @@ export default function Invoices() {
   const [onDemandPurchasePrice, setOnDemandPurchasePrice] = useState<number | ''>('');
   const [onDemandSalePrice, setOnDemandSalePrice] = useState<number | ''>('');
   const [onDemandSupplierId, setOnDemandSupplierId] = useState('');
+  const [onDemandSupplierSearchTerm, setOnDemandSupplierSearchTerm] = useState('');
+  const [showOnDemandSupplierSuggestions, setShowOnDemandSupplierSuggestions] = useState(false);
+
+  const onDemandSupplierSuggestions = useMemo(() => {
+    const term = normalizeArabic(onDemandSupplierSearchTerm);
+    if (term.length < 1) return [];
+    return suppliers.filter((s) => normalizeArabic(s.name).includes(term));
+  }, [suppliers, onDemandSupplierSearchTerm]);
+
+  useEffect(() => {
+    const sup = suppliers.find((s) => s.id === onDemandSupplierId);
+    if (sup) {
+      if (onDemandSupplierSearchTerm !== sup.name) {
+        setOnDemandSupplierSearchTerm(sup.name);
+      }
+    } else if (!showOnDemandSupplierSuggestions && onDemandSupplierSearchTerm !== '') {
+      setOnDemandSupplierSearchTerm('');
+    }
+  }, [onDemandSupplierId, suppliers, showOnDemandSupplierSuggestions]);
   const [onDemandQuantity, setOnDemandQuantity] = useState<number | ''>(1);
-  const [onDemandDiscount, setOnDemandDiscount] = useState<number | ''>('');
   const [onDemandTax, setOnDemandTax] = useState<number | ''>('');
 
   useEffect(() => {
@@ -278,7 +295,6 @@ export default function Invoices() {
   const [paymentDate, setPaymentDate] = useState(today());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('installment');
   const [paidAmount, setPaidAmount] = useState(0);
-  const [collectUpfrontNow, setCollectUpfrontNow] = useState(true);
   const [installmentMonths, setInstallmentMonths] = useState(12);
   const [invoiceNotes, setInvoiceNotes] = useState('');
   const [lineProductId, setLineProductId] = useState('');
@@ -596,7 +612,6 @@ export default function Invoices() {
     setWarehouseSearchTerm(product.name);
     setShowWarehouseSuggestions(false);
     setWarehouseQuantity(1);
-    setWarehouseDiscount('');
     setWarehouseTax(product.tax || settings.taxRate || '');
     setWarehouseSalePrice(product.salePrice > 0 ? product.salePrice : product.purchasePrice);
   };
@@ -714,16 +729,13 @@ export default function Invoices() {
     setWarehouseSearchTerm('');
     setShowWarehouseSuggestions(false);
     setWarehouseQuantity(1);
-    setWarehouseDiscount('');
     setWarehouseTax('');
     setWarehouseSalePrice('');
     setOnDemandName('');
     setOnDemandPurchasePrice('');
     setOnDemandSalePrice('');
     setOnDemandQuantity(1);
-    setOnDemandDiscount('');
     setOnDemandTax(settings.taxRate || '');
-    setCollectUpfrontNow(true);
   };
 
   const addWarehouseItem = async () => {
@@ -757,7 +769,7 @@ export default function Invoices() {
         : selectedWarehouseProduct.salePrice > 0
         ? selectedWarehouseProduct.salePrice
         : selectedWarehouseProduct.purchasePrice;
-    const discount = Number(warehouseDiscount) || 0;
+    const discount = 0;
     const tax = Number(warehouseTax) || 0;
 
     setDraftItems((current) => {
@@ -795,7 +807,6 @@ export default function Invoices() {
     setWarehouseSearchTerm('');
     setShowWarehouseSuggestions(false);
     setWarehouseQuantity(1);
-    setWarehouseDiscount('');
     setWarehouseTax('');
     setWarehouseSalePrice('');
     setMessage({
@@ -848,7 +859,6 @@ export default function Invoices() {
     setOnDemandPurchasePrice('');
     setOnDemandSalePrice('');
     setOnDemandQuantity(1);
-    setOnDemandDiscount('');
     setOnDemandTax(settings.taxRate || '');
     setOnDemandSupplierId('');
 
@@ -1172,7 +1182,7 @@ export default function Invoices() {
         }
       }
 
-      if (paid > 0 && collectUpfrontNow) {
+      if (paid > 0) {
         if (isApiMode()) {
           await api.createPayment({
             type: 'in',
@@ -1410,22 +1420,6 @@ export default function Invoices() {
                 />
               </Field>
 
-              {paidAmount > 0 && (
-                <div className="flex flex-col justify-end">
-                  <label className="flex items-center gap-2 cursor-pointer select-none bg-blue-50/70 border border-blue-200/80 rounded-xl px-3 py-2.5 hover:bg-blue-100/70 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={collectUpfrontNow}
-                      onChange={(e) => setCollectUpfrontNow(e.target.checked)}
-                      className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-                    />
-                    <span className="text-xs font-bold text-blue-900">
-                      تم تحصيل المبلغ نقداً في الخزينة الآن
-                    </span>
-                  </label>
-                </div>
-              )}
-
               {paymentMethod === 'installment' && (
                 <>
                   <Field label="مدة التقسيط بالأشهر">
@@ -1564,7 +1558,7 @@ export default function Invoices() {
                       </div>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 items-end">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 items-end">
                       <Field label="الكمية المطلوبة">
                         <input
                           type="number"
@@ -1585,17 +1579,6 @@ export default function Invoices() {
                         />
                       </Field>
 
-                      <Field label="الخصم %">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          value={warehouseDiscount}
-                          onChange={(e) => setWarehouseDiscount(e.target.value === '' ? '' : Number(e.target.value))}
-                          className="input-ui font-semibold text-slate-700"
-                        />
-                      </Field>
-
                       <Field label="الفائدة %">
                         <input
                           type="number"
@@ -1611,7 +1594,7 @@ export default function Invoices() {
                         <button
                           type="button"
                           onClick={addWarehouseItem}
-                          className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 font-black text-white hover:bg-blue-700 transition-colors shadow-2xs"
+                          className="w-full inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#1e40af] px-4 font-black text-white hover:bg-[#1d4ed8] transition-colors shadow-2xs"
                         >
                           <Plus size={18} />
                           إضافة للفاتورة
@@ -1660,18 +1643,43 @@ export default function Invoices() {
 
                   <div className="lg:col-span-3">
                     <Field label="المورد *">
-                      <select
-                        value={onDemandSupplierId}
-                        onChange={(e) => setOnDemandSupplierId(e.target.value)}
-                        className="input-ui font-bold text-slate-800"
-                      >
-                        <option value="">-- اختر المورد --</option>
-                        {suppliers.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative w-full">
+                        <input
+                          type="text"
+                          value={onDemandSupplierSearchTerm}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setOnDemandSupplierSearchTerm(val);
+                            setShowOnDemandSupplierSuggestions(true);
+                            if (onDemandSupplierId) {
+                              setOnDemandSupplierId('');
+                            }
+                          }}
+                          onFocus={() => setShowOnDemandSupplierSuggestions(true)}
+                          onBlur={() => setTimeout(() => setShowOnDemandSupplierSuggestions(false), 200)}
+                          className="input-ui w-full font-bold text-slate-800"
+                          placeholder="اكتب اسم المورد..."
+                        />
+                        {showOnDemandSupplierSuggestions && onDemandSupplierSuggestions.length > 0 && (
+                          <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                            {onDemandSupplierSuggestions.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  setOnDemandSupplierId(s.id);
+                                  setOnDemandSupplierSearchTerm(s.name);
+                                  setShowOnDemandSupplierSuggestions(false);
+                                }}
+                                className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium transition-colors cursor-pointer"
+                              >
+                                <span>{s.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </Field>
                   </div>
 
@@ -2061,8 +2069,7 @@ export default function Invoices() {
           <Panel title="ملخص الحركة" icon={<Save size={18} className="text-emerald-600" />}>
             <div className="space-y-3">
               <SummaryRow label="العميل" value={selectedCustomer?.name || 'غير محدد'} />
-              <SummaryRow label="الإجمالي قبل الخصم" value={formatCurrency(subtotal)} />
-              <SummaryRow label="الخصم" value={formatCurrency(discountAmount)} tone="red" />
+              <SummaryRow label="إجمالي الأصناف" value={formatCurrency(subtotal)} />
               <SummaryRow label="إجمالي الفائدة" value={formatCurrency(taxAmount)} />
               <SummaryRow label="صافي الفاتورة" value={formatCurrency(total)} tone="green" strong />
               <SummaryRow label="المقدم / المدفوع" value={formatCurrency(paid)} />
@@ -2192,16 +2199,16 @@ export default function Invoices() {
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="bg-white border-b border-slate-200 px-5 py-3.5 text-slate-900 flex items-center justify-between shrink-0">
+            <div className="bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] px-5 py-3.5 text-white flex items-center justify-between shrink-0 border-b border-slate-800/70">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-slate-700 shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-sky-300 shrink-0 shadow-xs">
                   <Search size={17} />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-slate-900 text-right">
+                  <h3 className="text-base font-black text-white text-right">
                     البحث في سجل التعاقدات
                   </h3>
-                  <p className="text-[11px] text-slate-500 mt-0.5 text-right font-medium">
+                  <p className="text-[11px] text-slate-300 mt-0.5 text-right font-medium">
                     اكتب اسم العميل أو رقم العقد للبحث الفوري، ثم اختر الإجراء المطلوب.
                   </p>
                 </div>
@@ -2209,7 +2216,7 @@ export default function Invoices() {
               <button
                 type="button"
                 onClick={() => setShowSearchModal(false)}
-                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg text-2xl font-light w-8 h-8 flex items-center justify-center leading-none transition-colors outline-none cursor-pointer"
+                className="text-slate-300 hover:text-white hover:bg-white/10 rounded-lg text-2xl font-light w-8 h-8 flex items-center justify-center leading-none transition-colors outline-none cursor-pointer"
                 title="إغلاق النافذة"
               >
                 &times;
@@ -2217,17 +2224,17 @@ export default function Invoices() {
             </div>
 
             {/* Modal Content */}
-            <div className="p-4 overflow-y-auto flex-1 min-h-0 flex flex-col">
+            <div className="p-4 overflow-y-auto flex-1 min-h-0 flex flex-col bg-slate-50/60">
               {/* Big Search Input */}
               <div className="relative mb-3 shrink-0">
-                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={18} />
+                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 text-blue-500 pointer-events-none" size={18} />
                 <input
                   type="text"
                   autoFocus
                   value={modalSearchQuery}
                   onChange={(e) => setModalSearchQuery(e.target.value)}
                   placeholder="اكتب اسم العميل المشتري أو رقم العقد للبحث الفوري..."
-                  className="w-full rounded-xl border border-slate-200 focus:border-blue-500 bg-slate-50 focus:bg-white px-4 py-2.5 pr-10 pl-10 text-sm font-semibold outline-none transition-colors shadow-2xs"
+                  className="w-full rounded-xl border border-blue-200 focus:border-blue-600 bg-white py-2.5 pr-10 pl-10 text-sm font-semibold outline-none transition-colors shadow-xs focus:ring-2 focus:ring-blue-500/20"
                 />
                 {modalSearchLoading && (
                   <Loader2 size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-600 animate-spin pointer-events-none" />
@@ -2246,15 +2253,15 @@ export default function Invoices() {
                   modalContracts.map((sale) => (
                     <div
                       key={sale.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200/90 hover:border-blue-300 hover:bg-blue-50/20 transition-colors shadow-2xs bg-white"
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200/90 hover:border-blue-400 hover:bg-blue-50/35 transition-all shadow-xs bg-white"
                     >
                       <div className="space-y-1 text-right min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono font-black text-blue-700 text-xs sm:text-sm">{sale.invoiceNumber}</span>
-                          <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-bold">
+                          <span className="font-mono font-black text-blue-700 bg-blue-50 border border-blue-200/80 px-2 py-0.5 rounded-md text-xs sm:text-sm">{sale.invoiceNumber}</span>
+                          <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold">
                             {formatDateDisplay(sale.date)}
                           </span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             }`}>
                             {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
                           </span>
@@ -2276,9 +2283,9 @@ export default function Invoices() {
                               handleLoadForEdit(sale);
                               setShowSearchModal(false);
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <Edit3 size={12} className="text-slate-500" />
+                            <Edit3 size={12} />
                             <span>تعديل البيانات</span>
                           </button>
                         )}
@@ -2286,7 +2293,7 @@ export default function Invoices() {
                           <button
                             type="button"
                             onClick={() => handleDeleteContract(sale)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-rose-50 text-slate-500 hover:text-rose-600 border border-slate-200 hover:border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
                             <Trash2 size={12} />
                             <span>حذف التعاقد</span>
@@ -2305,9 +2312,9 @@ export default function Invoices() {
                               setDeferMessage(null);
                               setShowSearchModal(false);
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
                           >
-                            <CalendarCheck size={12} className="text-slate-500" />
+                            <CalendarCheck size={12} />
                             <span>ترحيل قسط</span>
                           </button>
                         )}
@@ -2317,7 +2324,7 @@ export default function Invoices() {
                             setSavedSaleForPrinting(sale);
                             setShowSearchModal(false);
                           }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white rounded-lg text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
                         >
                           <Printer size={12} />
                           <span>طباعة المستندات</span>

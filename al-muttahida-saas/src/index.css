@@ -93,11 +93,14 @@
   }
 }
 
-@layer utilities {
+@layer components {
   .input-ui {
     @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition-all duration-150;
     @apply focus:border-blue-500 focus:ring-2 focus:ring-blue-100 hover:border-slate-300;
   }
+}
+
+@layer utilities {
 
   .erp-action-bar {
     @apply flex min-h-14 flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm md:flex-row md:items-center md:justify-between;

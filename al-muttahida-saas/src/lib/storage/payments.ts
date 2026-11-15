@@ -26,7 +26,8 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
   const sales = getStorage<Sale>(DB_KEYS.SALES);
   const saleId = payment.saleId || (payment.referenceType === 'sale' ? payment.referenceId : undefined);
   const saleIndex = payment.type === 'in' && saleId ? sales.findIndex((sale) => sale.id === saleId) : -1;
-  if (saleIndex !== -1 && Number(payment.amount || 0) > Number(sales[saleIndex].remaining || 0)) {
+  const isDownPayment = payment.type === 'in' && Boolean(saleId) && payment.affectsCustomerBalance === false;
+  if (saleIndex !== -1 && !isDownPayment && Number(payment.amount || 0) > Number(sales[saleIndex].remaining || 0)) {
     throw new Error('Payment amount cannot exceed the remaining sale balance.');
   }
 

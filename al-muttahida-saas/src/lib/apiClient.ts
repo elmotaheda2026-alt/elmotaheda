@@ -322,6 +322,8 @@ export const api = {
     return requestArray<any>(`/payments${query ? `?${query}` : ''}`, 'payments');
   },
   createPayment: (payload: any) => request<{ id: string; receiptNumber: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
+  updatePayment: (id: string, payload: { amount: number; date: string; description?: string }) =>
+    request<{ message: string }>(`/payments/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   reversePayment: (id: string) => request<{ message: string }>(`/payments/${id}/reverse`, { method: 'POST' }),
   getAging: () => requestArray<any>('/reports/aging', 'aging report'),
   getCollectionRate: () => request<{ billed: number; collected: number; rate: number }>('/reports/collection-rate'),

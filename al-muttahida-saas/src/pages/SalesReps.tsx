@@ -116,13 +116,13 @@ export default function SalesReps() {
   );
 
   return (
-    <div className="space-y-2">
+    <div className="desktop-view-container">
       {/* Header with Search and Actions */}
-      <div className="erp-action-bar">
-        <div className="flex items-center gap-4 flex-1">
-          <h2 className="text-xl font-black text-slate-900 shrink-0">المناديب</h2>
-          <div className="relative flex-1 max-w-sm">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <div className="erp-action-bar shrink-0">
+        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+          <h2 className="text-lg font-black text-slate-900 shrink-0">المناديب</h2>
+          <div className="relative flex-1 min-w-[240px] max-w-sm">
+            <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
               ref={searchInputRef}
@@ -130,23 +130,23 @@ export default function SalesReps() {
               placeholder="بحث عن مندوب بالاسم أو المنطقة..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="input-ui pr-10 pl-4 py-2 text-sm w-full"
+              className="input-ui h-9 w-full pr-10 pl-3.5 text-xs font-semibold bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 placeholder:text-slate-400"
             />
           </div>
         </div>
         {user?.role !== 'manager' && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
-            className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-bold shadow-2xs shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs shrink-0 cursor-pointer"
           >
-            <Plus size={16} />
+            <Plus size={15} />
             <span>إضافة مندوب</span>
           </button>
         )}
       </div>
 
       {/* Reps Table (Desktop) & Cards (Mobile) */}
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm flex flex-col flex-1 min-h-0">
+      <section className="desktop-table-card">
         {/* Mobile Cards View (< md) */}
         <div className="md:hidden flex-1 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
           {filteredReps.length === 0 ? (
@@ -207,24 +207,24 @@ export default function SalesReps() {
           )}
         </div>
 
-        <div className="hidden md:block overflow-auto h-[calc(100vh-210px)]">
-          <table className="w-full min-w-[800px]">
-            <thead className="bg-slate-50 border-b border-slate-200">
+        <div className="hidden md:block desktop-table-scroll">
+          <table className="w-full min-w-[800px] border-collapse">
+            <thead className="desktop-sticky-header">
               <tr>
-                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الاسم</th>
-                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">رقم الهاتف</th>
-                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">المنطقة</th>
-                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">الهدف الشهري</th>
-                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">المحقق</th>
-                <th className="px-5 py-3 text-right text-sm font-black text-slate-700">نسبة التحقيق</th>
-                <th className="px-5 py-3 text-center text-sm font-black text-slate-700">الحالة</th>
-                <th className="px-5 py-3 text-center text-sm font-black text-slate-700">إجراءات</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الاسم</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">رقم الهاتف</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">المنطقة</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الهدف الشهري</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">المحقق</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">نسبة التحقيق</th>
+                <th className="py-3 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">الحالة</th>
+                <th className="py-3 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredReps.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center text-slate-500">لا يوجد مناديب مطابِقين</td>
+                  <td colSpan={8} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">لا يوجد مناديب مطابِقين</td>
                 </tr>
               ) : (
                 filteredReps.map(rep => {
@@ -234,16 +234,16 @@ export default function SalesReps() {
                       key={rep.id}
                       onDoubleClick={() => user?.role !== 'manager' && handleEdit(rep)}
                       title={user?.role !== 'manager' ? 'انقر مرتين للتعديل' : ''}
-                      className="group cursor-default hover:bg-slate-50/50 transition-colors"
+                      className="group cursor-pointer hover:bg-slate-50 transition-colors"
                     >
-                      <td className="px-5 py-3">
-                        <span className="font-bold text-slate-900 text-sm">{rep.name}</span>
+                      <td className="py-3 px-4">
+                        <span className="font-bold text-slate-900 text-xs sm:text-sm">{rep.name}</span>
                       </td>
-                      <td className="px-5 py-3 text-sm text-slate-700 font-mono">{rep.phone}</td>
-                      <td className="px-5 py-3 text-sm text-slate-600">{rep.area || '—'}</td>
-                      <td className="px-5 py-3 text-sm text-slate-900 font-bold">{rep.target.toLocaleString()}</td>
-                      <td className="px-5 py-3 text-sm text-emerald-600 font-bold">{rep.achieved.toLocaleString()}</td>
-                      <td className="px-5 py-3">
+                      <td className="py-3 px-4 text-xs sm:text-sm text-slate-700 font-mono">{rep.phone}</td>
+                      <td className="py-3 px-4 text-xs sm:text-sm text-slate-600">{rep.area || '—'}</td>
+                      <td className="py-3 px-4 text-xs sm:text-sm text-slate-900 font-bold">{rep.target.toLocaleString()}</td>
+                      <td className="py-3 px-4 text-xs sm:text-sm text-emerald-600 font-bold">{rep.achieved.toLocaleString()}</td>
+                      <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-slate-600 w-10 text-left">{percentage.toFixed(0)}%</span>
                           <div className="w-20 bg-slate-200 rounded-full h-1.5">
@@ -251,12 +251,12 @@ export default function SalesReps() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-5 py-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${rep.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-100 text-slate-500'}`}>
+                      <td className="py-3 px-4 text-center">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${rep.isActive ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500'}`}>
                           {rep.isActive ? 'نشط' : 'موقوف'}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-center">
+                      <td className="py-3 px-4 text-center">
                         <div className="erp-icon-actions">
                           {user?.role !== 'manager' && (
                             <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="تعديل">
@@ -264,7 +264,7 @@ export default function SalesReps() {
                             </button>
                           )}
                           {canDelete && (
-                            <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer" title="حذف">
+                            <button onClick={() => handleDelete(rep.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer" title="حذف">
                               <Trash2 size={15} />
                             </button>
                           )}
@@ -280,9 +280,9 @@ export default function SalesReps() {
             </tbody>
           </table>
         </div>
-        <div className="erp-status-bar">
-          <span>المعروض: {filteredReps.length}</span>
-          <span>إجمالي المناديب: {reps.length}</span>
+        <div className="erp-status-bar shrink-0">
+          <span className="font-bold text-slate-700">إجمالي المناديب: <span className="text-blue-700 font-extrabold">{reps.length}</span> (المعروض: {filteredReps.length})</span>
+          <span className="font-bold text-slate-700">المناديب النشطون: <span className="text-emerald-700 font-extrabold">{reps.filter(r => r.isActive).length}</span></span>
         </div>
       </section>
 
@@ -361,7 +361,7 @@ export default function SalesReps() {
                 <button type="button" onClick={() => { setShowModal(false); setEditingRep(null); }} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-bold">
                   إلغاء
                 </button>
-                <button type="submit" className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-bold shadow-2xs cursor-pointer">
+                <button type="submit" className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-sm font-bold shadow-2xs cursor-pointer">
                   {editingRep ? 'تحديث' : 'إضافة'}
                 </button>
               </div>

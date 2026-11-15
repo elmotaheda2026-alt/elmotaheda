@@ -835,62 +835,57 @@ export default function CollectionStatement() {
     `}</style>
       <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-50 p-3 flex flex-col gap-2.5 overflow-hidden' : 'desktop-view-container'} print:hidden`}>
         {/* Header/Tabs & Filters Bar */}
-        <div className={`bg-white border border-slate-200 rounded-xl px-4 ${filtersCollapsed ? 'py-2' : 'py-3 space-y-2.5'} shrink-0 print:hidden shadow-xs transition-all`}>
-          {/* Segmented Control Tabs */}
-          <div className={`flex flex-col sm:flex-row sm:items-center justify-between ${filtersCollapsed ? '' : 'border-b border-slate-100 pb-3'} gap-3`}>
-            <div className="flex bg-slate-100 p-1 rounded-xl w-fit">
+        <div className={`bg-white border border-slate-200/90 rounded-2xl px-3.5 sm:px-4 ${filtersCollapsed ? 'py-2.5' : 'py-3 space-y-2.5'} shrink-0 print:hidden shadow-xs transition-all`}>
+          {/* Top Row: Segmented Tabs + View Controls */}
+          <div className={`flex flex-wrap items-center justify-between gap-2.5 ${filtersCollapsed ? '' : 'border-b border-slate-100 pb-2.5'}`}>
+            <div className="inline-flex items-center bg-slate-100/90 p-1 rounded-xl border border-slate-200/70 gap-0.5 overflow-x-auto max-w-full">
               <button
                 type="button"
                 onClick={() => setActiveTab('due')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                   activeTab === 'due'
-                    ? 'bg-white text-sky-700 shadow-sm'
+                    ? 'bg-white text-[#1e40af] shadow-xs'
                     : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <LayoutList size={14} />
-                العملاء المستحقون (فترة)
+                <LayoutList size={14} className={activeTab === 'due' ? 'text-blue-600' : ''} />
+                <span>العملاء المستحقون (فترة)</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('invoices')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                   activeTab === 'invoices'
-                    ? 'bg-white text-sky-700 shadow-sm'
+                    ? 'bg-white text-[#1e40af] shadow-xs'
                     : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <FileText size={14} />
-                سجل فواتير العملاء
+                <FileText size={14} className={activeTab === 'invoices' ? 'text-blue-600' : ''} />
+                <span>سجل فواتير العملاء</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('legal')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                   activeTab === 'legal'
-                    ? 'bg-white text-red-700 shadow-sm'
-                    : 'text-slate-500 hover:text-red-600'
+                    ? 'bg-white text-rose-700 shadow-xs'
+                    : 'text-slate-500 hover:text-rose-600'
                 }`}
               >
                 <Gavel size={14} />
-                الشئون القانونية (النزاعات)
+                <span>الشئون القانونية (النزاعات)</span>
               </button>
             </div>
-            {/* Context/Page Title + View Controls */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="text-sm font-bold text-slate-800 hidden lg:flex items-center gap-2 ml-2">
-                <span>مديرية تحصيل الحسابات</span>
-                <span className="h-4 w-px bg-slate-200"></span>
-                <span className="text-xs text-slate-500 font-medium">إدارة الفواتير والتحصيل</span>
-              </div>
 
+            {/* View Controls */}
+            <div className="flex items-center gap-1.5 shrink-0 mr-auto sm:mr-0">
               {activeTab !== 'legal' && (
                 <button
                   type="button"
                   onClick={() => setFiltersCollapsed(!filtersCollapsed)}
-                  className={`h-8 px-2.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  className={`h-8 px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                     filtersCollapsed
-                      ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100'
+                      ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100/70'
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                   title={filtersCollapsed ? 'إظهار شريط الفلاتر والبحث' : 'طي شريط الفلاتر لتوسيع الجدول'}
@@ -903,10 +898,10 @@ export default function CollectionStatement() {
               <button
                 type="button"
                 onClick={() => setIsFullscreen(!isFullscreen)}
-                className={`h-8 px-3 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                className={`h-8 px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                   isFullscreen
-                    ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
-                    : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                    ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100/70'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                 }`}
                 title={isFullscreen ? 'تصغير والرجوع للوضع العادي (Esc)' : 'تكبير الجدول لملء الشاشة بالكامل'}
               >
@@ -918,11 +913,11 @@ export default function CollectionStatement() {
 
           {/* Render filters inside this card based on activeTab */}
           {!filtersCollapsed && activeTab === 'due' && (
-            <div className="space-y-3 pt-1">
-              {/* Row 1: Primary Scope (Status Capsule) & Search Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                {/* Right: Main Status Segmented Capsule */}
-                <div className="inline-flex h-9 w-full sm:w-auto items-center rounded-xl border border-slate-200 bg-slate-100/90 p-0.5 text-xs font-bold shadow-2xs shrink-0">
+            <div className="space-y-2.5 pt-0.5">
+              {/* Row 1: Status Capsule + Wide Search + Print Action */}
+              <div className="flex flex-col md:flex-row md:items-center gap-2.5">
+                {/* Main Status Segmented Capsule */}
+                <div className="inline-flex h-9 w-full md:w-auto items-center rounded-xl border border-slate-200/90 bg-slate-100/80 p-0.5 text-xs font-bold shrink-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -931,13 +926,13 @@ export default function CollectionStatement() {
                       setExpandedCustomerSaleId(null);
                       setIncludeOverdue(false);
                     }}
-                    className={`h-full flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    className={`h-full flex-1 md:flex-initial justify-center px-3 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                       dueStatusFilter === 'unpaid'
-                        ? 'bg-white text-rose-700 shadow-2xs font-black'
+                        ? 'bg-white text-rose-700 shadow-2xs font-bold'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${dueStatusFilter === 'unpaid' ? 'bg-rose-500 ring-2 ring-rose-200' : 'bg-slate-300'}`} />
+                    <span className={`w-1.5 h-1.5 rounded-full ${dueStatusFilter === 'unpaid' ? 'bg-rose-500 ring-2 ring-rose-200' : 'bg-slate-300'}`} />
                     <span>غير محصل</span>
                   </button>
                   <button
@@ -948,13 +943,13 @@ export default function CollectionStatement() {
                       setExpandedCustomerSaleId(null);
                       setIncludeOverdue(false);
                     }}
-                    className={`h-full flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    className={`h-full flex-1 md:flex-initial justify-center px-3 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                       dueStatusFilter === 'paid'
-                        ? 'bg-white text-emerald-700 shadow-2xs font-black'
+                        ? 'bg-white text-emerald-700 shadow-2xs font-bold'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${dueStatusFilter === 'paid' ? 'bg-emerald-500 ring-2 ring-emerald-200' : 'bg-slate-300'}`} />
+                    <span className={`w-1.5 h-1.5 rounded-full ${dueStatusFilter === 'paid' ? 'bg-emerald-500 ring-2 ring-emerald-200' : 'bg-slate-300'}`} />
                     <span>تم تحصيله</span>
                   </button>
                   <button
@@ -966,62 +961,73 @@ export default function CollectionStatement() {
                       setExpandedCustomerSaleId(null);
                       setIncludeOverdue(false);
                     }}
-                    className={`h-full flex-1 sm:flex-initial justify-center px-3 sm:px-3.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    className={`h-full flex-1 md:flex-initial justify-center px-3 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                       dueStatusFilter === 'all'
-                        ? 'bg-white text-sky-700 shadow-2xs font-black'
+                        ? 'bg-white text-[#1e40af] shadow-2xs font-bold'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${dueStatusFilter === 'all' ? 'bg-sky-500 ring-2 ring-sky-200' : 'bg-slate-300'}`} />
+                    <span className={`w-1.5 h-1.5 rounded-full ${dueStatusFilter === 'all' ? 'bg-blue-600 ring-2 ring-blue-200' : 'bg-slate-300'}`} />
                     <span>الكل</span>
                   </button>
                 </div>
 
-                {/* Left: Wide, Elegant Search Input */}
-                <div className="relative flex-1 w-full sm:max-w-md min-w-0 sm:min-w-[260px]">
+                {/* Search Input (fills middle space cleanly) */}
+                <div className="relative flex-1 min-w-0">
                   <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   <input
                     value={dueSearchTerm}
                     onChange={(e) => { setDueSearchTerm(e.target.value); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
-                    className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white focus:bg-white px-3 pr-10 pl-8 text-xs font-medium outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400 shadow-2xs"
+                    className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white focus:bg-white pr-10 pl-8 text-xs font-medium outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition placeholder:text-slate-400"
                     placeholder="بحث سريع باسم العميل، الهاتف، أو رقم الفاتورة..."
                   />
                   {dueSearchTerm && (
                     <button
                       type="button"
                       onClick={() => { setDueSearchTerm(''); setDueCurrentPage(1); }}
-                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm font-bold w-4 h-4 flex items-center justify-center rounded-full hover:bg-slate-200"
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm font-bold w-4 h-4 flex items-center justify-center rounded-full hover:bg-slate-200 cursor-pointer"
                     >
                       ×
                     </button>
                   )}
                 </div>
+
+                {/* Print Button */}
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="h-9 px-4 bg-[#1e40af] hover:bg-[#1d4ed8] text-white rounded-xl flex items-center justify-center gap-1.5 font-bold text-xs shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer active:scale-[0.98]"
+                  title="طباعة كشف التحصيل الحالي"
+                >
+                  <Printer size={14} />
+                  <span>طباعة</span>
+                </button>
               </div>
 
-              {/* Row 2: Secondary Refinements (Date Range, Date Logic, Sales Rep, Toggles, Print) */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+              {/* Row 2: Secondary Refinements (Date Range, Date Logic, Sales Rep, Toggles) */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100">
                 {/* Right: Date Range + Attached Date Basis (only in Paid tab) + Sales Rep */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* Date Range Group (Height h-9 unified) */}
-                  <div className="flex h-9 w-full sm:w-auto items-center justify-between sm:justify-start gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 text-xs shadow-2xs">
+                  {/* Date Range Group */}
+                  <div className="flex h-9 w-full sm:w-auto items-center justify-between sm:justify-start gap-1.5 bg-slate-50/70 border border-slate-200/90 rounded-xl px-2.5 text-xs">
                     <div className="flex items-center gap-1 shrink-0">
-                      <Calendar size={14} className="text-slate-400 shrink-0" />
-                      <span className="text-[11px] text-slate-400 font-bold hidden sm:inline">الفترة:</span>
+                      <Calendar size={13} className="text-slate-400 shrink-0" />
+                      <span className="text-[11px] text-slate-500 font-semibold hidden sm:inline">الفترة:</span>
                     </div>
-                    <DatePicker value={dueFromDate} onChange={(d) => { setDueFromDate(d); setDueCurrentPage(1); }} className="h-7 w-[108px] sm:w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
-                    <span className="text-[11px] text-slate-300 font-bold px-0.5">←</span>
-                    <DatePicker value={dueToDate} onChange={(d) => { setDueToDate(d); setDueCurrentPage(1); }} className="h-7 w-[108px] sm:w-[115px] rounded-lg border-0 bg-slate-50 text-xs font-bold text-slate-700 text-center" />
+                    <DatePicker value={dueFromDate} onChange={(d) => { setDueFromDate(d); setDueCurrentPage(1); }} className="h-7 w-[108px] sm:w-[112px] rounded-lg border border-slate-200/70 bg-white text-xs font-bold text-slate-700 text-center" />
+                    <span className="text-[11px] text-slate-400 font-bold">←</span>
+                    <DatePicker value={dueToDate} onChange={(d) => { setDueToDate(d); setDueCurrentPage(1); }} className="h-7 w-[108px] sm:w-[112px] rounded-lg border border-slate-200/70 bg-white text-xs font-bold text-slate-700 text-center" />
                   </div>
 
-                  {/* Date Basis Switcher: Only shown in 'paid' page as requested */}
+                  {/* Date Basis Switcher: Only shown in 'paid' tab */}
                   {dueStatusFilter === 'paid' && (
-                    <div className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-xs font-bold shadow-2xs animate-in fade-in duration-200">
+                    <div className="inline-flex h-9 items-center rounded-xl border border-slate-200/90 bg-slate-100/80 p-0.5 text-xs font-bold animate-in fade-in duration-200">
                       <button
                         type="button"
                         onClick={() => { setDueDateBasis('actual_payment'); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
-                        className={`h-full px-2.5 rounded-lg transition-all text-[11px] flex items-center gap-1.5 ${
+                        className={`h-full px-2.5 rounded-lg transition-all text-[11px] flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                           dueDateBasis === 'actual_payment'
-                            ? 'bg-white text-emerald-700 shadow-2xs font-black'
+                            ? 'bg-white text-emerald-700 shadow-2xs font-bold'
                             : 'text-slate-500 hover:text-slate-800'
                         }`}
                         title="فلترة بحسب تاريخ السداد والتحصيل الفعلي بالخزينة"
@@ -1032,24 +1038,24 @@ export default function CollectionStatement() {
                       <button
                         type="button"
                         onClick={() => { setDueDateBasis('due_date'); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
-                        className={`h-full px-2.5 rounded-lg transition-all text-[11px] flex items-center gap-1.5 ${
+                        className={`h-full px-2.5 rounded-lg transition-all text-[11px] flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                           dueDateBasis === 'due_date'
-                            ? 'bg-white text-sky-700 shadow-2xs font-black'
+                            ? 'bg-white text-[#1e40af] shadow-2xs font-bold'
                             : 'text-slate-500 hover:text-slate-800'
                         }`}
                         title="فلترة بحسب موعد استحقاق القسط الأصلي في الجدول"
                       >
-                        <Clock3 size={12} className={dueDateBasis === 'due_date' ? 'text-sky-600' : 'text-slate-400'} />
+                        <Clock3 size={12} className={dueDateBasis === 'due_date' ? 'text-blue-600' : 'text-slate-400'} />
                         <span>موعد القسط الأصلي</span>
                       </button>
                     </div>
                   )}
 
-                  {/* Sales Rep Selector: Clean, professional, NO emoji */}
+                  {/* Sales Rep Selector */}
                   <select
                     value={selectedSalesRepId}
                     onChange={(e) => { setSelectedSalesRepId(e.target.value); setDueCurrentPage(1); setExpandedCustomerSaleId(null); }}
-                    className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-700 font-bold outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition min-w-[120px] shadow-2xs cursor-pointer"
+                    className="h-9 rounded-xl border border-slate-200/90 bg-slate-50/70 hover:bg-white focus:bg-white px-3 text-xs text-slate-700 font-bold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition min-w-[130px] cursor-pointer"
                   >
                     <option value="all">كل المناديب</option>
                     {salesReps.map((rep) => (
@@ -1060,9 +1066,9 @@ export default function CollectionStatement() {
                   </select>
                 </div>
 
-                {/* Left: Action Toggles & Print Button */}
+                {/* Left: Clean Filter Toggles */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* Include Overdue Toggle: Non-default (default = false). Shown only in unpaid tab */}
+                  {/* Include Overdue Toggle */}
                   {dueStatusFilter === 'unpaid' && (
                     <button
                       type="button"
@@ -1071,18 +1077,16 @@ export default function CollectionStatement() {
                         setDueCurrentPage(1);
                         setExpandedCustomerSaleId(null);
                       }}
-                      className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all shadow-2xs cursor-pointer ${
+                      className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                         includeOverdue
-                          ? 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100/70 ring-1 ring-indigo-200'
-                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                          ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100/70'
+                          : 'border-slate-200/90 bg-white hover:bg-slate-50 text-slate-600'
                       }`}
                       title={includeOverdue ? 'إلغاء المتأخرات والاكتفاء بأقساط الشهر المحدد فقط' : 'إدراج كافة الأقساط المتأخرة غير المسددة من الأشهر السابقة'}
                     >
-                      <Clock3 size={13} className={includeOverdue ? 'text-indigo-600' : 'text-slate-400'} />
+                      <Clock3 size={13} className={includeOverdue ? 'text-blue-600' : 'text-slate-400'} />
                       <span>شامل المتأخرات</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${includeOverdue ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                        {includeOverdue ? 'مفعل' : 'مغلق'}
-                      </span>
+                      <span className={`w-1.5 h-1.5 rounded-full ${includeOverdue ? 'bg-blue-600' : 'bg-slate-300'}`} />
                     </button>
                   )}
 
@@ -1094,29 +1098,16 @@ export default function CollectionStatement() {
                       setDueCurrentPage(1);
                       setExpandedCustomerSaleId(null);
                     }}
-                    className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all shadow-2xs cursor-pointer ${
+                    className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                       hideSuedCustomers
-                        ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100/70'
-                        : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                        ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100/70'
+                        : 'border-slate-200/90 bg-white hover:bg-slate-50 text-slate-600'
                     }`}
                     title={hideSuedCustomers ? 'إلغاء إخفاء القضايا' : 'إخفاء العملاء المحالين للشئون القانونية (القضاء)'}
                   >
-                    <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
+                    <AlertTriangle size={13} className={hideSuedCustomers ? 'text-rose-500' : 'text-slate-400'} />
                     <span>إخفاء القضايا</span>
-                    {hideSuedCustomers && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                    )}
-                  </button>
-
-                  {/* Print Button */}
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    className="h-9 px-4 bg-sky-600 text-white rounded-xl hover:bg-sky-700 flex items-center gap-1.5 font-bold text-xs shadow-2xs transition-all whitespace-nowrap cursor-pointer active:scale-95"
-                    title="طباعة كشف التحصيل الحالي"
-                  >
-                    <Printer size={13} />
-                    <span>طباعة</span>
+                    <span className={`w-1.5 h-1.5 rounded-full ${hideSuedCustomers ? 'bg-rose-500' : 'bg-slate-300'}`} />
                   </button>
                 </div>
               </div>
@@ -1124,9 +1115,9 @@ export default function CollectionStatement() {
           )}
 
           {!filtersCollapsed && activeTab === 'invoices' && (
-            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 pt-1">
-              <div className="relative flex-1 w-full sm:max-w-md min-w-0 sm:min-w-[240px]">
-                <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-0.5">
+              <div className="relative flex-1 min-w-0">
+                <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   value={invoiceSearchTerm}
                   onChange={(e) => {
@@ -1138,7 +1129,7 @@ export default function CollectionStatement() {
                   }}
                   onFocus={() => setShowSuggestions(true)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  className="w-full h-9 rounded-xl border border-slate-200 bg-white px-3 pr-9 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition placeholder:text-slate-400 shadow-sm"
+                  className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white focus:bg-white pr-10 pl-3 text-xs font-medium outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition placeholder:text-slate-400"
                   placeholder="ابحث عن العميل بالاسم أو رقم الفاتورة..."
                 />
                 {showSuggestions && suggestions.length > 0 && (
@@ -1152,7 +1143,7 @@ export default function CollectionStatement() {
                           setInvoiceSearchTerm(c.name);
                           setShowSuggestions(false);
                         }}
-                        className="w-full text-right px-4 py-2 text-xs text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-bold transition-colors"
+                        className="w-full text-right px-4 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-bold transition-colors cursor-pointer"
                       >
                         <span>{c.name}</span>
                       </button>
@@ -1161,31 +1152,33 @@ export default function CollectionStatement() {
                 )}
               </div>
 
-              <div className="flex gap-2 mr-auto">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setHideSuedCustomers(!hideSuedCustomers)}
-                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
+                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                     hideSuedCustomers
-                      ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100/70'
-                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                      ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100/70'
+                      : 'border-slate-200/90 bg-white hover:bg-slate-50 text-slate-600'
                   }`}
                 >
-                  <AlertTriangle size={13} className={hideSuedCustomers ? 'text-red-500' : 'text-slate-400'} />
-                  إخفاء القضايا
+                  <AlertTriangle size={13} className={hideSuedCustomers ? 'text-rose-500' : 'text-slate-400'} />
+                  <span>إخفاء القضايا</span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${hideSuedCustomers ? 'bg-rose-500' : 'bg-slate-300'}`} />
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setShowOnlyDue(!showOnlyDue)}
-                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-colors shadow-sm ${
+                  className={`flex items-center gap-1.5 px-3 h-9 rounded-xl border text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                     showOnlyDue
-                      ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100/70'
-                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100/70'
+                      : 'border-slate-200/90 bg-white hover:bg-slate-50 text-slate-600'
                   }`}
                 >
-                  <FileText size={13} className={showOnlyDue ? 'text-sky-500' : 'text-slate-400'} />
-                  إظهار المتبقي فقط
+                  <FileText size={13} className={showOnlyDue ? 'text-blue-600' : 'text-slate-400'} />
+                  <span>إظهار المتبقي فقط</span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${showOnlyDue ? 'bg-blue-600' : 'bg-slate-300'}`} />
                 </button>
               </div>
             </div>
@@ -1590,7 +1583,7 @@ export default function CollectionStatement() {
                               onClick={() => setDueCurrentPage(page as number)}
                               className={`h-7 w-7 shrink-0 rounded-md text-[11px] font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                                 dueCurrentPage === page
-                                  ? 'bg-blue-600 text-white shadow-2xs'
+                                  ? 'bg-[#1e40af] text-white shadow-2xs'
                                   : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                               }`}
                             >
@@ -1957,7 +1950,21 @@ export default function CollectionStatement() {
                 <h3 className="text-red-800 font-bold text-base flex items-center gap-2"><Gavel size={18} /> سجل القضايا والنزاعات القانونية</h3>
                 <p className="text-red-600 text-xs mt-0.5">هذه القائمة مخصصة للمتابعة القانونية وللمحامي، وتعرض جميع العملاء الذين تم إحالتهم للقضاء.</p>
               </div>
-              <button onClick={() => { setPrintingInvoice(null); setPrintingLegalReport(true); setTimeout(() => { window.print(); setPrintingLegalReport(false); }, 300); }} className="h-9 px-4 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all whitespace-nowrap w-full sm:w-auto">
+              <button onClick={() => {
+                setPrintingInvoice(null);
+                setPrintingLegalReport(true);
+                setTimeout(async () => {
+                  const electronApi = (window as unknown as {
+                    electronAPI?: { printPreviewCurrent?: (payload?: { title?: string }) => Promise<unknown> };
+                  }).electronAPI;
+                  if (electronApi?.printPreviewCurrent) {
+                    await electronApi.printPreviewCurrent({ title: 'كشف المحامي - شركة المتحدة' });
+                  } else {
+                    window.print();
+                  }
+                  setPrintingLegalReport(false);
+                }, 300);
+              }} className="h-9 px-4 bg-red-700 text-white rounded-xl hover:bg-red-800 flex items-center justify-center gap-2 font-bold text-xs shadow-sm transition-all whitespace-nowrap w-full sm:w-auto">
                 <Printer size={15} />
                 طباعة كشف المحامي
               </button>
@@ -2608,7 +2615,7 @@ export default function CollectionStatement() {
                   type="button"
                   disabled={isSavingNote}
                   onClick={() => handleSaveInstallmentNote(noteDraft)}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
                 >
                   <Save size={14} />
                   <span>{isSavingNote ? 'جاري الحفظ...' : 'حفظ الملاحظة'}</span>
@@ -3246,7 +3253,7 @@ function CustomerDetailsModal({
               <button
                 type="button"
                 onClick={printStatement}
-                className="h-8 px-3.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-2xs transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+                className="h-8 px-3.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white font-bold text-xs shadow-2xs transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
                 title="طباعة كشف حساب العميل"
               >
                 <Printer size={13} />

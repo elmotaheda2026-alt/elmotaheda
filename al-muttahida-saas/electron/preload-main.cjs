@@ -34,6 +34,8 @@ try {
     openSetupWindow: () => ipcRenderer.send('open-setup-window'),
     runFirewallSetup: () => ipcRenderer.invoke('run-firewall-setup'),
     openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
+    printPreviewHtml: (payload) => ipcRenderer.invoke('print-preview-html', payload),
+    printPreviewCurrent: (payload) => ipcRenderer.invoke('print-preview-current', payload),
   });
 } catch (err) {
   console.error('Failed to initialize preload-main:', err);

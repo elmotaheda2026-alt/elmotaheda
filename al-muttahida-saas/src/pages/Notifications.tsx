@@ -139,7 +139,7 @@ export default function Notifications() {
             <button
               type="button"
               onClick={handleMarkAllRead}
-              className="flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-xs active:scale-95"
+              className="flex items-center gap-1.5 bg-[#1e40af] text-white px-3 py-1.5 rounded-lg hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs active:scale-95"
             >
               <Check size={14} />
               <span>تحديد الكل كمقروء</span>

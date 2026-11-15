@@ -284,10 +284,10 @@ export default function ProductsInventory() {
       {/* COMPACT HEADER & TOOLBAR */}
       <section className="erp-action-bar shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3 w-full">
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap flex-1 min-w-0">
             <h2 className="text-lg font-black text-slate-900 shrink-0">كتالوج الأصناف والمخزن</h2>
-            <div className="relative min-w-[260px] max-w-sm">
-              <Search size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <div className="relative flex-1 min-w-[240px] max-w-sm">
+              <Search size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
                 type="text"
                 ref={searchInputRef}
@@ -298,7 +298,7 @@ export default function ProductsInventory() {
                   setVisibleLimit(PRODUCT_RENDER_LIMIT);
                 }}
                 placeholder="بحث باسم الصنف أو الكود..."
-                className="input-ui h-10 w-full pr-10 pl-3.5 text-xs font-bold bg-white border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 text-slate-900 shadow-2xs placeholder:text-slate-400"
+                className="input-ui h-9 w-full pr-10 pl-3.5 text-xs font-semibold bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 placeholder:text-slate-400"
               />
             </div>
           </div>
@@ -373,10 +373,10 @@ export default function ProductsInventory() {
                   setEditingProduct(null);
                   setShowModal(true);
                 }}
-                className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors text-xs font-black shadow-sm cursor-pointer"
+                className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs shrink-0 cursor-pointer"
               >
-                <Plus size={16} />
-                <span>+ إضافة صنف للمخزن</span>
+                <Plus size={15} />
+                <span>إضافة صنف للمخزن</span>
               </button>
             )}
           </div>
@@ -452,12 +452,12 @@ export default function ProductsInventory() {
           <table className="w-full min-w-[750px] border-collapse">
             <thead className="desktop-sticky-header">
               <tr>
-                <th className="py-3 px-4 text-right font-black text-slate-800">الصنف / الكود</th>
-                <th className="py-3 px-4 text-right font-black text-slate-800">الوحدة</th>
-                <th className="py-3 px-4 text-center font-black text-slate-800">المخزون</th>
-                <th className="py-3 px-4 text-right font-black text-slate-800">تكلفة الشراء</th>
-                <th className="py-3 px-4 text-right font-black text-slate-800">سعر البيع</th>
-                <th className="py-3 px-4 text-center font-black text-slate-800">إجراءات</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الصنف / الكود</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">الوحدة</th>
+                <th className="py-3 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">المخزون</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">تكلفة الشراء</th>
+                <th className="py-3 px-4 text-right text-xs font-bold text-slate-700 tracking-wider">سعر البيع</th>
+                <th className="py-3 px-4 text-center text-xs font-bold text-slate-700 tracking-wider">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -776,7 +776,7 @@ export default function ProductsInventory() {
               <div className="flex items-center gap-3 pt-3 border-t border-slate-200">
                 <button
                   type="submit"
-                  className="flex-1 h-12 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  className="flex-1 h-12 bg-[#1e40af] hover:bg-[#1d4ed8] text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <CheckCircle2 size={18} />
                   <span>{editingProduct ? 'حفظ تعديلات الصنف' : 'حفظ الصنف في المخزن'}</span>

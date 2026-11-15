@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Store, Lock, Mail, Eye, EyeOff } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
+import companyMark from '../assets/company-mark.png';
 // Helmet import removed; title set via useEffect
 
 export default function Login() {
@@ -41,7 +42,7 @@ export default function Login() {
 
   return (
 
-    <div className="h-[100dvh] overflow-y-auto overflow-x-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 flex items-center justify-center p-4">
+    <div className="h-[100dvh] overflow-y-auto overflow-x-hidden bg-gradient-to-br from-slate-900 via-[#1e40af] to-[#1d4ed8] flex items-center justify-center p-4">
       {/* Background Pattern */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-20 right-20 w-40 h-40 bg-white rounded-full blur-3xl" />
@@ -52,12 +53,16 @@ export default function Login() {
       <div className="relative w-full max-w-md">
         <div className="bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100">
           {/* Header */}
-          <div className="bg-gradient-to-r from-blue-700 to-indigo-800 p-8 text-center">
-            <div className="w-20 h-20 bg-white rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-4">
-              <Store size={40} className="text-blue-700" />
+          <div className="bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] p-8 text-center border-b border-slate-800/40">
+            <div className="w-20 h-20 mx-auto overflow-hidden mb-3 flex items-center justify-center">
+              <img
+                src={companyMark}
+                alt="شركة المتحدة"
+                className="w-full h-full object-contain scale-125 drop-shadow-[0_4px_12px_rgba(16,185,129,0.25)]"
+              />
             </div>
             <h1 className="text-2xl font-black text-white">شركة المتحدة</h1>
-            <p className="text-blue-100/90 mt-2 font-medium">نظام إدارة متكامل - تسجيل الدخول</p>
+            <p className="text-slate-300 mt-1.5 text-sm font-medium">نظام إدارة متكامل - تسجيل الدخول</p>
           </div>
 
           {/* Form */}
@@ -116,7 +121,7 @@ export default function Login() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-3.5 bg-[#1e40af] hover:bg-[#1d4ed8] text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
               >
                 {loading ? (
                   <span>

@@ -79,26 +79,26 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 pb-6 animate-fadeIn">
-      {/* 1. Executive Branded Hero Section with Ambient Background */}
-      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-slate-900 via-indigo-950 to-blue-950 p-6 sm:p-7 border border-slate-800/80 shadow-md text-white">
-        {/* Atmospheric Ambient Glows */}
-        <div className="absolute -top-24 -left-20 w-80 h-80 rounded-full bg-blue-500/20 blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -right-20 w-80 h-80 rounded-full bg-indigo-500/25 blur-3xl pointer-events-none" />
-        {/* Subtle Geometric Dot Pattern */}
-        <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:20px_20px] pointer-events-none" />
+      {/* 1. Executive Branded Hero Section with Calm Matte Palette */}
+      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-slate-900 via-[#0f1f4a] to-[#172959] p-6 sm:p-7 border border-slate-800/70 shadow-sm text-white">
+        {/* Subtle Atmospheric Ambient Glows */}
+        <div className="absolute -top-24 -left-20 w-80 h-80 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -right-20 w-80 h-80 rounded-full bg-blue-500/10 blur-3xl pointer-events-none" />
+        {/* Very Subtle Geometric Dot Pattern */}
+        <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] [background-size:20px_20px] pointer-events-none" />
 
         {/* Decorative Brand Emblem Watermark in Background */}
         <div className="absolute left-6 -bottom-6 opacity-10 pointer-events-none scale-150 rotate-12 select-none hidden md:block">
-          <CompanyLogo size={160} />
+          <CompanyLogo size={160} theme="dark" />
         </div>
 
         <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-2.5 max-w-2xl">
-            <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-1 text-xs font-bold text-blue-200 border border-white/15 backdrop-blur-md shadow-xs">
-              <Calendar size={14} className="text-blue-300" />
+            <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-1 text-xs font-bold text-slate-200 border border-white/10 backdrop-blur-md">
+              <Calendar size={14} className="text-emerald-400" />
               <span>{formatDateDisplay(todayStr)}</span>
             </div>
-            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-white drop-shadow-xs">
+            <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-white">
               {settings.companyName || 'شركة المتحدة'} لإدارة المبيعات والحسابات
             </h1>
             <p className="text-sm font-medium text-slate-300 leading-relaxed">
@@ -110,7 +110,7 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => navigate('/invoices')}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 px-5 py-3 text-sm font-bold text-white transition-all hover:shadow-lg hover:shadow-blue-500/30 active:scale-98 shadow-sm cursor-pointer border border-white/20"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white hover:bg-slate-100 px-5 py-3 text-sm font-bold text-[#0f1f4a] transition-all hover:shadow-md active:scale-98 shadow-sm cursor-pointer"
             >
               <Plus size={18} />
               <span>إصدار فاتورة جديدة</span>

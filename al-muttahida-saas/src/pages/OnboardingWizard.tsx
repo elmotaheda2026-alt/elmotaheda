@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import companyLogo from '../assets/company-logo-sm.jpg';
 import {
   Server,
   Laptop,
@@ -192,6 +193,7 @@ export default function OnboardingWizard() {
 
         if (res && res.success) {
           setCustomSqlMsg({ type: 'success', text: 'تم حفظ إعدادات الاتصال بنجاح! جاري فحص الاتصال الآن...' });
+          setShowAdvancedSql(false);
           setTimeout(() => {
             checkSqlEngine();
           }, 800);
@@ -200,6 +202,7 @@ export default function OnboardingWizard() {
         }
       } else {
         setCustomSqlMsg({ type: 'success', text: 'تم حفظ الإعدادات تجريبياً! جاري فحص الاتصال...' });
+        setShowAdvancedSql(false);
         setTimeout(() => {
           checkSqlEngine();
         }, 800);
@@ -327,8 +330,12 @@ export default function OnboardingWizard() {
       <div className="max-w-3xl mx-auto w-full pt-4">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-700 to-indigo-800 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-              <Building2 className="w-6 h-6" />
+            <div className="w-12 h-12 rounded-2xl overflow-hidden shadow-md shadow-blue-500/20 border border-slate-200/70 bg-[#0f245c] shrink-0">
+              <img
+                src={companyLogo}
+                alt="شركة المتحدة"
+                className="w-full h-full object-cover"
+              />
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">شركة المتحدة ERP</h1>
@@ -358,7 +365,7 @@ export default function OnboardingWizard() {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                   currentStep === 'role'
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    ? 'bg-[#1e40af] text-white shadow-md shadow-blue-600/30'
                     : 'bg-blue-100 text-blue-800'
                 }`}
               >
@@ -372,7 +379,7 @@ export default function OnboardingWizard() {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                   currentStep === 'connection'
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    ? 'bg-[#1e40af] text-white shadow-md shadow-blue-600/30'
                     : currentStep === 'launch'
                     ? 'bg-blue-100 text-blue-800'
                     : 'bg-slate-100 text-slate-400'
@@ -388,7 +395,7 @@ export default function OnboardingWizard() {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
                   currentStep === 'launch'
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    ? 'bg-[#1e40af] text-white shadow-md shadow-blue-600/30'
                     : 'bg-slate-100 text-slate-400'
                 }`}
               >
@@ -424,7 +431,7 @@ export default function OnboardingWizard() {
                   }`}
                 >
                   {selectedMode === 'server' && (
-                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs">
+                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-[#1e40af] text-white flex items-center justify-center text-xs">
                       <CheckCircle2 className="w-4 h-4" />
                     </span>
                   )}
@@ -452,7 +459,7 @@ export default function OnboardingWizard() {
                   }`}
                 >
                   {selectedMode === 'client' && (
-                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs">
+                    <span className="absolute top-4 left-4 w-6 h-6 rounded-full bg-[#1e40af] text-white flex items-center justify-center text-xs">
                       <CheckCircle2 className="w-4 h-4" />
                     </span>
                   )}
@@ -564,7 +571,7 @@ export default function OnboardingWizard() {
                       </p>
                       <button
                         onClick={handleAutoProvisionSql}
-                        className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm shadow-blue-600/30 transition flex items-center justify-center gap-2"
+                        className="w-full py-2.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white font-bold text-xs shadow-sm shadow-blue-600/30 transition flex items-center justify-center gap-2"
                       >
                         <ShieldCheck className="w-4 h-4" />
                         بدء التهيئة والربط الآلي الآن
@@ -813,7 +820,7 @@ export default function OnboardingWizard() {
               <button
                 onClick={goToNextStep}
                 disabled={selectedMode === 'server' && currentStep === 'connection' && sqlStatus !== 'ready'}
-                className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+                className="px-6 py-2.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
               >
                 متابعة
                 <ArrowLeft className="w-4 h-4" />

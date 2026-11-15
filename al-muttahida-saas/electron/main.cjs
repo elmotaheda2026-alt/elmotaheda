@@ -344,6 +344,108 @@ ipcMain.handle('open-external-url', async (_event, url) => {
   }
 });
 
+// ── IPC: Real Interactive PDF Print Preview (Fixes "This app doesn't support print preview") ──
+
+function openPrintPreviewFromPdfBuffer(pdfBuffer, title) {
+  const tempPdfPath = path.join(
+    os.tmpdir(),
+    `elmotaheda-preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`
+  );
+  fs.writeFileSync(tempPdfPath, pdfBuffer);
+
+  const iconCandidate = path.join(__dirname, 'icon.png');
+  const previewWin = new BrowserWindow({
+    width: 1000,
+    height: 840,
+    minWidth: 700,
+    minHeight: 550,
+    title: title || 'معاينة الطباعة - شركة المتحدة',
+    autoHideMenuBar: true,
+    backgroundColor: '#1e293b',
+    ...(fs.existsSync(iconCandidate) ? { icon: iconCandidate } : {}),
+    webPreferences: {
+      plugins: true,
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  previewWin.setMenuBarVisibility(false);
+  previewWin.loadURL(`file:///${tempPdfPath.replace(/\\/g, '/')}`);
+  previewWin.on('closed', () => {
+    fs.unlink(tempPdfPath, () => {});
+  });
+}
+
+async function renderWebContentsToPdf(webContents) {
+  try {
+    return await webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+    });
+  } catch (err) {
+    console.warn('printToPDF preferCSSPageSize fallback to A4:', err?.message || err);
+    return await webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: false,
+      pageSize: 'A4',
+    });
+  }
+}
+
+ipcMain.handle('print-preview-html', async (_event, payload = {}) => {
+  const html = typeof payload?.html === 'string' ? payload.html : '';
+  const title = typeof payload?.title === 'string' ? payload.title : 'معاينة الطباعة';
+  if (!html) return { success: false, error: 'Empty HTML content' };
+
+  const tempHtmlPath = path.join(
+    os.tmpdir(),
+    `elmotaheda-print-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.html`
+  );
+  let renderWin = null;
+
+  try {
+    fs.writeFileSync(tempHtmlPath, html, 'utf8');
+    renderWin = new BrowserWindow({
+      show: false,
+      width: 1000,
+      height: 1200,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    await renderWin.loadURL(`file:///${tempHtmlPath.replace(/\\/g, '/')}`);
+    // Give webfonts and RTL table layout a moment to settle
+    await new Promise((resolve) => setTimeout(resolve, 220));
+
+    const pdfBuffer = await renderWebContentsToPdf(renderWin.webContents);
+    openPrintPreviewFromPdfBuffer(pdfBuffer, title);
+    return { success: true };
+  } catch (err) {
+    console.error('print-preview-html failed:', err);
+    return { success: false, error: err?.message || 'Print preview failed' };
+  } finally {
+    if (renderWin && !renderWin.isDestroyed()) {
+      try { renderWin.destroy(); } catch (_) {}
+    }
+    fs.unlink(tempHtmlPath, () => {});
+  }
+});
+
+ipcMain.handle('print-preview-current', async (event, payload = {}) => {
+  try {
+    const title = typeof payload?.title === 'string' ? payload.title : 'معاينة الطباعة';
+    const pdfBuffer = await renderWebContentsToPdf(event.sender);
+    openPrintPreviewFromPdfBuffer(pdfBuffer, title);
+    return { success: true };
+  } catch (err) {
+    console.error('print-preview-current failed:', err);
+    return { success: false, error: err?.message || 'Print preview failed' };
+  }
+});
+
 ipcMain.handle('run-firewall-setup', async () => {
   return new Promise((resolve) => {
     ensureFirewallRules();

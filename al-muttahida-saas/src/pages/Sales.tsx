@@ -266,7 +266,7 @@ export default function Sales() {
           <button
             type="button"
             onClick={() => window.print()}
-            className="flex items-center gap-1.5 h-9 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-3.5 text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
+            className="flex items-center gap-1.5 h-9 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-3.5 text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
             title="طباعة تقرير ربحية المبيعات"
           >
             <Printer size={15} />
@@ -383,7 +383,7 @@ export default function Sales() {
                         <button
                           type="button"
                           onClick={resetFilters}
-                          className="mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                          className="mt-2 px-4 py-2 bg-[#1e40af] hover:bg-[#1d4ed8] text-white rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
                         >
                           عرض كافة المبيعات والأرباح (الكل)
                         </button>
