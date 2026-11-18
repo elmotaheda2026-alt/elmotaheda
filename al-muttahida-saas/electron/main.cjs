@@ -5,6 +5,13 @@ const os = require('os');
 const { exec } = require('child_process');
 const { startBackend, stopBackend, checkHealth, getAppDataDir } = require('./backend-loader.cjs');
 
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require('electron-updater'));
+} catch (err) {
+  console.warn('[AutoUpdater] electron-updater not available:', err.message);
+}
+
 // ── Single Instance Lock (Fixes white screen caused by opening multiple instances) ──
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -1196,9 +1203,125 @@ async function initAndLaunch() {
   }
 }
 
+function sendUpdaterStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('updater-status', payload);
+    } catch (_) {}
+  }
+}
+
+function resolveUpdateUrl() {
+  const cfg = appConfig || loadConfig();
+  const customUrl = (process.env.UPDATE_URL || cfg?.updateUrl || '').trim();
+  return customUrl || null;
+}
+
+function setupAutoUpdater() {
+  if (!autoUpdater || !app.isPackaged) return;
+
+  try {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    const customUrl = resolveUpdateUrl();
+    if (customUrl) {
+      autoUpdater.setFeedURL({ provider: 'generic', url: customUrl });
+    }
+
+    autoUpdater.on('checking-for-update', () => {
+      sendUpdaterStatus({ status: 'checking' });
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      sendUpdaterStatus({ status: 'available', version: info?.version });
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      sendUpdaterStatus({ status: 'up-to-date', version: info?.version || app.getVersion() });
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      sendUpdaterStatus({
+        status: 'downloading',
+        percent: Math.round(progress?.percent || 0),
+      });
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      sendUpdaterStatus({ status: 'downloaded', version: info?.version });
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.warn('[AutoUpdater] Error:', err?.message || err);
+      sendUpdaterStatus({ status: 'error', message: err?.message || 'فشل فحص التحديثات' });
+    });
+
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }, 8000);
+
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }, 4 * 60 * 60 * 1000);
+  } catch (err) {
+    console.warn('[AutoUpdater] Setup failed:', err.message);
+  }
+}
+
+ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.handle('get-update-url', () => resolveUpdateUrl() || '');
+
+ipcMain.handle('set-update-url', (_event, url) => {
+  const cleanUrl = typeof url === 'string' ? url.trim() : '';
+  saveConfig({ updateUrl: cleanUrl || null });
+  appConfig = loadConfig();
+  if (autoUpdater && app.isPackaged && cleanUrl) {
+    try {
+      autoUpdater.setFeedURL({ provider: 'generic', url: cleanUrl });
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+  return { ok: true, updateUrl: cleanUrl };
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  if (!autoUpdater) {
+    return { supported: false, message: 'ميزة التحديث التلقائي غير متاحة' };
+  }
+  if (!app.isPackaged) {
+    return { supported: false, version: app.getVersion(), message: 'الفحص التلقائي يعمل في النسخة المثبتة فقط' };
+  }
+  try {
+    const customUrl = resolveUpdateUrl();
+    if (customUrl) {
+      autoUpdater.setFeedURL({ provider: 'generic', url: customUrl });
+    }
+    const result = await autoUpdater.checkForUpdates();
+    return {
+      supported: true,
+      version: result?.updateInfo?.version || app.getVersion(),
+    };
+  } catch (err) {
+    return { supported: true, error: err?.message || 'تعذر الاتصال بخادم التحديثات' };
+  }
+});
+
+ipcMain.handle('install-update', () => {
+  if (!autoUpdater || !app.isPackaged) return { ok: false };
+  stopBackend();
+  setImmediate(() => {
+    autoUpdater.quitAndInstall(false, true);
+  });
+  return { ok: true };
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   initAndLaunch();
+  setupAutoUpdater();
 
   const repaintMainWindow = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {

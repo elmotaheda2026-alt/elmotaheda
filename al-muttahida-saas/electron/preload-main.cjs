@@ -44,6 +44,18 @@ try {
     openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
     printPreviewHtml: (payload) => ipcRenderer.invoke('print-preview-html', payload),
     printPreviewCurrent: (payload) => ipcRenderer.invoke('print-preview-current', payload),
+
+    // 6. Auto-updater
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+    getUpdateUrl: () => ipcRenderer.invoke('get-update-url'),
+    setUpdateUrl: (url) => ipcRenderer.invoke('set-update-url', url),
+    checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+    installUpdate: () => ipcRenderer.invoke('install-update'),
+    onUpdaterStatus: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('updater-status', handler);
+      return () => ipcRenderer.removeListener('updater-status', handler);
+    },
   });
 } catch (err) {
   console.error('Failed to initialize preload-main:', err);

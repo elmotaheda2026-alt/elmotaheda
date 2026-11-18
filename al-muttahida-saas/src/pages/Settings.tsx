@@ -1971,6 +1971,45 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      {/* Developer Credit Footer */}
+      <div className="bg-white rounded-xl border border-slate-200 px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 shadow-2xs">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-slate-600">تم تطوير وتنفيذ النظام بواسطة:</span>
+          <a
+            href="https://www.soratics.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              const api = (window as unknown as { electronAPI?: { openExternalUrl?: (url: string) => Promise<void> } }).electronAPI;
+              if (api?.openExternalUrl) {
+                e.preventDefault();
+                void api.openExternalUrl('https://www.soratics.com/');
+              }
+            }}
+            className="inline-flex items-center gap-1.5 font-black text-blue-700 hover:text-blue-800 hover:underline"
+          >
+            <span>Soratics</span>
+            <ExternalLink size={13} />
+          </a>
+        </div>
+        <a
+          href="https://www.soratics.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          dir="ltr"
+          onClick={(e) => {
+            const api = (window as unknown as { electronAPI?: { openExternalUrl?: (url: string) => Promise<void> } }).electronAPI;
+            if (api?.openExternalUrl) {
+              e.preventDefault();
+              void api.openExternalUrl('https://www.soratics.com/');
+            }
+          }}
+          className="font-mono text-[11px] text-slate-400 hover:text-blue-600 transition-colors"
+        >
+          www.soratics.com
+        </a>
+      </div>
     </div>
   );
 }

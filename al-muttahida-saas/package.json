@@ -59,6 +59,7 @@
     "clsx": "^2.1.1",
     "cmdk": "1.0.0",
     "date-fns": "^3.0.0",
+    "electron-updater": "^6.8.11",
     "embla-carousel-react": "^8.5.2",
     "framer-motion": "^12.40.0",
     "input-otp": "^1.4.2",
@@ -111,6 +112,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "elmotaheda2026-alt",
+        "repo": "almuttahida-erp-updates-"
+      }
+    ],
     "files": [
       "dist/**/*",
       "electron/**/*"
