@@ -63,3 +63,49 @@ export async function createExpense(expense: Omit<Expense, 'id' | 'createdAt'>):
   return newExpense;
 }
 
+export async function updateExpense(id: string, data: Partial<Omit<Expense, 'id' | 'createdAt'>>): Promise<void> {
+  if (isApiMode()) {
+    await api.updateExpense(id, data);
+    await syncExpenses();
+    return;
+  }
+
+  const expenses = getStorage<Expense>(DB_KEYS.EXPENSES);
+  const idx = expenses.findIndex((e) => e.id === id);
+  if (idx === -1) throw new Error('المصروف غير موجود');
+  const updated: Expense = { ...expenses[idx], ...data };
+  expenses[idx] = updated;
+  setStorage(DB_KEYS.EXPENSES, expenses);
+
+  const payments = getStorage<any>(DB_KEYS.PAYMENTS);
+  const nextPayments = payments.map((p) =>
+    p.referenceType === 'expense' && p.referenceId === id
+      ? {
+          ...p,
+          amount: updated.amount,
+          date: updated.date,
+          description: `مصروفات - ${updated.category}: ${updated.description}`,
+        }
+      : p
+  );
+  setStorage(DB_KEYS.PAYMENTS, nextPayments);
+}
+
+export async function deleteExpense(id: string): Promise<void> {
+  if (isApiMode()) {
+    await api.deleteExpense(id);
+    await syncExpenses();
+    return;
+  }
+
+  const expenses = getStorage<Expense>(DB_KEYS.EXPENSES).filter((e) => e.id !== id);
+  setStorage(DB_KEYS.EXPENSES, expenses);
+
+  const payments = getStorage<any>(DB_KEYS.PAYMENTS).map((p) =>
+    p.referenceType === 'expense' && p.referenceId === id
+      ? { ...p, status: 'voided' }
+      : p
+  );
+  setStorage(DB_KEYS.PAYMENTS, payments);
+}
+

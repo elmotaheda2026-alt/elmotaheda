@@ -7,14 +7,18 @@ export async function scanLanForServer(port = 4000, timeoutMs = 800): Promise<st
     try {
       const res = await fetch(`http://${window.location.hostname}:${port}/health`, { signal: AbortSignal.timeout(500) });
       if (res.ok) return `http://${window.location.hostname}:${port}`;
-    } catch (_) {}
+    } catch {
+      // Probe next candidate
+    }
   }
 
   // Quick check 2: localhost
   try {
     const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(300) });
     if (res.ok) return `http://127.0.0.1:${port}`;
-  } catch (_) {}
+  } catch {
+    // Probe LAN subnets
+  }
 
   const candidateSubnets = ['192.168.1', '192.168.0', '192.168.100', '10.0.0'];
 

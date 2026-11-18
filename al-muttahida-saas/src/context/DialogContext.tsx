@@ -181,7 +181,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
       {/* ─── Global In-System Confirmation Dialog ──────────────────────── */}
       {confirmState?.isOpen && (
         <div
-          className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn select-none"
+          className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn select-none"
           onClick={() => {
             confirmState.resolve(false);
             setConfirmState(null);
@@ -265,7 +265,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
       {/* ─── Global In-System Alert Dialog ─────────────────────────────── */}
       {alertState?.isOpen && (
         <div
-          className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn select-none"
+          className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn select-none"
           onClick={() => {
             alertState.resolve();
             setAlertState(null);

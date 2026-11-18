@@ -10,6 +10,7 @@ export default function Login() {
   const [username, setUsername] = useState(showDemoCredentials ? 'admin' : '');
   const [password, setPassword] = useState(showDemoCredentials ? 'admin123' : '');
   const [showPassword, setShowPassword] = useState(false);
+  const [showResetHelp, setShowResetHelp] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -137,7 +138,19 @@ export default function Login() {
               </button>
             </div>
 
-            <div className="mt-6 text-center pt-2 border-t border-slate-100">
+            <div className="mt-6 text-center pt-3 border-t border-slate-100 space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowResetHelp((prev) => !prev)}
+                className="text-xs text-slate-600 hover:text-blue-700 font-bold transition-colors cursor-pointer"
+              >
+                نسيت كلمة المرور؟
+              </button>
+              {showResetHelp && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-right text-xs text-amber-900 leading-relaxed font-medium">
+                  لاستعادة أو إعادة تعيين كلمة المرور، يرجى التواصل مع مدير النظام لتحديثها من شاشة <strong>المستخدمين</strong>، أو تشغيل أمر استعادة مدير النظام على السيرفر الرئيسي في حال نسيان كلمة مرور المدير العام.
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => {

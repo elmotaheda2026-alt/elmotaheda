@@ -80,8 +80,19 @@ export function createPayment(payment: Omit<Payment, 'id' | 'createdAt'>): Payme
          message: `${newPayment.type === 'in' ? 'تم استلام' : 'تم سحب'} مبلغ ${Number(newPayment.amount || 0).toLocaleString('ar-EG')} جنيه من العميل ${clientName} لسداد القسط ${installmentNo} من الفاتورة ${newPayment.invoiceNumber || ''} (إيصال ${newPayment.receiptNumber || ''})`,
        });
     }
-  } else {
-    // Supplier payment handling (if needed). Currently no specific logic.
+  } else if (payment.type === 'out') {
+    const supplierId =
+      payment.supplierId ||
+      (payment.referenceType === 'supplier' ? payment.referenceId : undefined);
+    if (supplierId) {
+      const suppliers = getStorage<Supplier>(DB_KEYS.SUPPLIERS);
+      const sIndex = suppliers.findIndex((s) => s.id === supplierId);
+      if (sIndex !== -1) {
+        suppliers[sIndex].balance = Number((Number(suppliers[sIndex].balance || 0) - payment.amount).toFixed(2));
+        suppliers[sIndex].updatedAt = new Date().toISOString();
+        setStorage(DB_KEYS.SUPPLIERS, suppliers);
+      }
+    }
   }
 
   // Create audit log for payment creation
@@ -115,6 +126,7 @@ export function reversePayment(original: Payment, reason: string, reversedBy: st
     affectsCustomerBalance: true,
     voidRef: original.id,
     approvedBy: reversedBy,
+    status: 'voided',
     channel: original.channel || 'other',
   };
 

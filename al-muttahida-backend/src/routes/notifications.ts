@@ -1,11 +1,35 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, type AuthedRequest } from '../middleware/auth.js';
+import { hasPermission } from '../permissions.js';
 import { uid, formatDate } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
+
+function canViewNotification(user: AuthedRequest['user'], row: { title?: string; message?: string }): boolean {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+
+  const text = `${row.title || ''} ${row.message || ''}`;
+  if (text.includes('حركة شريك') || text.includes('مساهم') || text.includes('تسوية أرباح')) {
+    return hasPermission(user.role, 'shareholders:manage', user.permissions);
+  }
+  if (text.includes('شراء تلقائي') || text.includes('فاتورة شراء') || text.includes('مديونية المورد')) {
+    return hasPermission(user.role, 'purchases:manage', user.permissions) || hasPermission(user.role, 'sales:read', user.permissions);
+  }
+  if (text.includes('سند صرف') || text.includes('حركة خزينة') || text.includes('تكييش') || text.includes('عكس حركة مالية')) {
+    return hasPermission(user.role, 'payments:read', user.permissions) || hasPermission(user.role, 'payments:write', user.permissions);
+  }
+  if (text.includes('فاتورة جديدة') || text.includes('تعديل تعاقد') || text.includes('مرتجع') || text.includes('ترحيل قسط')) {
+    return hasPermission(user.role, 'sales:read', user.permissions) || hasPermission(user.role, 'sales:write', user.permissions);
+  }
+  if (text.includes('نسخة احتياطية') || text.includes('إعدادات')) {
+    return hasPermission(user.role, 'settings:manage', user.permissions);
+  }
+  return hasPermission(user.role, 'payments:read', user.permissions) || hasPermission(user.role, 'sales:read', user.permissions) || hasPermission(user.role, 'notifications:read', user.permissions);
+}
 
 const notificationSchema = z.object({
   type: z.enum(['info', 'warning', 'success', 'error']).default('info'),
@@ -14,18 +38,20 @@ const notificationSchema = z.object({
 });
 
 // GET /notifications
-router.get('/', requirePermission('notifications:read'), async (_req, res) => {
+router.get('/', async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     const rows = await db.all('SELECT * FROM notifications ORDER BY created_at DESC');
-    const mapped = rows.map((row: any) => ({
-      id: row.id,
-      type: row.type,
-      title: row.title,
-      message: row.message,
-      isRead: row.is_read === 1 || row.is_read === true,
-      createdAt: formatDate(row.created_at),
-    }));
+    const mapped = rows
+      .filter((row: any) => canViewNotification(req.user, row))
+      .map((row: any) => ({
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        message: row.message,
+        isRead: row.is_read === 1 || row.is_read === true,
+        createdAt: formatDate(row.created_at),
+      }));
     return res.json(mapped);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -61,7 +87,7 @@ router.post('/', async (req: AuthedRequest, res) => {
 });
 
 // PUT /notifications/read-all
-router.put('/read-all', requirePermission('notifications:read'), async (_req, res) => {
+router.put('/read-all', async (_req, res) => {
   try {
     const db = await dbPromise;
     await db.run('UPDATE notifications SET is_read = 1');
@@ -72,7 +98,7 @@ router.put('/read-all', requirePermission('notifications:read'), async (_req, re
 });
 
 // PUT /notifications/:id/read
-router.put('/:id/read', requirePermission('notifications:read'), async (req, res) => {
+router.put('/:id/read', async (req, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM notifications WHERE id = ?', req.params.id);
@@ -88,7 +114,7 @@ router.put('/:id/read', requirePermission('notifications:read'), async (req, res
 });
 
 // DELETE /notifications/:id
-router.delete('/:id', requirePermission('notifications:read'), requireAdmin, async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const db = await dbPromise;
     const existing = await db.get('SELECT id FROM notifications WHERE id = ?', req.params.id);

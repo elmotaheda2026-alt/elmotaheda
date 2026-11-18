@@ -4,10 +4,11 @@ import { Customer, Guarantor, InstallmentSchedule, Sale, Setting, SalesRep } fro
 import { getCustomers, getSales, getSalesReps, toggleCustomerSued } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
+import { hasPermission } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
-import { api, isApiMode, isMobileDevice } from '../lib/apiClient';
+import { api, isApiMode } from '../lib/apiClient';
 import LoadingState from '../components/LoadingState';
 
 interface CollectionInvoiceView {
@@ -140,7 +141,6 @@ export default function CollectionStatement() {
 
   const handleOpenNoteModal = (e: React.MouseEvent, row: DueCustomerRow, preferredScope?: 'installment' | 'invoice') => {
     e.stopPropagation();
-    if (isMobileDevice()) return;
     const initialScope = preferredScope || (row.invoiceNote && !row.notes ? 'invoice' : 'installment');
     setNoteModalRow(row);
     setNoteScope(initialScope);
@@ -336,7 +336,12 @@ export default function CollectionStatement() {
     return customers.filter(
       (c) =>
         normalizeArabic(c.name).includes(term) ||
-        (c.phone && c.phone.includes(term))
+        (c.phone && c.phone.includes(term)) ||
+        (c.nationalId && c.nationalId.includes(term)) ||
+        (c.guarantors || []).some((g) => g && (
+          normalizeArabic(g.name || '').includes(term) ||
+          (g.phone && g.phone.includes(term))
+        ))
     );
   }, [customers, invoiceSearchTerm]);
 
@@ -583,11 +588,17 @@ export default function CollectionStatement() {
       const search = invoiceSearchTerm.trim().toLowerCase();
       if (!search) return true;
 
+      const customer = customerMap.get(row.customerId);
       return (
         row.customerName.toLowerCase().includes(search) ||
         row.invoiceNumber.toLowerCase().includes(search) ||
         row.customerPhone.includes(search) ||
-        row.customerAddress.toLowerCase().includes(search)
+        row.customerAddress.toLowerCase().includes(search) ||
+        (customer?.nationalId || '').includes(search) ||
+        (row.guarantors || []).some((g) => g && (
+          (g.name || '').toLowerCase().includes(search) ||
+          (g.phone || '').includes(search)
+        ))
       );
     });
   }, [invoiceRows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
@@ -1130,8 +1141,11 @@ export default function CollectionStatement() {
                   onFocus={() => setShowSuggestions(true)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                   className="w-full h-9 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white focus:bg-white pr-10 pl-3 text-xs font-medium outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition placeholder:text-slate-400"
-                  placeholder="ابحث عن العميل بالاسم أو رقم الفاتورة..."
+                  placeholder="ابحث باسم العميل، الهاتف، الرقم القومي، الضامن أو رقم الفاتورة (3 أحرف على الأقل)..."
                 />
+                {invoiceLookupTerm.length > 0 && invoiceLookupTerm.length < 3 && selectedCustomerId === 'all' && (
+                  <p className="mt-1 text-[11px] font-bold text-amber-700">اكتب 3 أحرف على الأقل أو اختر العميل من القائمة لعرض النتائج.</p>
+                )}
                 {showSuggestions && suggestions.length > 0 && (
                   <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100 text-right">
                     {suggestions.map((c) => (
@@ -1323,7 +1337,7 @@ export default function CollectionStatement() {
                               <span className="truncate">{group[0].notes}</span>
                             </button>
                           )}
-                          {!isMobileDevice() && !group[0].notes && !group[0].invoiceNote && (
+                          {hasPermission(user, 'sales:write') && !group[0].notes && !group[0].invoiceNote && (
                             <button
                               type="button"
                               onClick={(e) => handleOpenNoteModal(e, group[0])}
@@ -1744,7 +1758,7 @@ export default function CollectionStatement() {
 
                         {/* Action Buttons */}
                         <div className="flex items-center gap-1.5">
-                          {user?.role !== 'manager' && !isMobileDevice() && (
+                          {hasPermission(user, 'sales:write') && (
                             <button
                               onClick={() => handleToggleLegalCustomer(row.customerId, !row.isSued)}
                               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
@@ -1866,7 +1880,7 @@ export default function CollectionStatement() {
                       {/* Desktop Installments Table (>= md) */}
                       <div className={`hidden md:block ${isSingle ? 'flex-1 min-h-0' : 'max-h-[380px]'} overflow-auto desktop-table-scroll`}>
                         <table className="w-full text-right border-collapse text-xs">
-                          <thead className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs border-b border-slate-200 text-xs font-black text-slate-700 shadow-2xs">
+                          <thead className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-sm border-b border-slate-200 text-xs font-black text-slate-700 shadow-2xs">
                             <tr>
                               <th className="py-2.5 px-3.5 text-center w-24">القسط</th>
                               <th className="py-2.5 px-3.5 text-right">تاريخ الاستحقاق</th>
@@ -2016,7 +2030,7 @@ export default function CollectionStatement() {
                           </a>
                         )}
 
-                        {!isMobileDevice() && (
+                        {hasPermission(user, 'sales:write') && (
                           <button
                             type="button"
                             onClick={() => handleToggleLegalCustomer(customer.id, false)}
@@ -2094,14 +2108,16 @@ export default function CollectionStatement() {
                           {formatCurrency(customer.totalDebt)}
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <button
-                            onClick={() => handleToggleLegalCustomer(customer.id, false)}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1"
-                            title="إلغاء التحويل من الشئون القانونية"
-                          >
-                            <CheckCircle2 size={13} />
-                            إلغاء النزاع
-                          </button>
+                          {hasPermission(user, 'sales:write') && (
+                            <button
+                              onClick={() => handleToggleLegalCustomer(customer.id, false)}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold border border-emerald-200 transition-colors inline-flex items-center gap-1"
+                              title="إلغاء التحويل من الشئون القانونية"
+                            >
+                              <CheckCircle2 size={13} />
+                              إلغاء النزاع
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -2497,7 +2513,7 @@ export default function CollectionStatement() {
       {/* Quick Installment Note Modal */}
       {noteModalRow && (
         <div
-          className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 print:hidden"
+          className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 print:hidden"
           onClick={() => !isSavingNote && setNoteModalRow(null)}
         >
           <div
@@ -2843,6 +2859,8 @@ function CustomerDetailsModal({
   onPrint,
 }: CustomerDetailsModalProps) {
   const [activeTab, setActiveTab] = useState<'period' | 'all'>('period');
+  const [loadedFullSale, setLoadedFullSale] = useState<Sale | null>(null);
+  const targetSaleId = customerGroup?.[0]?.saleId || '';
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2854,10 +2872,31 @@ function CustomerDetailsModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoadedFullSale(null);
+    if (!isOpen || !targetSaleId || !isApiMode()) return;
+
+    const existing = sales.find((s) => s.id === targetSaleId);
+    if (existing?.items && existing.items.length > 0) return;
+
+    api.getSale(targetSaleId)
+      .then((fullSale) => {
+        if (!cancelled && fullSale) {
+          setLoadedFullSale(fullSale);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, targetSaleId, sales]);
+
   if (!isOpen || !customerGroup || customerGroup.length === 0) return null;
 
   const primaryRow = customerGroup[0];
-  const matchedSale = sales.find((s) => s.id === primaryRow.saleId);
+  const matchedSale = loadedFullSale || sales.find((s) => s.id === primaryRow.saleId);
   const matchedCustomer = customerMap.get(primaryRow.customerId || matchedSale?.customerId || '');
 
   // Calculate totals
@@ -2953,7 +2992,7 @@ function CustomerDetailsModal({
 
   return (
     <div
-      className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200 print:hidden"
+      className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200 print:hidden"
       onClick={onClose}
     >
       <div
@@ -3104,9 +3143,9 @@ function CustomerDetailsModal({
                   <div key={idx} className="bg-white border border-amber-200/60 rounded-xl p-2.5 flex flex-col gap-1 shadow-2xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800 text-xs">{g.name || 'ضامن'}</span>
-                      {g.relation && (
+                      {(g.relationship || g.relation) && (
                         <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
-                          {g.relation}
+                          {g.relationship || g.relation}
                         </span>
                       )}
                     </div>
@@ -3187,7 +3226,7 @@ function CustomerDetailsModal({
             {/* Table */}
             <div className="overflow-x-auto max-h-60 overflow-y-auto">
               <table className="w-full text-right text-xs">
-                <thead className="sticky top-0 bg-slate-50/95 backdrop-blur-xs text-slate-600 border-b border-slate-200 font-bold">
+                <thead className="sticky top-0 bg-slate-50/95 backdrop-blur-sm text-slate-600 border-b border-slate-200 font-bold">
                   <tr>
                     <th className="px-3.5 py-2 text-right">القسط</th>
                     <th className="px-3 py-2 text-center">تاريخ الاستحقاق</th>

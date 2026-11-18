@@ -45,7 +45,7 @@ router.get('/', async (_req, res) => {
 });
 
 // POST /sales-reps
-router.post('/', async (req: AuthedRequest, res) => {
+router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
   const parsed = salesRepSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid sales rep payload', errors: parsed.error.format() });
@@ -82,7 +82,7 @@ router.post('/', async (req: AuthedRequest, res) => {
 });
 
 // PUT /sales-reps/:id
-router.put('/:id', async (req: AuthedRequest, res) => {
+router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
   const parsed = salesRepSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid sales rep payload', errors: parsed.error.format() });
@@ -127,6 +127,16 @@ router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (re
     const existing = await db.get('SELECT id FROM sales_reps WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Sales representative not found' });
+    }
+
+    const linkedSales = await db.get<{ count: number }>(
+      "SELECT COUNT(1) AS count FROM sales WHERE sales_rep_id = ? AND status <> 'cancelled'",
+      req.params.id,
+    );
+    if (linkedSales && Number(linkedSales.count || 0) > 0) {
+      return res.status(400).json({
+        message: `لا يمكن حذف المندوب لوجود ${linkedSales.count} فاتورة سارية مرتبطة به. يمكنك تعطيله مؤقتاً بدلاً من حذفه.`,
+      });
     }
 
     await db.run('DELETE FROM sales_reps WHERE id = ?', req.params.id);

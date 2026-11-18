@@ -25,7 +25,7 @@ export default function Suppliers() {
     balance: 0,
   });
   const { settings, user } = useAuth();
-  const canDelete = isAdmin(user) && user?.role !== 'manager';
+  const canDelete = isAdmin(user);
 
   useEffect(() => {
     loadSuppliers();
@@ -65,15 +65,22 @@ export default function Suppliers() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingSupplier) {
-      await updateSupplier(editingSupplier.id, formData);
-    } else {
-      await createSupplier(formData);
+    try {
+      if (editingSupplier) {
+        const { balance: _ignoredBalance, ...editableFields } = formData;
+        await updateSupplier(editingSupplier.id, editableFields);
+        showToast('تم تحديث بيانات المورد بنجاح', 'success');
+      } else {
+        await createSupplier(formData);
+        showToast('تم إضافة المورد بنجاح', 'success');
+      }
+      await loadSuppliers();
+      setShowModal(false);
+      setEditingSupplier(null);
+      resetForm();
+    } catch (err: any) {
+      showToast(err?.message || 'تعذر حفظ بيانات المورد.', 'error');
     }
-    await loadSuppliers();
-    setShowModal(false);
-    setEditingSupplier(null);
-    resetForm();
   };
 
   const handleEdit = (supplier: Supplier) => {
@@ -123,7 +130,14 @@ export default function Suppliers() {
   );
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
-  const totalSuppliersBalance = suppliers.reduce((sum, s) => sum + Number(s.balance || 0), 0);
+  const totalSuppliersPayable = suppliers.reduce(
+    (sum, s) => sum + (Number(s.balance || 0) > 0 ? Number(s.balance || 0) : 0),
+    0
+  );
+  const totalSuppliersCredit = suppliers.reduce(
+    (sum, s) => sum + (Number(s.balance || 0) < 0 ? Math.abs(Number(s.balance || 0)) : 0),
+    0
+  );
 
   return (
     <div className="desktop-view-container">
@@ -144,7 +158,7 @@ export default function Suppliers() {
             />
           </div>
         </div>
-        {user?.role !== 'manager' && (
+        {hasPermission(user, 'sales:write') && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
             className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs shrink-0 cursor-pointer"
@@ -179,7 +193,9 @@ export default function Suppliers() {
                     onClick={() => setInspectingSupplier(supplier)}
                     className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}
                   >
-                    {formatCurrency(supplier.balance)}
+                    {supplier.balance < 0
+                      ? `${formatCurrency(Math.abs(supplier.balance))} (رصيد لنا)`
+                      : formatCurrency(supplier.balance)}
                   </button>
                 </div>
 
@@ -200,7 +216,7 @@ export default function Suppliers() {
                       <FileText size={13} />
                       كشف الحساب
                     </button>
-                    {hasPermission(user, 'sales:write') && user?.role !== 'manager' && (
+                    {hasPermission(user, 'sales:write') && (
                       <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
                         <Edit size={14} />
                       </button>
@@ -237,8 +253,8 @@ export default function Suppliers() {
                 filteredSuppliers.map(supplier => (
                   <tr
                     key={supplier.id}
-                    onDoubleClick={() => hasPermission(user, 'sales:write') && user?.role !== 'manager' && handleEdit(supplier)}
-                    title={user?.role !== 'manager' ? 'انقر مرتين للتعديل' : ''}
+                    onDoubleClick={() => hasPermission(user, 'sales:write') && handleEdit(supplier)}
+                    title={hasPermission(user, 'sales:write') ? 'انقر مرتين للتعديل' : ''}
                     className="group cursor-pointer hover:bg-slate-50 transition-colors"
                   >
                     <td className="py-3 px-4 font-bold text-slate-900 text-xs sm:text-sm">{supplier.name}</td>
@@ -254,7 +270,9 @@ export default function Suppliers() {
                         className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer hover:opacity-85 transition-opacity ${supplier.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}
                         title="انقر لعرض سجل المحاسبات وكشف الحساب"
                       >
-                        {formatCurrency(supplier.balance)}
+                        {supplier.balance < 0
+                          ? `${formatCurrency(Math.abs(supplier.balance))} (رصيد لنا)`
+                          : formatCurrency(supplier.balance)}
                       </button>
                     </td>
                     <td className="py-3 px-4 text-center">
@@ -270,7 +288,7 @@ export default function Suppliers() {
                         >
                           <FileText size={15} />
                         </button>
-                        {hasPermission(user, 'sales:write') && user?.role !== 'manager' && (
+                        {hasPermission(user, 'sales:write') && (
                           <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="تعديل">
                             <Edit size={15} />
                           </button>
@@ -290,13 +308,18 @@ export default function Suppliers() {
         </div>
         <div className="erp-status-bar shrink-0">
           <span className="font-bold text-slate-700">إجمالي الموردين: <span className="text-blue-700 font-extrabold">{suppliers.length}</span> (المعروض: {filteredSuppliers.length})</span>
-          <span className="font-bold text-slate-700">إجمالي مستحقات الموردين: <span className="text-rose-700 font-extrabold">{formatCurrency(totalSuppliersBalance)}</span></span>
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="font-bold text-slate-700">إجمالي مستحقات الموردين: <span className="text-rose-700 font-extrabold">{formatCurrency(totalSuppliersPayable)}</span></span>
+            {totalSuppliersCredit > 0 && (
+              <span className="font-bold text-slate-700">رصيد لنا عند الموردين: <span className="text-emerald-700 font-extrabold">{formatCurrency(totalSuppliersCredit)}</span></span>
+            )}
+          </div>
         </div>
       </section>
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-fadeIn">
             <div className="p-4 border-b border-slate-200 bg-slate-50">
               <h3 className="text-base font-black text-slate-800">
@@ -335,18 +358,23 @@ export default function Suppliers() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">
-                  الرصيد الافتتاحي (المستحق للمورد حالياً إن وُجد)
+                  {editingSupplier ? 'الرصيد الحالي للمورد (للقراءة فقط)' : 'الرصيد الافتتاحي (المستحق للمورد حالياً إن وُجد)'}
                 </label>
                 <input
                   type="number"
-                  min="0"
+                  min={editingSupplier ? undefined : 0}
                   step="any"
-                  value={formData.balance || ''}
+                  value={editingSupplier ? formData.balance : (formData.balance || '')}
+                  disabled={Boolean(editingSupplier)}
                   onChange={(e) => setFormData({ ...formData, balance: Number(e.target.value) || 0 })}
-                  className="input-ui text-xs h-9 w-full font-bold"
+                  className="input-ui text-xs h-9 w-full font-bold disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                   placeholder="0.00"
                 />
-                <p className="text-[10px] text-slate-400 mt-0.5">المبلغ المستحق لهذا المورد من حسابات الفترة السابقة</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  {editingSupplier
+                    ? 'لتعديل رصيد المورد استخدم دفعة مورد أو فاتورة شراء لضمان تطابق السجلات.'
+                    : 'المبلغ المستحق لهذا المورد من حسابات الفترة السابقة'}
+                </p>
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">ملاحظات</label>

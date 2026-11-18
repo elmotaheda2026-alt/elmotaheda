@@ -1,7 +1,7 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 
 const router = Router();
@@ -171,30 +171,36 @@ router.put('/opening-balances', requirePermission('settings:manage'), async (req
 });
 
 // POST /settings/clear-data
-router.post('/clear-data', requirePermission('settings:manage'), async (req: AuthedRequest, res) => {
+router.post('/clear-data', requirePermission('settings:manage'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     
-    await db.run('DELETE FROM sale_items');
-    await db.run('DELETE FROM sales');
-    
-    await db.run('DELETE FROM purchase_items');
-    await db.run('DELETE FROM purchases');
-    
-    await db.run('DELETE FROM installment_schedules');
-    await db.run('DELETE FROM payments');
-    await db.run('DELETE FROM expenses');
-    await db.run('DELETE FROM notifications');
-    await db.run('DELETE FROM sales_reps');
-    await db.run('DELETE FROM shareholders');
-    await db.run('DELETE FROM shareholder_transactions');
-    await db.run('DELETE FROM collection_tasks');
-    await db.run('DELETE FROM audit_log');
-    await db.run('DELETE FROM closing_periods');
-    await db.run('DELETE FROM reschedule_requests');
-    await db.run('DELETE FROM customers');
-    await db.run('DELETE FROM suppliers');
-    await db.run('DELETE FROM products');
+    // Delete child tables before parent tables atomically inside a transaction
+    await db.withTransaction(async (txDb) => {
+      await txDb.run('DELETE FROM sale_items');
+      await txDb.run('DELETE FROM installment_schedules');
+      await txDb.run('DELETE FROM reschedule_requests');
+      await txDb.run('DELETE FROM payments');
+      await txDb.run('DELETE FROM payments_archive');
+      await txDb.run('DELETE FROM collection_tasks');
+      await txDb.run('DELETE FROM collection_tasks_archive');
+      await txDb.run('DELETE FROM sales');
+
+      await txDb.run('DELETE FROM purchase_items');
+      await txDb.run('DELETE FROM purchases');
+
+      await txDb.run('DELETE FROM shareholder_transactions');
+      await txDb.run('DELETE FROM shareholders');
+      await txDb.run('DELETE FROM expenses');
+      await txDb.run('DELETE FROM notifications');
+      await txDb.run('DELETE FROM sales_reps');
+      await txDb.run('DELETE FROM audit_log');
+      await txDb.run('DELETE FROM closing_periods');
+      await txDb.run('DELETE FROM dashboard_metrics_cache');
+      await txDb.run('DELETE FROM customers');
+      await txDb.run('DELETE FROM suppliers');
+      await txDb.run('DELETE FROM products');
+    });
     
     await audit('database.clear', 'database', 'global', req.user?.name || 'system', {});
     return res.json({ message: 'تم حذف جميع البيانات بنجاح' });

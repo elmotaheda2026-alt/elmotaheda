@@ -88,27 +88,20 @@ router.get('/collection-rate', async (req, res) => {
   const startDate = req.query.startDate ? String(req.query.startDate) : null;
   const endDate = req.query.endDate ? String(req.query.endDate) : null;
   const db = await dbPromise;
-  const filters: string[] = [];
-  const args: string[] = [];
-  if (startDate) {
-    filters.push('date >= ?');
-    args.push(startDate);
-  }
-  if (endDate) {
-    filters.push('date <= ?');
-    args.push(endDate);
-  }
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  const billed = await db.get<{ total: number }>(`SELECT COALESCE(SUM(total),0) as total FROM sales ${where}`, ...args);
+  const saleFilter = buildDateFilter('date', startDate, endDate);
+  const payFilter = buildDateFilter('p.date', startDate, endDate);
+  const billed = await db.get<{ total: number }>(
+    `SELECT COALESCE(SUM(CASE WHEN status = 'settled_early' THEN paid ELSE total END),0) as total FROM sales WHERE status <> 'cancelled'${saleFilter.clause}`,
+    ...saleFilter.args,
+  );
   const collected = await db.get<{ total: number }>(
     `SELECT COALESCE(SUM(p.amount),0) as total
      FROM payments p
      WHERE p.type='in'
        AND p.status='posted'
        AND (p.sale_id IS NOT NULL OR p.reference_type='sale' OR p.invoice_number IS NOT NULL)
-       ${startDate ? 'AND p.date >= ?' : ''}
-       ${endDate ? 'AND p.date <= ?' : ''}`,
-    ...args,
+       ${payFilter.clause}`,
+    ...payFilter.args,
   );
   const billedValue = billed?.total || 0;
   const collectedValue = collected?.total || 0;
@@ -120,10 +113,17 @@ router.get('/collection-rate', async (req, res) => {
 });
 
 router.get('/daily-cash', async (req, res) => {
-  const date = String(req.query.date || cairoToday());
+  const date = String(req.query.date || cairoToday()).slice(0, 10);
   const db = await dbPromise;
-  const incoming = await db.get<{ total: number }>("SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='in' AND status='posted' AND date = ?", date);
-  const outgoing = await db.get<{ total: number }>("SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='out' AND status='posted' AND date = ?", date);
+  const dateExpr = normalizedSqlDate('date');
+  const incoming = await db.get<{ total: number }>(
+    `SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='in' AND status='posted' AND ${dateExpr} = TRY_CONVERT(DATE, ?)`,
+    date,
+  );
+  const outgoing = await db.get<{ total: number }>(
+    `SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='out' AND status='posted' AND ${dateExpr} = TRY_CONVERT(DATE, ?)`,
+    date,
+  );
   const cashIn = incoming?.total || 0;
   const cashOut = outgoing?.total || 0;
   return res.json({ date, cashIn, cashOut, net: cashIn - cashOut });
@@ -134,16 +134,21 @@ type MetricRow = { total: number };
 
 const money = (value: unknown) => Number(Number(value || 0).toFixed(2));
 
+function normalizedSqlDate(column: string) {
+  return `(CASE WHEN ${column} LIKE '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]%' THEN TRY_CONVERT(DATE, LEFT(${column}, 10)) ELSE TRY_CONVERT(DATE, ${column}) END)`;
+}
+
 function buildDateFilter(column: string, startDate: string | null, endDate: string | null) {
   const filters: string[] = [];
   const args: string[] = [];
+  const expr = normalizedSqlDate(column);
   if (startDate) {
-    filters.push(`${column} >= ?`);
-    args.push(startDate);
+    filters.push(`${expr} >= TRY_CONVERT(DATE, ?)`);
+    args.push(startDate.slice(0, 10));
   }
   if (endDate) {
-    filters.push(`${column} <= ?`);
-    args.push(endDate);
+    filters.push(`${expr} <= TRY_CONVERT(DATE, ?)`);
+    args.push(endDate.slice(0, 10));
   }
   return { clause: filters.length ? ` AND ${filters.join(' AND ')}` : '', args };
 }
@@ -160,34 +165,100 @@ function calculateMonthSpan(startDate: string | null, endDate: string | null) {
 router.get('/dashboard/metrics', async (req, res) => {
   const startDate = req.query.startDate ? String(req.query.startDate) : null;
   const endDate = req.query.endDate ? String(req.query.endDate) : null;
-  const salesPeriod = buildDateFilter('date', startDate, endDate);
-  const joinedSalesPeriod = buildDateFilter('s.date', startDate, endDate);
+  const salesPeriod = buildDateFilter('s.date', startDate, endDate);
+  const expensePeriod = buildDateFilter('date', startDate, endDate);
   const paymentPeriod = buildDateFilter('p.date', startDate, endDate);
   const db = await dbPromise;
 
-  const [settings, cashIn, cashOut, inventory, customers, suppliers, subscribedCapital, capitalDeposits, capitalWithdrawals, periodSales, periodCogs, periodExpenses, allTimeSales, allTimeCogs, allTimeExpenses, realizedCash, warehouseProfit] = await Promise.all([
+  const saleCostCte = `
+    WITH sale_costs AS (
+      SELECT
+        s.id,
+        s.invoice_number,
+        s.status,
+        s.date,
+        s.total,
+        s.paid,
+        CASE WHEN s.status = 'settled_early' THEN s.paid ELSE s.total END AS eff_total,
+        CASE
+          WHEN COUNT(si.id) > 0
+            THEN SUM(si.quantity * COALESCE(NULLIF(si.unit_cost, 0), pr.purchase_price, 0))
+          ELSE COALESCE(s.subtotal, 0)
+        END AS sale_cost
+      FROM sales s
+      LEFT JOIN sale_items si ON si.sale_id = s.id
+      LEFT JOIN products pr ON pr.id = si.product_id
+      WHERE s.status <> 'cancelled'
+      GROUP BY s.id, s.invoice_number, s.status, s.date, s.total, s.paid, s.subtotal
+    )
+  `;
+
+  const [
+    settings,
+    cashIn,
+    cashOut,
+    inventory,
+    customers,
+    suppliers,
+    subscribedCapital,
+    capitalDeposits,
+    capitalWithdrawals,
+    periodSalesSummary,
+    periodExpenses,
+    allTimeSalesSummary,
+    allTimeExpenses,
+    realizedCashSummary,
+  ] = await Promise.all([
     db.get<{ baseline_capital: number }>('SELECT TOP 1 baseline_capital FROM settings'),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted'"),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted'"),
     db.get<MetricRow>('SELECT COALESCE(SUM(quantity * purchase_price),0) AS total FROM products'),
-    db.get<MetricRow>("SELECT COALESCE(SUM(remaining),0) AS total FROM sales WHERE status <> 'cancelled' AND remaining > 0"),
-    db.get<MetricRow>("SELECT COALESCE(SUM(remaining),0) AS total FROM purchases WHERE status <> 'cancelled' AND remaining > 0"),
+    db.get<MetricRow>('SELECT COALESCE(SUM(balance),0) AS total FROM customers'),
+    db.get<MetricRow>('SELECT COALESCE(SUM(balance),0) AS total FROM suppliers'),
     db.get<MetricRow>('SELECT COALESCE(SUM(capital),0) AS total FROM shareholders'),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'capital_deposit'"),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'capital_withdrawal'"),
-    db.get<MetricRow>(`SELECT COALESCE(SUM(total),0) AS total FROM sales WHERE status <> 'cancelled'${salesPeriod.clause}`, ...salesPeriod.args),
-    db.get<MetricRow>(`SELECT COALESCE(SUM(si.quantity * si.unit_cost),0) AS total FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id WHERE s.status <> 'cancelled'${joinedSalesPeriod.clause}`, ...joinedSalesPeriod.args),
-    db.get<MetricRow>(`SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE 1 = 1${salesPeriod.clause}`, ...salesPeriod.args),
-    db.get<MetricRow>("SELECT COALESCE(SUM(total),0) AS total FROM sales WHERE status <> 'cancelled'"),
-    db.get<MetricRow>("SELECT COALESCE(SUM(si.quantity * si.unit_cost),0) AS total FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id WHERE s.status <> 'cancelled'"),
+    db.get<{ gross_sales: number; eff_sales: number; early_discounts: number; cogs: number }>(
+      `${saleCostCte}
+       SELECT
+         COALESCE(SUM(total), 0) AS gross_sales,
+         COALESCE(SUM(eff_total), 0) AS eff_sales,
+         COALESCE(SUM(total - eff_total), 0) AS early_discounts,
+         COALESCE(SUM(sale_cost), 0) AS cogs
+       FROM sale_costs s
+       WHERE 1 = 1${salesPeriod.clause}`,
+      ...salesPeriod.args,
+    ),
+    db.get<MetricRow>(`SELECT COALESCE(SUM(amount),0) AS total FROM expenses WHERE 1 = 1${expensePeriod.clause}`, ...expensePeriod.args),
+    db.get<{ eff_sales: number; cogs: number }>(
+      `${saleCostCte}
+       SELECT
+         COALESCE(SUM(eff_total), 0) AS eff_sales,
+         COALESCE(SUM(sale_cost), 0) AS cogs
+       FROM sale_costs`,
+    ),
     db.get<MetricRow>('SELECT COALESCE(SUM(amount),0) AS total FROM expenses'),
-    db.get<MetricRow>(`SELECT COALESCE(SUM(p.amount),0) AS total FROM payments p WHERE p.type = 'in' AND p.status = 'posted' AND (p.sale_id IS NOT NULL OR p.reference_type = 'sale' OR p.invoice_number IS NOT NULL)${paymentPeriod.clause}`, ...paymentPeriod.args),
-    db.get<MetricRow>(`SELECT COALESCE(SUM((si.unit_price * (1.0 - si.discount / 100.0) - si.unit_cost) * si.quantity), 0) AS total
-      FROM sale_items si
-      INNER JOIN sales s ON s.id = si.sale_id
-      WHERE s.status <> 'cancelled'
-        AND (si.fulfillment_type = 'stocked' OR (si.fulfillment_type IS NULL AND si.unit_price > si.unit_cost))
-        ${joinedSalesPeriod.clause}`, ...joinedSalesPeriod.args),
+    db.get<{ cash_collected: number; realized_margin: number }>(
+      `${saleCostCte}
+       SELECT
+         COALESCE(SUM(p.amount), 0) AS cash_collected,
+         COALESCE(SUM(
+           CASE
+             WHEN sc.id IS NOT NULL AND sc.eff_total > 0
+               THEN p.amount * ((sc.eff_total - sc.sale_cost) / sc.eff_total)
+             ELSE 0
+           END
+         ), 0) AS realized_margin
+       FROM payments p
+       LEFT JOIN sale_costs sc
+         ON sc.id = p.sale_id
+         OR (p.sale_id IS NULL AND p.invoice_number IS NOT NULL AND sc.invoice_number = p.invoice_number)
+       WHERE p.type = 'in'
+         AND p.status = 'posted'
+         AND (p.sale_id IS NOT NULL OR p.reference_type = 'sale' OR p.invoice_number IS NOT NULL)
+         ${paymentPeriod.clause}`,
+      ...paymentPeriod.args,
+    ),
   ]);
 
   const subscribedCapitalValue = money(subscribedCapital?.total);
@@ -195,7 +266,7 @@ router.get('/dashboard/metrics', async (req, res) => {
   const baselineCapital = money(settings?.baseline_capital || 8500000);
   const paidInCapital = subscribedCapitalValue > 0 ? subscribedCapitalValue : postedCapitalValue > 0 ? postedCapitalValue : baselineCapital;
   const capitalSource = subscribedCapitalValue > 0 ? 'shareholders' : postedCapitalValue > 0 ? 'posted_capital_transactions' : 'system_baseline';
-  const allTimeNetProfit = money((allTimeSales?.total || 0) - (allTimeCogs?.total || 0) - (allTimeExpenses?.total || 0));
+  const allTimeNetProfit = money((allTimeSalesSummary?.eff_sales || 0) - (allTimeSalesSummary?.cogs || 0) - (allTimeExpenses?.total || 0));
   const retainedEarnings = allTimeNetProfit;
   const shareholdersEquity = money(paidInCapital + retainedEarnings);
   const cashInSafe = money((cashIn?.total || 0) - (cashOut?.total || 0));
@@ -204,6 +275,17 @@ router.get('/dashboard/metrics', async (req, res) => {
   const totalEquity = shareholdersEquity;
   const accountingVariance = money(totalAssets - (totalLiabilities + totalEquity));
   const monthSpan = calculateMonthSpan(startDate, endDate);
+
+  const periodGrossSales = money(periodSalesSummary?.gross_sales);
+  const periodEffSales = money(periodSalesSummary?.eff_sales);
+  const periodEarlySettlementDiscounts = money(periodSalesSummary?.early_discounts);
+  const periodCogs = money(periodSalesSummary?.cogs);
+  const periodGrossProfit = money(periodEffSales - periodCogs);
+  const periodExpensesTotal = money(periodExpenses?.total);
+  const periodOperatingNetProfit = money(periodGrossProfit - periodExpensesTotal);
+  const realizedCashCollections = money(realizedCashSummary?.cash_collected);
+  const realizedSaleMargin = money(realizedCashSummary?.realized_margin);
+  const realizedNetProfit = money(realizedSaleMargin - periodExpensesTotal);
 
   return res.json({
     capital: paidInCapital,
@@ -224,19 +306,25 @@ router.get('/dashboard/metrics', async (req, res) => {
     trace: Math.abs(accountingVariance) <= 0.01 ? [] : [
       { account: 'cash_in_safe', expectedDriver: 'posted payments plus shareholder cash movements', amount: cashInSafe },
       { account: 'inventory_at_cost', expectedDriver: 'products.quantity * products.purchase_price', amount: money(inventory?.total) },
-      { account: 'receivables', expectedDriver: 'open non-cancelled sales.remaining', amount: money(customers?.total) },
-      { account: 'payables', expectedDriver: 'open non-cancelled purchases.remaining', amount: money(suppliers?.total) },
+      { account: 'receivables', expectedDriver: 'customers.balance', amount: money(customers?.total) },
+      { account: 'payables', expectedDriver: 'suppliers.balance', amount: money(suppliers?.total) },
       { account: 'paid_in_capital', expectedDriver: capitalSource, amount: paidInCapital },
-      { account: 'retained_earnings', expectedDriver: 'all-time sales - COGS - expenses', amount: retainedEarnings },
+      { account: 'retained_earnings', expectedDriver: 'all-time effective sales - COGS - expenses', amount: retainedEarnings },
     ],
-    periodSales: money(periodSales?.total),
-    periodCostOfGoodsSold: money(periodCogs?.total),
-    periodExpenses: money(periodExpenses?.total),
-    monthlyAverageExpenses: money((periodExpenses?.total || 0) / monthSpan),
+    periodGrossSales,
+    periodEarlySettlementDiscounts,
+    periodSales: periodEffSales,
+    periodCostOfGoodsSold: periodCogs,
+    periodGrossProfit,
+    periodOperatingNetProfit,
+    periodExpenses: periodExpensesTotal,
+    monthlyAverageExpenses: money(periodExpensesTotal / monthSpan),
     expenseMonthSpan: Number(monthSpan.toFixed(4)),
-    realizedProfits: money((realizedCash?.total || 0) - (periodCogs?.total || 0) - (periodExpenses?.total || 0)),
-    deferredProfits: money((customers?.total || 0) - (periodCogs?.total || 0)),
-    warehouseProfit: money(warehouseProfit?.total),
+    realizedCashCollections,
+    realizedSaleMargin,
+    realizedProfits: realizedNetProfit,
+    deferredProfits: money((customers?.total || 0) - periodCogs),
+    warehouseProfit: periodGrossProfit,
   });
 });
 

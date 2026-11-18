@@ -59,8 +59,26 @@ export function getAutoBackupConfig(): AutoBackupConfig {
   return { ...DEFAULT_CONFIG };
 }
 
+export function isSafeBackupDirectory(dirPath: string): boolean {
+  const normalized = path.resolve(dirPath).replace(/\/+$/, '');
+  const lower = normalized.toLowerCase();
+  if (/^[a-z]:\\?$/i.test(normalized)) return false;
+  const blockedPrefixes = ['c:\\windows', 'c:\\program files', 'c:\\program files (x86)', 'c:\\programdata\\microsoft'];
+  if (blockedPrefixes.some((p) => lower === p || lower.startsWith(`${p}\\`))) {
+    return false;
+  }
+  return true;
+}
+
 export function updateAutoBackupConfig(changes: Partial<AutoBackupConfig>): AutoBackupConfig {
   const current = getAutoBackupConfig();
+  if (changes.destinationPath !== undefined) {
+    const resolved = path.resolve(String(changes.destinationPath || '').trim());
+    if (!isSafeBackupDirectory(resolved)) {
+      throw new Error('مسار النسخ الاحتياطي غير مسموح به (لا يمكن الحفظ في مجلدات نظام التشغيل).');
+    }
+    changes.destinationPath = resolved;
+  }
   const merged: AutoBackupConfig = {
     ...current,
     ...changes,
@@ -78,7 +96,7 @@ export function updateAutoBackupConfig(changes: Partial<AutoBackupConfig>): Auto
 
 export function resolveDestinationPath(configuredPath: string): string {
   let targetPath = (configuredPath || '').trim();
-  if (!targetPath) {
+  if (!targetPath || !isSafeBackupDirectory(targetPath)) {
     targetPath = 'D:\\AlMuttahida_Backups';
   }
 

@@ -77,8 +77,10 @@ export async function getCollectionDues(params: {
 
   // 2. Search & Rep & Legal Filtering
   if (search) {
-    whereParts.push('(customer_name LIKE ? OR invoice_number LIKE ? OR customer_phone LIKE ? OR customer_address LIKE ?)');
-    args.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    whereParts.push(
+      "(customer_name LIKE ? OR invoice_number LIKE ? OR customer_phone LIKE ? OR customer_address LIKE ? OR COALESCE(customer_national_id, N'') LIKE ? OR COALESCE(guarantors, N'') LIKE ?)"
+    );
+    args.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
 
   if (salesRepId && salesRepId !== 'all') {
@@ -193,6 +195,7 @@ export async function getCollectionDues(params: {
         c.phone AS customer_phone,
         c.address AS customer_address,
         c.customer_number,
+        c.national_id AS customer_national_id,
         s.sales_rep_id,
         s.sales_rep_name,
         c.is_sued,
@@ -266,6 +269,7 @@ export async function getCollectionDues(params: {
         c.phone AS customer_phone,
         c.address AS customer_address,
         c.customer_number,
+        c.national_id AS customer_national_id,
         s.sales_rep_id,
         s.sales_rep_name,
         c.is_sued,

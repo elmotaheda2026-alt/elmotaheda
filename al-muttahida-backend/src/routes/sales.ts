@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid, formatDate, parseDateInput } from '../utils.js';
+import { uid, formatDate, parseDateInput, isPeriodClosed } from '../utils.js';
 import { createSystemNotification } from '../financialNotifications.js';
 import { getCollectionDues } from './dues.js';
 
@@ -141,22 +141,122 @@ const saleSchema = z.preprocess((value) => {
   date: z.string().min(8),
   notes: z.string().optional().nullable(),
   financing: saleFinancingSchema,
+  replaceAutoPurchases: z.boolean().optional(),
 }));
 
 type SaleInput = z.infer<typeof saleSchema>;
 
 const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
 
+type LinkedPurchaseRow = { id: string; supplier_id: string; remaining: number; paid: number };
+
+async function getLinkedAutoPurchases(db: any, invoiceNumber: string): Promise<LinkedPurchaseRow[]> {
+  const autoPurchasePrefix = `شراء تلقائي مرتبط بالفاتورة ${invoiceNumber}`;
+  return db.all(
+    `SELECT id, supplier_id, remaining, paid
+     FROM purchases
+     WHERE notes = ? OR notes LIKE ?`,
+    autoPurchasePrefix,
+    `${autoPurchasePrefix} %`,
+  );
+}
+
+async function undoLinkedAutoPurchases(txDb: any, linkedPurchases: LinkedPurchaseRow[], now: string): Promise<string[]> {
+  const linkedPurchaseIds = linkedPurchases.map((p) => p.id);
+  if (!linkedPurchaseIds.length) return [];
+
+  const placeholders = linkedPurchaseIds.map(() => '?').join(',');
+  const linkedPurchaseItems = (await txDb.all(
+    `SELECT purchase_id, product_id, quantity
+     FROM purchase_items
+     WHERE purchase_id IN (${placeholders})`,
+    ...linkedPurchaseIds,
+  )) as { purchase_id: string; product_id: string; quantity: number }[];
+
+  for (const item of linkedPurchaseItems) {
+    await txDb.run(
+      `UPDATE products
+       SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
+           updated_at = ?
+       WHERE id = ? AND fulfillment_type = 'stocked'`,
+      item.quantity,
+      item.quantity,
+      now,
+      item.product_id,
+    );
+  }
+
+  for (const purchase of linkedPurchases) {
+    await txDb.run(
+      `UPDATE suppliers
+       SET balance = ROUND(balance - ?, 2),
+           updated_at = ?
+       WHERE id = ?`,
+      purchase.remaining,
+      now,
+      purchase.supplier_id,
+    );
+  }
+
+  await txDb.run(
+    `DELETE FROM purchase_items WHERE purchase_id IN (${placeholders})`,
+    ...linkedPurchaseIds,
+  );
+  await txDb.run(
+    `DELETE FROM payments
+     WHERE reference_type IN ('purchase', 'purchase_downpayment')
+       AND reference_id IN (${placeholders})`,
+    ...linkedPurchaseIds,
+  );
+  await txDb.run(
+    `DELETE FROM purchases WHERE id IN (${placeholders})`,
+    ...linkedPurchaseIds,
+  );
+
+  return linkedPurchaseIds;
+}
+
+async function nextReceiptNumber(txDb: any): Promise<string> {
+  const receiptRow = await txDb.get(
+    `SELECT TOP 1 receipt_number
+     FROM payments
+     WHERE receipt_number LIKE 'RCPT-%'
+       AND TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) IS NOT NULL
+     ORDER BY TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) DESC`,
+  );
+  const maxNum = receiptRow ? parseInt(String(receiptRow.receipt_number).replace('RCPT-', ''), 10) : 5000;
+  return `RCPT-${(Number.isFinite(maxNum) ? maxNum : 5000) + 1}`;
+}
+
 function validateSaleTotals(data: SaleInput): string | null {
   const round = (v: number) => Number(Number(v || 0).toFixed(2));
+  const isInstallment = data.financing?.paymentMethod === 'installment';
+
+  const preTaxTotal = round(
+    data.items.reduce((sum, item) => {
+      const itemSubtotal = round(item.quantity * item.unitPrice);
+      const discountAmt = round((itemSubtotal * item.discount) / 100);
+      return sum + (itemSubtotal - discountAmt);
+    }, 0),
+  );
+
+  // In installment contracts, interest (tax %) applies only to the financed principal after deducting the down payment.
+  const upfrontAgainstItems = isInstallment
+    ? Math.min(Math.max(round(data.paid || 0), 0), Math.max(preTaxTotal, 0))
+    : 0;
+
+  let totalTax = 0;
 
   // Recalculate each item total dynamically or check tolerance (< 0.05)
   for (const item of data.items) {
     const itemSubtotal = round(item.quantity * item.unitPrice);
     const discountAmt = round((itemSubtotal * item.discount) / 100);
-    const taxable = itemSubtotal - discountAmt;
+    const amountBeforeTax = round(itemSubtotal - discountAmt);
+    const paidShare = preTaxTotal > 0 ? (amountBeforeTax / preTaxTotal) * upfrontAgainstItems : 0;
+    const taxable = Math.max(amountBeforeTax - paidShare, 0);
     const taxAmt = round((taxable * item.tax) / 100);
-    const expected = round(taxable + taxAmt);
+    const expected = round(amountBeforeTax + taxAmt);
+    totalTax = round(totalTax + taxAmt);
 
     // If total provided differs significantly from expected, update item.total to expected
     if (Math.abs(round(item.total) - expected) > 0.05) {
@@ -174,14 +274,7 @@ function validateSaleTotals(data: SaleInput): string | null {
       0,
     ),
   );
-  const tax = round(
-    data.items.reduce((sum, item) => {
-      const itemSubtotal = round(item.quantity * item.unitPrice);
-      const discountAmt = round((itemSubtotal * item.discount) / 100);
-      const taxable = itemSubtotal - discountAmt;
-      return sum + round((taxable * item.tax) / 100);
-    }, 0),
-  );
+  const tax = totalTax;
   const total = round(subtotal - discount + tax);
 
   if (Math.abs(round(data.subtotal) - subtotal) > 0.05) data.subtotal = subtotal;
@@ -391,13 +484,6 @@ async function insertSaleItemsAndAdjustStock(db: Awaited<typeof dbPromise>, sale
       now,
       item.productId,
     );
-
-    // Remove sold-out stocked products from warehouse inventory
-    await db.run(
-      `DELETE FROM products
-       WHERE id = ? AND fulfillment_type = 'stocked' AND quantity <= 0`,
-      item.productId,
-    );
   }
 }
 
@@ -408,13 +494,14 @@ async function insertInstallmentSchedules(db: Awaited<typeof dbPromise>, saleId:
 
   const months = data.financing.installmentMonths;
   const startDate = data.financing.installmentStartDate || data.date;
-  const roundedRemaining = Math.round(remaining);
-  const baseAmount = Math.round(roundedRemaining / months);
-  let remainingAmount = roundedRemaining;
+  const totalPiastres = Math.round(Number(remaining || 0) * 100);
+  const basePiastres = Math.floor(totalPiastres / months);
+  let remainingPiastres = totalPiastres;
 
   for (let index = 0; index < months; index++) {
-    const amount = index === months - 1 ? remainingAmount : baseAmount;
-    remainingAmount = remainingAmount - amount;
+    const installmentPiastres = index === months - 1 ? remainingPiastres : basePiastres;
+    remainingPiastres -= installmentPiastres;
+    const amount = Number((installmentPiastres / 100).toFixed(2));
 
     await db.run(
       `INSERT INTO installment_schedules (id, sale_id, month_index, due_date, amount, paid_amount, status)
@@ -623,6 +710,9 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
 
   try {
     const db = await dbPromise;
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, data.date)) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن إصدار فواتير فيها إلا بواسطة المدير.' });
+    }
     const customer = await db.get('SELECT id FROM customers WHERE id = ?', data.customerId);
     if (!customer) {
       return res.status(400).json({ message: 'Customer not found' });
@@ -732,8 +822,19 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       return res.status(404).json({ message: 'Sale not found' });
     }
 
+    if (req.user?.role !== 'admin' && (await isPeriodClosed(db, existing.date) || await isPeriodClosed(db, data.date))) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن تعديل فواتيرها إلا بواسطة المدير.' });
+    }
+
     if (Number(existing.paid || 0) > 0 || existing.locked === 1 || existing.locked === true) {
       return res.status(409).json({ message: 'Cannot edit a sale that has payments or is locked' });
+    }
+
+    const linkedPurchases = await getLinkedAutoPurchases(db, existing.invoice_number);
+    if (linkedPurchases.some((p) => Number(p.paid || 0) > 0)) {
+      return res.status(409).json({
+        message: 'لا يمكن تعديل الفاتورة لوجود فواتير شراء تلقائية مرتبطة بها مسددة جزئياً أو كلياً للمورد.',
+      });
     }
 
     const customer = await db.get('SELECT id FROM customers WHERE id = ?', data.customerId);
@@ -742,6 +843,9 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
     }
 
     await db.withTransaction(async (txDb) => {
+      if (data.replaceAutoPurchases && linkedPurchases.length > 0) {
+        await undoLinkedAutoPurchases(txDb, linkedPurchases, now);
+      }
       const oldItems = (await txDb.all(
         'SELECT * FROM sale_items WHERE sale_id = ?',
         req.params.id,
@@ -846,30 +950,25 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
       return res.status(404).json({ message: 'Sale not found' });
     }
 
+    if (Number(existing.paid || 0) > 0) {
+      return res.status(409).json({
+        message: 'لا يمكن حذف تعاقد تم تحصيل مدفوعات عليه؛ استخدم «مرتجع / إلغاء» بدلاً من الحذف لحماية الخزينة وسجل الأقساط.',
+      });
+    }
+
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, existing.date)) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن حذف فواتيرها إلا بواسطة المدير.' });
+    }
+
     const oldItems = (await db.all(
       'SELECT * FROM sale_items WHERE sale_id = ?',
       req.params.id,
     )) as SaleItemRow[];
 
-    const linkedPurchases = (await db.all(
-      `SELECT id, supplier_id, remaining
-       FROM purchases
-       WHERE notes LIKE ?`,
-      `%${existing.invoice_number}%`,
-    )) as { id: string; supplier_id: string; remaining: number }[];
-
-    const linkedPurchaseIds = linkedPurchases.map((purchase) => purchase.id);
+    const linkedPurchases = await getLinkedAutoPurchases(db, existing.invoice_number);
+    let linkedPurchaseIds: string[] = [];
 
     await db.withTransaction(async (txDb) => {
-      const linkedPurchaseItems = linkedPurchaseIds.length
-        ? ((await txDb.all(
-          `SELECT purchase_id, product_id, quantity
-             FROM purchase_items
-             WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-          linkedPurchaseIds,
-        )) as { purchase_id: string; product_id: string; quantity: number }[])
-        : [];
-
       for (const item of oldItems) {
         await txDb.run(
           `UPDATE products
@@ -882,38 +981,13 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
         );
       }
 
-      for (const item of linkedPurchaseItems) {
-        await txDb.run(
-          `UPDATE products
-           SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
-               updated_at = ?
-           WHERE id = ? AND fulfillment_type = 'stocked'`,
-          item.quantity,
-          item.quantity,
-          now,
-          item.product_id,
-        );
-      }
-
-      for (const purchase of linkedPurchases) {
-        await txDb.run(
-          `UPDATE suppliers
-           SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
-               updated_at = ?
-           WHERE id = ?`,
-          purchase.remaining,
-          purchase.remaining,
-          now,
-          purchase.supplier_id,
-        );
-      }
+      linkedPurchaseIds = await undoLinkedAutoPurchases(txDb, linkedPurchases, now);
 
       await txDb.run(
         `UPDATE customers
-         SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END,
+         SET balance = ROUND(balance - ?, 2),
              updated_at = ?
          WHERE id = ?`,
-        existing.remaining,
         existing.remaining,
         now,
         existing.customer_id,
@@ -932,22 +1006,6 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
       await txDb.run('DELETE FROM reschedule_requests WHERE sale_id = ?', req.params.id);
       await txDb.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
       await txDb.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
-      if (linkedPurchaseIds.length) {
-        await txDb.run(
-          `DELETE FROM purchase_items WHERE purchase_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-          ...linkedPurchaseIds,
-        );
-        await txDb.run(
-          `DELETE FROM payments
-           WHERE reference_type = 'purchase'
-             AND reference_id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-          ...linkedPurchaseIds,
-        );
-        await txDb.run(
-          `DELETE FROM purchases WHERE id IN (${linkedPurchaseIds.map(() => '?').join(',')})`,
-          ...linkedPurchaseIds,
-        );
-      }
       await txDb.run('DELETE FROM sales WHERE id = ?', req.params.id);
     });
 
@@ -961,6 +1019,171 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
     });
 
     return res.json({ message: 'Sale deleted successfully' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+const returnSaleSchema = z.object({
+  reason: z.string().max(300).optional().default(''),
+  returnDate: z.string().optional(),
+  refundAmount: z.number().nonnegative().optional(),
+});
+
+// POST /sales/:id/return — Sales return / contract cancellation preserving audit trail & issuing cash refund
+router.post('/:id/return', requirePermission('sales:write'), requireAdmin, async (req: AuthedRequest, res) => {
+  const parsed = returnSaleSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات المرتجع غير صالحة', errors: parsed.error.format() });
+  }
+
+  const now = new Date().toISOString();
+  const todayCairo = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+
+  let returnDateIso = todayCairo;
+  if (parsed.data.returnDate) {
+    try {
+      const parsedIso = parseDateInput(parsed.data.returnDate);
+      returnDateIso = parsedIso.includes('T') ? parsedIso.split('T')[0] : parsedIso;
+    } catch (e) {
+      return res.status(400).json({ message: e instanceof Error ? e.message : 'تاريخ المرتجع غير صالح' });
+    }
+  }
+
+  try {
+    const db = await dbPromise;
+    const existing = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', req.params.id);
+    if (!existing) {
+      return res.status(404).json({ message: 'الفاتورة غير موجودة' });
+    }
+    if (existing.status === 'cancelled') {
+      return res.status(409).json({ message: 'الفاتورة ملغاة أو مرتجعة بالفعل' });
+    }
+
+    if (req.user?.role !== 'admin' && (await isPeriodClosed(db, returnDateIso))) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن تسجيل مرتجع فيها إلا بواسطة المدير.' });
+    }
+
+    const totalPaid = roundMoney(Number(existing.paid || 0));
+    const requestedRefund = parsed.data.refundAmount !== undefined
+      ? roundMoney(parsed.data.refundAmount)
+      : totalPaid;
+
+    if (requestedRefund > totalPaid + 0.01) {
+      return res.status(400).json({ message: `مبلغ الاسترداد (${requestedRefund}) لا يمكن أن يتجاوز إجمالي المسدد (${totalPaid}).` });
+    }
+    const refundAmount = Math.min(requestedRefund, totalPaid);
+    const reasonText = (parsed.data.reason || '').trim();
+    const noteAppend = `[مرتجع بتاريخ ${returnDateIso}${reasonText ? `: ${reasonText}` : ''}]`;
+    const mergedNotes = existing.notes ? `${existing.notes}\n${noteAppend}` : noteAppend;
+    let refundReceipt: string | null = null;
+
+    await db.withTransaction(async (txDb) => {
+      const oldItems = (await txDb.all('SELECT * FROM sale_items WHERE sale_id = ?', req.params.id)) as SaleItemRow[];
+      for (const item of oldItems) {
+        await txDb.run(
+          `UPDATE products
+           SET quantity = quantity + ?,
+               updated_at = ?
+           WHERE id = ? AND fulfillment_type = 'stocked'`,
+          item.quantity,
+          now,
+          item.product_id,
+        );
+      }
+
+      if (Number(existing.remaining || 0) > 0) {
+        await txDb.run(
+          `UPDATE customers
+           SET balance = ROUND(balance - ?, 2),
+               updated_at = ?
+           WHERE id = ?`,
+          existing.remaining,
+          now,
+          existing.customer_id,
+        );
+      }
+
+      await txDb.run(
+        `UPDATE installment_schedules
+         SET amount = paid_amount,
+             status = 'settled_early',
+             notes = N'ملغى بمرتجع فاتورة'
+         WHERE sale_id = ? AND status NOT IN ('paid', 'settled_early')`,
+        req.params.id,
+      );
+
+      await txDb.run(
+        "UPDATE collection_tasks SET status = 'cancelled', visit_notes = N'ملغاة بسبب مرتجع التعاقد', updated_at = ? WHERE sale_id = ? AND status IN ('open', 'in_progress')",
+        now,
+        req.params.id,
+      );
+
+      if (refundAmount > 0) {
+        refundReceipt = await nextReceiptNumber(txDb);
+        await txDb.run(
+          `INSERT INTO payments (
+            id, type, amount, sale_id, installment_id, description, date, receipt_number, status, channel,
+            reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+            created_by, created_at
+          ) VALUES (?, 'out', ?, ?, NULL, ?, ?, ?, 'posted', 'cash', ?, 'sale_return', ?, NULL, ?, 0, ?, ?)`,
+          uid(),
+          refundAmount,
+          existing.id,
+          `مرتجع / استرداد نقدية فاتورة ${existing.invoice_number}${reasonText ? ` (${reasonText})` : ''}`,
+          returnDateIso,
+          refundReceipt,
+          existing.id,
+          existing.customer_id,
+          existing.invoice_number,
+          req.user?.name || 'system',
+          now,
+        );
+      }
+
+      await txDb.run(
+        `UPDATE sales
+         SET status = 'cancelled',
+             remaining = 0,
+             paid = ROUND(paid - ?, 2),
+             locked = 1,
+             last_edited_by = ?,
+             last_edited_at = ?,
+             notes = ?
+         WHERE id = ?`,
+        refundAmount,
+        req.user?.name || 'system',
+        now,
+        mergedNotes,
+        req.params.id,
+      );
+    });
+
+    await audit('sale.return', 'sale', req.params.id, req.user?.name || 'system', {
+      invoiceNumber: existing.invoice_number,
+      customerId: existing.customer_id,
+      refundAmount,
+      refundReceipt,
+      reason: reasonText,
+      returnDate: returnDateIso,
+    });
+
+    await createSystemNotification(
+      'warning',
+      'مرتجع وإلغاء تعاقد',
+      `تم تسجيل مرتجع الفاتورة ${existing.invoice_number} للعميل ${existing.customer_name}${refundAmount > 0 ? ` واسترداد ${refundAmount} جنيه من الخزينة` : ''}.`,
+    );
+
+    return res.json({
+      message: `تم تسجيل المرتجع وإلغاء التعاقد ${existing.invoice_number} بنجاح.`,
+      refundAmount,
+      refundReceipt,
+    });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
@@ -1144,16 +1367,15 @@ const handleDeferOrPostpone = async (req: AuthedRequest, res: any) => {
             sale.customer_id,
           );
         } else if (penaltyPaymentType === 'collect_cash') {
-          const receiptRow = await tx.get<{ receipt_number: string }>(
-            `SELECT TOP 1 receipt_number
-             FROM payments
-             WHERE receipt_number LIKE 'RCPT-%'
-               AND TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) IS NOT NULL
-             ORDER BY TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) DESC`,
-          );
-          const maxNum = receiptRow ? parseInt(receiptRow.receipt_number.replace('RCPT-', ''), 10) : 5000;
-          const penaltyReceipt = `RCPT-${maxNum + 1}`;
+          const penaltyReceipt = await nextReceiptNumber(tx);
           const penaltyPaymentId = uid();
+
+          const todayCashDate = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Africa/Cairo',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(new Date());
 
           await tx.run(
             `INSERT INTO payments (
@@ -1166,7 +1388,7 @@ const handleDeferOrPostpone = async (req: AuthedRequest, res: any) => {
             saleId,
             target.id,
             `تحصيل غرامة تأخير/ترحيل القسط ${target.month_index} - العقد ${sale.invoice_number}`,
-            newDueDateIso,
+            todayCashDate,
             penaltyReceipt,
             saleId,
             sale.customer_id,
@@ -1182,10 +1404,23 @@ const handleDeferOrPostpone = async (req: AuthedRequest, res: any) => {
       saleId,
       invoiceNumber: sale.invoice_number,
       installmentId: target.id,
+      monthIndex: target.month_index,
       strategy,
       newDueDate: newDueDateIso,
       penaltyFee: penalty,
       penaltyPaymentType,
+      previousTotal: Number(sale.total),
+      previousRemaining: Number(sale.remaining),
+      previousSchedules: schedules.map((s) => ({
+        id: s.id,
+        due_date: s.due_date,
+        amount: Number(s.amount),
+        paid_amount: Number(s.paid_amount),
+        status: s.status,
+        deferred: s.deferred === 1 || s.deferred === true,
+        deferred_at: s.deferred_at || null,
+        notes: s.notes || null,
+      })),
     });
 
     await createSystemNotification(
@@ -1219,10 +1454,419 @@ router.post('/defer-installment', requirePermission('sales:write'), requireAdmin
 router.put('/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.post('/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.put('/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+
+const rescheduleSchema = z.object({
+  newInstallmentCount: z.number().int().min(1).max(120),
+  extraInterestPercent: z.number().min(0).max(200).optional().default(0),
+  firstNewDueDate: z.string().min(1),
+  reason: z.string().max(300).optional().default(''),
+});
+
+// POST /sales/:id/reschedule — Safely reschedule remaining unpaid balance without touching paid installments or cash receipts
+router.post('/:id/reschedule', requirePermission('sales:reschedule'), requireAdmin, async (req: AuthedRequest, res) => {
+  const parsed = rescheduleSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات إعادة الجدولة غير صالحة', errors: parsed.error.format() });
+  }
+
+  let firstNewDueDateIso = '';
+  try {
+    const parsedIso = parseDateInput(parsed.data.firstNewDueDate);
+    firstNewDueDateIso = parsedIso.includes('T') ? parsedIso.split('T')[0] : parsedIso;
+  } catch (e) {
+    return res.status(400).json({ message: e instanceof Error ? e.message : 'تاريخ بداية الأقساط الجديدة غير صالح' });
+  }
+
+  const { newInstallmentCount, extraInterestPercent, reason } = parsed.data;
+  const now = new Date().toISOString();
+
+  try {
+    const db = await dbPromise;
+    const sale = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', req.params.id);
+    if (!sale) {
+      return res.status(404).json({ message: 'لم يتم العثور على التعاقد' });
+    }
+    if (sale.status === 'cancelled') {
+      return res.status(409).json({ message: 'لا يمكن إعادة جدولة تعاقد ملغى أو مرتجع' });
+    }
+    if (sale.payment_method !== 'installment') {
+      return res.status(400).json({ message: 'إعادة الجدولة متاحة لعقود التقسيط فقط' });
+    }
+
+    const currentRemaining = roundMoney(Number(sale.remaining || 0));
+    if (currentRemaining <= 0) {
+      return res.status(400).json({ message: 'لا يوجد مبلغ متبقٍ لإعادة جدولته في هذا التعاقد' });
+    }
+
+    const extraInterestAmount = roundMoney((currentRemaining * extraInterestPercent) / 100);
+    const newRemaining = roundMoney(currentRemaining + extraInterestAmount);
+    const newTotal = roundMoney(Number(sale.total || 0) + extraInterestAmount);
+    const newTax = roundMoney(Number(sale.tax || 0) + extraInterestAmount);
+
+    let monthlyAmount = Math.round(newRemaining / newInstallmentCount);
+    if (monthlyAmount * (newInstallmentCount - 1) > newRemaining) {
+      monthlyAmount = Math.floor(newRemaining / newInstallmentCount);
+    }
+
+    let oldMonths = Number(sale.installment_months || 0);
+    let totalLockedCount = 0;
+
+    await db.withTransaction(async (txDb: typeof db) => {
+      const schedules = await txDb.all<ScheduleRow>(
+        'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
+        sale.id,
+      );
+
+      if (!oldMonths) {
+        oldMonths = schedules.length;
+      }
+
+      let maxLockedMonthIndex = 0;
+      for (const sch of schedules) {
+        const isSettled = sch.status === 'paid' || sch.status === 'settled_early';
+        const paidAmt = roundMoney(Number(sch.paid_amount || 0));
+        if (isSettled) {
+          totalLockedCount++;
+          if (sch.month_index > maxLockedMonthIndex) maxLockedMonthIndex = sch.month_index;
+        } else if (paidAmt > 0) {
+          // Lock partial payments at what was actually paid so past treasury receipts remain exact
+          await txDb.run(
+            `UPDATE installment_schedules
+             SET amount = ?, status = 'paid', paid_at = COALESCE(paid_at, ?), notes = ?
+             WHERE id = ?`,
+            paidAmt,
+            now,
+            'تم إغلاق الجزء المسدد وإعادة جدولة المتبقي',
+            sch.id,
+          );
+          totalLockedCount++;
+          if (sch.month_index > maxLockedMonthIndex) maxLockedMonthIndex = sch.month_index;
+        }
+      }
+
+      // Cancel open collection tasks for old unpaid installments
+      await txDb.run(
+        `UPDATE collection_tasks
+         SET status = 'cancelled', visit_notes = N'ملغاة بسبب إعادة جدولة المتبقي', updated_at = ?
+         WHERE sale_id = ? AND status IN ('open', 'in_progress')`,
+        now,
+        sale.id,
+      );
+
+      // Remove only unpaid (paid_amount = 0) schedules
+      await txDb.run(
+        `DELETE FROM installment_schedules
+         WHERE sale_id = ? AND status NOT IN ('paid', 'settled_early') AND COALESCE(paid_amount, 0) <= 0`,
+        sale.id,
+      );
+
+      // Insert new installment schedules for newRemaining
+      for (let i = 0; i < newInstallmentCount; i++) {
+        const dueDate = addMonths(firstNewDueDateIso, i);
+        const amount =
+          i === newInstallmentCount - 1
+            ? roundMoney(newRemaining - monthlyAmount * (newInstallmentCount - 1))
+            : monthlyAmount;
+
+        await txDb.run(
+          `INSERT INTO installment_schedules (
+            id, sale_id, month_index, due_date, amount, paid_amount, status, notes
+          ) VALUES (?, ?, ?, ?, ?, 0, 'pending', ?)`,
+          uid(),
+          sale.id,
+          maxLockedMonthIndex + i + 1,
+          dueDate,
+          amount,
+          reason.trim() ? `إعادة جدولة: ${reason.trim()}` : 'قسط مُعاد جدولته',
+        );
+      }
+
+      const newTotalMonths = totalLockedCount + newInstallmentCount;
+      const rescheduleNote = `[إعادة جدولة المتبقي (${newRemaining} ج) على ${newInstallmentCount} قسط${
+        extraInterestAmount > 0 ? ` + فائدة تمديد ${extraInterestAmount} ج` : ''
+      }${reason.trim() ? ` - ${reason.trim()}` : ''}]`;
+      const mergedNotes = sale.notes ? `${sale.notes}\n${rescheduleNote}` : rescheduleNote;
+
+      await txDb.run(
+        `UPDATE sales
+         SET total = ?,
+             tax = ?,
+             remaining = ?,
+             installment_months = ?,
+             monthly_installment_amount = ?,
+             notes = ?,
+             last_edited_by = ?,
+             last_edited_at = ?
+         WHERE id = ?`,
+        newTotal,
+        newTax,
+        newRemaining,
+        newTotalMonths,
+        monthlyAmount,
+        mergedNotes,
+        req.user?.name || 'system',
+        now,
+        sale.id,
+      );
+
+      if (extraInterestAmount > 0) {
+        await txDb.run(
+          `UPDATE customers
+           SET balance = ROUND(balance + ?, 2),
+               updated_at = ?
+           WHERE id = ?`,
+          extraInterestAmount,
+          now,
+          sale.customer_id,
+        );
+      }
+
+      await txDb.run(
+        `INSERT INTO reschedule_requests (
+          id, sale_id, customer_id, reason, status, old_installment_months, new_installment_months,
+          requested_by, requested_at, reviewed_by, reviewed_at
+        ) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?)`,
+        uid(),
+        sale.id,
+        sale.customer_id,
+        reason.trim() || 'إعادة جدولة المتبقي من العقد',
+        oldMonths,
+        newTotalMonths,
+        req.user?.name || 'system',
+        now,
+        req.user?.name || 'system',
+        now,
+      );
+    });
+
+    await audit('sale.reschedule', 'sale', sale.id, req.user?.name || 'system', {
+      invoiceNumber: sale.invoice_number,
+      oldMonths,
+      newRemainingInstallments: newInstallmentCount,
+      lockedPaidInstallments: totalLockedCount,
+      previousRemaining: currentRemaining,
+      extraInterestPercent,
+      extraInterestAmount,
+      newRemaining,
+      monthlyAmount,
+      firstNewDueDate: firstNewDueDateIso,
+    });
+
+    await createSystemNotification(
+      'info',
+      'إعادة جدولة تعاقد',
+      `تمت إعادة جدولة المتبقي للعقد ${sale.invoice_number} (${sale.customer_name}) على ${newInstallmentCount} قسط بقيمة ${monthlyAmount} جنيه شهرياً`,
+    );
+
+    const updatedSchedules = await db.all<ScheduleRow>(
+      'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
+      sale.id,
+    );
+    const updatedSaleRow = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', sale.id);
+
+    return res.status(200).json({
+      message: 'تمت إعادة جدولة المتبقي بنجاح',
+      schedules: mapSchedules(updatedSchedules),
+      sale: updatedSaleRow ? mapSale(updatedSaleRow, [], mapSchedules(updatedSchedules)) : null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
 router.post('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.put('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.post('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
 router.put('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+
+// POST /sales/:id/undo-defer-installment — Revert an installment deferral cleanly
+router.post('/:id/undo-defer-installment', requirePermission('sales:write'), requireAdmin, async (req: AuthedRequest, res) => {
+  const installmentId = String(req.body?.installmentId || '').trim();
+  const saleId = String(req.params.id || '').trim();
+  if (!saleId || !installmentId) {
+    return res.status(400).json({ message: 'معرف الفاتورة ومعرف القسط مطلوبان' });
+  }
+
+  const now = new Date().toISOString();
+  try {
+    const db = await dbPromise;
+    const sale = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', saleId);
+    if (!sale) {
+      return res.status(404).json({ message: 'لم يتم العثور على عقد البيع' });
+    }
+
+    const schedules = await db.all<ScheduleRow>(
+      'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
+      saleId,
+    );
+    const targetIndex = schedules.findIndex((s) => s.id === installmentId);
+    if (targetIndex === -1) {
+      return res.status(404).json({ message: 'لم يتم العثور على القسط المحدد' });
+    }
+    const target = schedules[targetIndex];
+    const isDeferred = target.deferred === 1 || target.deferred === true || Boolean(target.notes?.includes('مرحّل') || target.notes?.includes('مدمج') || target.notes?.includes('تم ترحيل'));
+    if (!isDeferred) {
+      return res.status(400).json({ message: 'هذا القسط ليس مرحلاً حالياً' });
+    }
+
+    const auditRows = await db.all<{ payload: string | null }>(
+      "SELECT payload FROM audit_log WHERE action = 'sale.defer_installment' AND entity_type = 'sale' AND entity_id = ? ORDER BY created_at DESC",
+      saleId,
+    );
+    let matchedPayload: any = null;
+    for (const row of auditRows) {
+      if (!row.payload) continue;
+      try {
+        const parsedPayload = JSON.parse(row.payload);
+        if (parsedPayload?.installmentId === installmentId || parsedPayload?.previousSchedules) {
+          matchedPayload = parsedPayload;
+          if (parsedPayload?.installmentId === installmentId) break;
+        }
+      } catch {
+        // skip malformed audit payload
+      }
+    }
+
+    if (matchedPayload?.previousSchedules && Array.isArray(matchedPayload.previousSchedules)) {
+      const prevSchedules = matchedPayload.previousSchedules as Array<{
+        id: string;
+        due_date: string;
+        amount: number;
+        paid_amount: number;
+        status: string;
+        deferred: boolean;
+        deferred_at: string | null;
+        notes: string | null;
+      }>;
+
+      for (const prevSch of prevSchedules) {
+        const liveSch = schedules.find((s) => s.id === prevSch.id);
+        if (liveSch && roundMoney(Number(liveSch.paid_amount)) > roundMoney(Number(prevSch.paid_amount || 0)) + 0.01) {
+          return res.status(409).json({
+            message: `تم تحصيل مبالغ على القسط ${liveSch.month_index} بعد الترحيل. يرجى عكس الإيصالات المسددة أولاً قبل التراجع عن الترحيل.`,
+          });
+        }
+      }
+
+      const penaltyFee = roundMoney(Number(matchedPayload.penaltyFee || 0));
+      const penaltyPaymentType = matchedPayload.penaltyPaymentType;
+
+      await db.withTransaction(async (tx: typeof db) => {
+        for (const prevSch of prevSchedules) {
+          await tx.run(
+            `UPDATE installment_schedules
+             SET due_date = ?, amount = ?, status = ?, deferred = ?, deferred_at = ?, notes = ?
+             WHERE id = ? AND sale_id = ?`,
+            prevSch.due_date,
+            prevSch.amount,
+            prevSch.status,
+            prevSch.deferred ? 1 : 0,
+            prevSch.deferred_at || null,
+            prevSch.notes || null,
+            prevSch.id,
+            saleId,
+          );
+        }
+
+        if (penaltyFee > 0 && penaltyPaymentType === 'add_to_debt') {
+          await tx.run(
+            `UPDATE sales
+             SET total = ROUND(total - ?, 2),
+                 remaining = ROUND(remaining - ?, 2),
+                 last_edited_by = ?,
+                 last_edited_at = ?
+             WHERE id = ?`,
+            penaltyFee,
+            penaltyFee,
+            req.user?.name || 'system',
+            now,
+            saleId,
+          );
+          await tx.run(
+            'UPDATE customers SET balance = ROUND(balance - ?, 2), updated_at = ? WHERE id = ?',
+            penaltyFee,
+            now,
+            sale.customer_id,
+          );
+        } else if (penaltyFee > 0 && penaltyPaymentType === 'collect_cash') {
+          await tx.run(
+            `UPDATE payments
+             SET status = 'voided'
+             WHERE sale_id = ? AND installment_id = ? AND status = 'posted' AND type = 'in' AND amount = ? AND description LIKE N'%غرامة تأخير/ترحيل%'`,
+            saleId,
+            installmentId,
+            penaltyFee,
+          );
+        }
+      });
+    } else if (matchedPayload?.strategy === 'shift_subsequent' || (!target.notes?.includes('مدمج') && !target.notes?.includes('ودمجه'))) {
+      // Best-effort fallback for shift deferrals that happened before audit snapshotting
+      const penaltyFee = matchedPayload?.penaltyPaymentType === 'add_to_debt' ? roundMoney(Number(matchedPayload?.penaltyFee || 0)) : 0;
+      await db.withTransaction(async (tx: typeof db) => {
+        await tx.run(
+          'UPDATE installment_schedules SET due_date = ?, amount = ?, deferred = 0, deferred_at = NULL, notes = NULL WHERE id = ?',
+          addMonths(target.due_date, -1),
+          Math.max(Number(target.paid_amount), roundMoney(Number(target.amount) - penaltyFee)),
+          target.id,
+        );
+        for (let i = targetIndex + 1; i < schedules.length; i++) {
+          const sch = schedules[i];
+          if (sch.status !== 'paid' && sch.status !== 'settled_early') {
+            await tx.run(
+              'UPDATE installment_schedules SET due_date = ? WHERE id = ?',
+              addMonths(sch.due_date, -1),
+              sch.id,
+            );
+          }
+        }
+        if (penaltyFee > 0) {
+          await tx.run(
+            `UPDATE sales
+             SET total = ROUND(total - ?, 2),
+                 remaining = ROUND(remaining - ?, 2),
+                 last_edited_by = ?,
+                 last_edited_at = ?
+             WHERE id = ?`,
+            penaltyFee,
+            penaltyFee,
+            req.user?.name || 'system',
+            now,
+            saleId,
+          );
+          await tx.run(
+            'UPDATE customers SET balance = ROUND(balance - ?, 2), updated_at = ? WHERE id = ?',
+            penaltyFee,
+            now,
+            sale.customer_id,
+          );
+        }
+      });
+    } else {
+      return res.status(400).json({
+        message: 'تم هذا الدمج قبل تفعيل سجل اللقطة التفصيلية. لا يمكن التراجع التلقائي عن دمجه.',
+      });
+    }
+
+    await audit('sale.undo_defer_installment', 'sale', saleId, req.user?.name || 'system', {
+      saleId,
+      invoiceNumber: sale.invoice_number,
+      installmentId,
+    });
+
+    const updatedSchedules = await db.all<ScheduleRow>(
+      'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
+      saleId,
+    );
+    const updatedSaleRow = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', saleId);
+
+    return res.json({
+      message: 'تم التراجع عن ترحيل القسط وإعادة الجدول لحالته السابقة بنجاح.',
+      schedules: mapSchedules(updatedSchedules),
+      sale: updatedSaleRow ? mapSale(updatedSaleRow, mapSaleItems(await db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', saleId)), mapSchedules(updatedSchedules)) : null,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
 
 // Update or clear a collection follow-up note on a specific installment schedule
 const handleUpdateInstallmentNote = async (req: any, res: any) => {

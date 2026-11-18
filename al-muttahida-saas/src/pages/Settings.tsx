@@ -24,7 +24,9 @@ import {
   ShieldCheck,
   Users,
   Plus,
+  QrCode,
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { Setting, OpeningBalances } from '../types';
@@ -41,12 +43,15 @@ import {
   api,
   isApiMode,
   API_BASE,
+  getApiToken,
   setServerApiUrl,
   clearServerApiUrl,
   getServerApiUrl,
   testServerUrl,
 } from '../lib/apiClient';
+import { hasPermission } from '../lib/permissions';
 import { scanLanForServer } from '../lib/lanDiscovery';
+import DocumentTemplatesManager from '../components/DocumentTemplatesManager';
 
 async function fetchNetworkInfo(retries = 2, delayMs = 600) {
   const currentBase = getServerApiUrl();
@@ -82,19 +87,26 @@ async function saveDbConfig(payload: {
   mode: 'server' | 'client';
 }) {
   const currentBase = getServerApiUrl();
+  const token = getApiToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   let res = await fetch(`${currentBase}/system/db-config`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
+  if (res.status === 404) {
     res = await fetch(`${currentBase}/api/system/db-config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     });
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.message || `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -102,11 +114,13 @@ async function testConnection(ip: string) {
   try {
     const res = await fetch(`http://${ip}:4000/health`, { signal: AbortSignal.timeout(4000) });
     if (res.ok) return true;
-  } catch (_) {}
+  } catch {
+    // Fallback to /api/health
+  }
   try {
     const res2 = await fetch(`http://${ip}:4000/api/health`, { signal: AbortSignal.timeout(4000) });
     return res2.ok;
-  } catch (_) {
+  } catch {
     return false;
   }
 }
@@ -115,6 +129,9 @@ export default function Settings() {
   const { settings, updateSettings, user } = useAuth();
   const { confirmDialog, showToast } = useDialog();
   const [formData, setFormData] = useState<Setting>(settings);
+  useEffect(() => {
+    setFormData(settings);
+  }, [settings]);
   const [saved, setSaved] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -251,16 +268,16 @@ export default function Settings() {
   };
 
   const [searchParams] = useSearchParams();
-  const requestedTab = searchParams.get('tab') as 'company' | 'network' | 'backup' | 'balances' | 'danger' | null;
-  const [activeTab, setActiveTab] = useState<'company' | 'network' | 'backup' | 'balances' | 'danger'>(() => {
-    if (requestedTab && ['company', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
+  const requestedTab = searchParams.get('tab') as 'company' | 'documents' | 'network' | 'backup' | 'balances' | 'danger' | null;
+  const [activeTab, setActiveTab] = useState<'company' | 'documents' | 'network' | 'backup' | 'balances' | 'danger'>(() => {
+    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
       return requestedTab;
     }
     return 'company';
   });
 
   useEffect(() => {
-    if (requestedTab && ['company', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
+    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
       setActiveTab(requestedTab);
     }
   }, [requestedTab]);
@@ -289,6 +306,8 @@ export default function Settings() {
   const [connSaved, setConnSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [showQrModal, setShowQrModal] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
 
   interface AutoBackupSettings {
@@ -426,7 +445,7 @@ export default function Settings() {
       setNetworkInfo({
         localIp: data.localIp,
         hostname: data.hostname,
-        frontendUrl: data.frontendUrl || `http://${data.localIp}:5173`,
+        frontendUrl: data.frontendUrl || `http://${data.localIp}:4000`,
         apiUrl: data.apiUrl || `http://${data.localIp}:4000`,
       });
       if (data.mode) {
@@ -448,6 +467,28 @@ export default function Settings() {
     if (activeTab === 'network') void loadNetworkInfo();
   }, [activeTab]);
 
+  const browserLanUrl =
+    networkInfo?.frontendUrl || `http://${networkInfo?.localIp || 'localhost'}:4000`;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (activeTab !== 'network' || !browserLanUrl) return;
+    QRCode.toDataURL(browserLanUrl, {
+      width: 240,
+      margin: 1,
+      color: { dark: '#0f1f4a', light: '#ffffff' },
+    })
+      .then((dataUrl) => {
+        if (!cancelled) setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, browserLanUrl]);
+
   const handleCopyIp = () => {
     if (!networkInfo) return;
     navigator.clipboard.writeText(networkInfo.localIp).then(() => {
@@ -457,7 +498,7 @@ export default function Settings() {
   };
 
   const handleCopyUrl = () => {
-    const url = networkInfo?.frontendUrl || `http://${networkInfo?.localIp || '192.168.1.9'}:5173`;
+    const url = networkInfo?.frontendUrl || `http://${networkInfo?.localIp || 'localhost'}:4000`;
     navigator.clipboard.writeText(url).then(() => {
       setCopiedUrl(true);
       setTimeout(() => setCopiedUrl(false), 2000);
@@ -466,15 +507,19 @@ export default function Settings() {
 
   const handleSaveModeServer = async () => {
     setNetworkLoading(true);
+    setNetworkError(null);
     try {
       clearServerApiUrl();
-      await saveDbConfig({ host: '127.0.0.1', port: 1433, database: 'AlMuttahida_New', mode: 'server' }).catch(() => null);
+      await saveDbConfig({ host: '127.0.0.1', port: 1433, database: 'AlMuttahida_New', mode: 'server' });
       setMachineMode('server');
       setConnSaved(true);
       setTimeout(() => setConnSaved(false), 3000);
+      showToast('تم حفظ وضع الجهاز الرئيسي بنجاح', 'success');
       void loadNetworkInfo();
     } catch (err: any) {
-      alert('تعذر حفظ الاعدادات: ' + (err.message || ''));
+      const msg = err?.message || 'تعذر حفظ الإعدادات';
+      setNetworkError(msg);
+      showToast(msg, 'error');
     } finally {
       setNetworkLoading(false);
     }
@@ -488,13 +533,14 @@ export default function Settings() {
       const testRes = await testServerUrl(clientIp);
       if (!testRes.ok) throw new Error(testRes.message || 'connection failed');
       setServerApiUrl(clientIp);
+      await saveDbConfig({ host: clientIp.trim(), port: 1433, database: 'AlMuttahida_New', mode: 'client' });
       setConnStatus('connected');
       setConnSaved(true);
-      await saveDbConfig({ host: clientIp.trim(), port: 1433, database: 'AlMuttahida_New', mode: 'client' }).catch(() => null);
+      showToast('تم ربط الجهاز الفرعي بالخادم الرئيسي وحفظ الإعدادات بنجاح', 'success');
       setTimeout(() => setConnSaved(false), 4000);
     } catch (e: any) {
       setConnStatus('failed');
-      setNetworkError('فشل الاتصال بالخادم على: ' + clientIp + ' — تأكد أن الجهازين متصلان بنفس شبكة الراوتر وأن السيرفر قيد التشغيل على الجهاز الرئيسي.');
+      setNetworkError('فشل الاتصال أو الحفظ على: ' + clientIp + (e?.message ? ` (${e.message})` : '') + ' — تأكد أن السيرفر قيد التشغيل على الجهاز الرئيسي.');
       setTimeout(() => setConnStatus('idle'), 6000);
     }
   };
@@ -530,13 +576,18 @@ export default function Settings() {
     window.location.reload();
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const updated = { ...formData, taxRate: 0 };
-    updateSettings(updated);
-    setFormData(updated);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    try {
+      await updateSettings(updated);
+      setFormData(updated);
+      setSaved(true);
+      showToast('تم حفظ إعدادات النظام بنجاح', 'success');
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err: any) {
+      showToast(err?.message || 'تعذر حفظ الإعدادات. يرجى التحقق من الصلاحيات واتصال الخادم.', 'error');
+    }
   };
 
   const handleObSubmit = async (e: React.FormEvent) => {
@@ -638,6 +689,7 @@ export default function Settings() {
 
   const tabs = [
     { key: 'company' as const, label: 'معلومات الشركة' },
+    { key: 'documents' as const, label: 'قوالب المستندات' },
     { key: 'network' as const, label: 'اعدادات الشبكة' },
     { key: 'balances' as const, label: 'الارصدة الافتتاحية' },
     { key: 'backup' as const, label: 'النسخ الاحتياطي' },
@@ -707,10 +759,11 @@ export default function Settings() {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">العملة</label>
                 <select
-                  value={formData.currency ?? 'EGP'}
+                  value={formData.currency || 'جنيه'}
                   onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
                   className="input-ui w-full"
                 >
+                  <option value="جنيه">جنيه مصري (جنيه)</option>
                   <option value="EGP">جنيه مصري (EGP)</option>
                   <option value="USD">دولار امريكي (USD)</option>
                   <option value="SAR">ريال سعودي (SAR)</option>
@@ -719,7 +772,7 @@ export default function Settings() {
               </div>
             </div>
             <div className="flex items-center gap-4 pt-2">
-              {user?.role !== 'manager' ? (
+              {hasPermission(user, 'settings:manage') ? (
                 <button
                   type="submit"
                   className="flex items-center gap-2 bg-[#1e40af] text-white px-6 py-2.5 rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold text-sm shadow-2xs cursor-pointer"
@@ -729,7 +782,7 @@ export default function Settings() {
                 </button>
               ) : (
                 <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
-                  حساب المشرف: وضع العرض فقط (لا يمكن تعديل الإعدادات)
+                  وضع العرض فقط (ليس لديك صلاحية تعديل الإعدادات)
                 </span>
               )}
               {saved && (
@@ -930,29 +983,75 @@ export default function Settings() {
                   </div>
 
                   {/* Browser Web Link Card */}
-                  <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-                    <label className="block text-xs font-bold text-slate-500">
-                      رابط تشغيل النظام من أي متصفح في المكتب
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-mono font-black text-blue-700 text-xs truncate" dir="ltr">
-                        {networkInfo?.frontendUrl || `http://${networkInfo?.localIp || '192.168.1.9'}:5173`}
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <label className="block text-xs font-bold text-slate-500">
+                        رابط تشغيل النظام من أي متصفح في المكتب
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 font-mono font-black text-blue-700 text-xs truncate" dir="ltr">
+                          {browserLanUrl}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCopyUrl}
+                          className={`flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                            copiedUrl ? 'bg-emerald-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                          }`}
+                        >
+                          {copiedUrl ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                          {copiedUrl ? 'تم النسخ' : 'نسخ الرابط'}
+                        </button>
                       </div>
+                      <p className="text-[11px] text-slate-400 font-medium">
+                        افتح Google Chrome على أي جهاز متصل بالراوتر واكتب الرابط، أو امسح كود QR بكاميرا الموبايل مباشرة.
+                      </p>
+                    </div>
+
+                    {qrDataUrl && (
                       <button
                         type="button"
-                        onClick={handleCopyUrl}
-                        className={`flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          copiedUrl ? 'bg-emerald-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
-                        }`}
+                        onClick={() => setShowQrModal(true)}
+                        className="shrink-0 flex flex-col items-center gap-1 p-1.5 rounded-xl border border-slate-200 bg-white hover:border-blue-400 hover:shadow-xs transition-all cursor-pointer group"
+                        title="اضغط لتكبير QR Code"
                       >
-                        {copiedUrl ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                        {copiedUrl ? 'تم النسخ' : 'نسخ الرابط'}
+                        <img src={qrDataUrl} alt="QR Code لرابط النظام" className="w-20 h-20 rounded" />
+                        <span className="text-[10px] font-bold text-slate-500 group-hover:text-blue-700 flex items-center gap-1">
+                          <QrCode size={11} /> تكبير QR
+                        </span>
                       </button>
-                    </div>
-                    <p className="text-[11px] text-slate-400 font-medium">
-                      افتح Google Chrome على أي جهاز آخر متصل بالراوتر واكتب هذا الرابط.
-                    </p>
+                    )}
                   </div>
+
+                  {showQrModal && qrDataUrl && (
+                    <div
+                      className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+                      onClick={() => setShowQrModal(false)}
+                    >
+                      <div
+                        className="bg-white rounded-2xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl border border-slate-200"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <h4 className="font-black text-slate-900 text-base">امسح الكود للدخول للنظام</h4>
+                        <div className="inline-block p-3 rounded-2xl border-2 border-slate-200 bg-white">
+                          <img src={qrDataUrl} alt="QR Code لرابط النظام" className="w-56 h-56 mx-auto" />
+                        </div>
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono font-black text-blue-700 text-sm break-all" dir="ltr">
+                          {browserLanUrl}
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium">
+                          وجّه كاميرا الموبايل أو التابلت المتصل بنفس الراوتر نحو الكود لفتح النظام فوراً.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowQrModal(false)}
+                          className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer"
+                        >
+                          إغلاق
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {allowModeSwitch && (
@@ -1810,6 +1909,8 @@ export default function Settings() {
             </div>
           </div>
         )}
+
+        {activeTab === 'documents' && <DocumentTemplatesManager />}
 
         {activeTab === 'danger' && (
           <div className="p-6">

@@ -1,13 +1,51 @@
+export type PrintPaperSize = 'a4' | 'a4-landscape' | 'thermal-80mm' | 'thermal-58mm';
+
 export interface PrintHtmlOptions {
   title?: string;
   width?: number;
   height?: number;
   delayMs?: number;
+  paperSize?: PrintPaperSize;
 }
 
 interface ElectronPrintAPI {
-  printPreviewHtml?: (payload: { html: string; title?: string }) => Promise<{ success: boolean; error?: string }>;
-  printPreviewCurrent?: (payload?: { title?: string }) => Promise<{ success: boolean; error?: string }>;
+  printPreviewHtml?: (payload: {
+    html: string;
+    title?: string;
+    paperSize?: PrintPaperSize;
+  }) => Promise<{ success: boolean; error?: string }>;
+  printPreviewCurrent?: (payload?: {
+    title?: string;
+    paperSize?: PrintPaperSize;
+  }) => Promise<{ success: boolean; error?: string }>;
+}
+
+function prepareBrowserThermalHtml(html: string, widthMm: number): string {
+  const cleanCss = `<style id="__thermal_page_override">
+    @page {
+      size: ${widthMm}mm 297mm;
+      margin: 0;
+      @top-left { content: none; }
+      @top-center { content: none; }
+      @top-right { content: none; }
+      @bottom-left { content: none; }
+      @bottom-center { content: none; }
+      @bottom-right { content: none; }
+    }
+    html, body {
+      width: ${widthMm}mm;
+      max-width: ${widthMm}mm;
+      height: auto !important;
+      min-height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+  </style>`;
+  const cleanedHtml = html.replace(/@page\s*\{[^}]*\}/gi, '');
+  if (/<\/head>/i.test(cleanedHtml)) {
+    return cleanedHtml.replace(/<\/head>/i, `${cleanCss}</head>`);
+  }
+  return `${cleanCss}${cleanedHtml}`;
 }
 
 /**
@@ -25,8 +63,15 @@ export async function printHtmlDocument(
     const res = await electronApi.printPreviewHtml({
       html,
       title: options.title || 'معاينة الطباعة - شركة المتحدة',
+      paperSize: options.paperSize,
     });
     return Boolean(res?.success);
+  }
+
+  let preparedHtml = html;
+  if (options.paperSize === 'thermal-80mm' || options.paperSize === 'thermal-58mm') {
+    const widthMm = options.paperSize === 'thermal-58mm' ? 58 : 80;
+    preparedHtml = prepareBrowserThermalHtml(html, widthMm);
   }
 
   const features =
@@ -50,7 +95,7 @@ export async function printHtmlDocument(
   };
 
   printWindow.document.open();
-  printWindow.document.write(html);
+  printWindow.document.write(preparedHtml);
   printWindow.document.close();
   printWindow.focus();
 

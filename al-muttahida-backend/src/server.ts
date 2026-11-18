@@ -1,5 +1,8 @@
 import { startDiscoveryService } from './discovery.js';
 import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -29,6 +32,7 @@ import notificationsRoutes from './routes/notifications.js';
 import collectionTasksRoutes from './routes/collection-tasks.js';
 import duesRoutes from './routes/dues.js';
 import systemRoutes from './routes/system.js';
+import documentTemplatesRoutes from './routes/document-templates.js';
 import { startAutoBackupScheduler } from './autoBackupService.js';
 
 async function bootstrap() {
@@ -83,7 +87,7 @@ async function bootstrap() {
       message: { error: 'تم إرسال عدد كبير جداً من الطلبات، يرجى الانتظار لحظة ثم المحاولة.' },
     })
   );
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '100mb' }));
   app.use(morgan('dev'));
   // Request logging
   app.use(requestLogger);
@@ -120,8 +124,38 @@ async function bootstrap() {
     return next();
   });
 
-  // Track database connection state for health checks
+  // Track database connection & initialization state for health checks
   let dbStatus: { connected: boolean; error: string | null } = { connected: false, error: null };
+  let initInFlight: Promise<boolean> | null = null;
+  let autoBackupStarted = false;
+
+  const ensureDbInitialized = async (): Promise<boolean> => {
+    if (dbStatus.connected) return true;
+    if (initInFlight) return initInFlight;
+
+    initInFlight = initDb()
+      .then(() => {
+        dbStatus = { connected: true, error: null };
+        // eslint-disable-next-line no-console
+        console.log('Database initialized successfully.');
+        if (!autoBackupStarted) {
+          autoBackupStarted = true;
+          startAutoBackupScheduler();
+        }
+        return true;
+      })
+      .catch((err: any) => {
+        dbStatus = { connected: false, error: err?.message || String(err) };
+        // eslint-disable-next-line no-console
+        console.error('Database initialization warning (will retry automatically):', dbStatus.error);
+        return false;
+      })
+      .finally(() => {
+        initInFlight = null;
+      });
+
+    return initInFlight;
+  };
 
   // Health check endpoints (both /health and /api/health)
   const healthHandler = (_req: express.Request, res: express.Response) =>
@@ -135,12 +169,19 @@ async function bootstrap() {
   app.get('/health', healthHandler);
   app.get('/api/health', healthHandler);
 
-  // Dedicated DB health check endpoint for Electron setup verification
-  const dbHealthHandler = (_req: express.Request, res: express.Response) => {
+  // Dedicated DB health check endpoint for Electron setup verification (retries DB init on demand)
+  const dbHealthHandler = async (_req: express.Request, res: express.Response) => {
+    if (!dbStatus.connected) {
+      await ensureDbInitialized();
+    }
     if (dbStatus.connected) {
       return res.json({ ok: true, connected: true });
     }
-    return res.status(503).json({ ok: false, connected: false, error: dbStatus.error || 'Database is initializing or unreachable' });
+    return res.status(503).json({
+      ok: false,
+      connected: false,
+      error: dbStatus.error || 'Database is initializing or unreachable',
+    });
   };
   app.get('/health/db', dbHealthHandler);
   app.get('/api/health/db', dbHealthHandler);
@@ -222,6 +263,24 @@ async function bootstrap() {
   app.use('/dues', duesRoutes);
   app.use('/api/dues', duesRoutes);
 
+  app.use('/document-templates', documentTemplatesRoutes);
+  app.use('/api/document-templates', documentTemplatesRoutes);
+
+  // Serve built frontend static files so LAN browsers can open http://<server-ip>:4000 directly
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const candidateFrontendDirs = [
+    path.resolve(__dirname, '..', 'frontend'),
+    path.resolve(__dirname, '..', '..', 'al-muttahida-saas', 'dist'),
+  ];
+  const frontendDir = candidateFrontendDirs.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
+  if (frontendDir) {
+    app.use(express.static(frontendDir));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path.startsWith('/health')) return next();
+      return res.sendFile(path.join(frontendDir, 'index.html'));
+    });
+  }
+
   // Central error handling
   app.use(errorHandler);
 
@@ -233,24 +292,36 @@ async function bootstrap() {
     startDiscoveryService();
   });
 
-  // Initialize Database in the background without crashing the server if initial connection fails
-  initDb()
-    .then(() => {
-      dbStatus = { connected: true, error: null };
-      // eslint-disable-next-line no-console
-      console.log('Database initialized successfully.');
-      startAutoBackupScheduler();
-    })
-    .catch((err) => {
-      dbStatus = { connected: false, error: err.message };
-      // eslint-disable-next-line no-console
-      console.error('Database initialization warning (can be configured via settings):', err.message);
-    });
+  // Initialize Database in the background and retry every 4s until connected & schema initialized
+  let dbRetryTimer: ReturnType<typeof setInterval> | null = null;
+  ensureDbInitialized().then((connected) => {
+    if (!connected && !dbRetryTimer) {
+      dbRetryTimer = setInterval(() => {
+        if (dbStatus.connected) {
+          if (dbRetryTimer) {
+            clearInterval(dbRetryTimer);
+            dbRetryTimer = null;
+          }
+          return;
+        }
+        void ensureDbInitialized().then((ok) => {
+          if (ok && dbRetryTimer) {
+            clearInterval(dbRetryTimer);
+            dbRetryTimer = null;
+          }
+        });
+      }, 4000);
+    }
+  });
 
   // Graceful shutdown: close mssql pool and stop processes cleanly to prevent zombie tasks
   const gracefulShutdown = async (signal: string) => {
     // eslint-disable-next-line no-console
     console.log(`[Backend] Received ${signal}. Closing MSSQL connection pool and exiting cleanly...`);
+    if (dbRetryTimer) {
+      clearInterval(dbRetryTimer);
+      dbRetryTimer = null;
+    }
     try {
       if (mssqlPool) {
         await mssqlPool.close();

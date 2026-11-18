@@ -15,17 +15,23 @@ export const usingSqlite = false;
  * - options.instanceName becomes 'SQLEXPRESS'
  * - port is omitted (undefined) so SQL Server Browser dynamically resolves the port.
  */
-function buildCandidateConfig(serverTarget: string, user = 'alm_app', password = 'Alm@2026#App', database = 'AlMuttahida_New'): any {
+function buildCandidateConfig(
+  serverTarget: string,
+  user = 'alm_app',
+  password = 'Alm@2026#App',
+  database = 'AlMuttahida_New',
+  explicitPort?: number
+): any {
   let server = serverTarget;
   let instanceName: string | undefined = undefined;
-  let port: number | undefined = undefined;
+  let port: number | undefined = explicitPort && explicitPort !== 4000 ? explicitPort : undefined;
 
   if (serverTarget.includes('\\')) {
     const parts = serverTarget.split('\\');
     server = parts[0] === '.' ? 'localhost' : parts[0];
     instanceName = parts[1];
-    port = undefined; // IMPORTANT: Do NOT specify port for named instances so SQL Browser can resolve dynamic ports!
-  } else if (serverTarget === '127.0.0.1' || serverTarget.toLowerCase() === 'localhost') {
+    // For named instances without explicitPort, leave port undefined so SQL Browser can resolve dynamic port
+  } else if (!port && (serverTarget === '127.0.0.1' || serverTarget.toLowerCase() === 'localhost')) {
     port = 1433;
   }
 
@@ -34,7 +40,7 @@ function buildCandidateConfig(serverTarget: string, user = 'alm_app', password =
     trustServerCertificate: true,
   };
 
-  if (instanceName) {
+  if (instanceName && !port) {
     baseOptions.instanceName = instanceName;
   }
 
@@ -61,38 +67,73 @@ function getCandidateConfigs(): any[] {
   const saved = getSavedConfig();
   const list: any[] = [];
   const seenTargets = new Set<string>();
+  const savedDbPort =
+    saved?.dbPort && Number(saved.dbPort) !== 4000
+      ? Number(saved.dbPort)
+      : saved?.db?.port && Number(saved.db.port) !== 4000
+      ? Number(saved.db.port)
+      : undefined;
+  const targetDb = saved?.database || config.sql.database || 'AlMuttahida_New';
 
-  const addTarget = (target: string, user = 'alm_app', password = 'Alm@2026#App') => {
+  const addTarget = (
+    target: string,
+    user = 'alm_app',
+    password = 'Alm@2026#App',
+    explicitPort?: number
+  ) => {
     if (!target) return;
-    const key = `${target}:${user}`;
+    const key = `${target}:${explicitPort ?? 'dyn'}:${user}`;
     if (!seenTargets.has(key)) {
       seenTargets.add(key);
-      list.push(buildCandidateConfig(target, user, password, config.sql.database || 'AlMuttahida_New'));
+      list.push(buildCandidateConfig(target, user, password, targetDb, explicitPort));
     }
   };
 
-  // 1. If there is a previously successful server saved in config.json, try it FIRST!
+  // 1. Saved successful server / custom config first
   if (saved?.lastSuccessfulServer) {
-    addTarget(saved.lastSuccessfulServer, saved.dbUser || 'alm_app', saved.dbPassword || 'Alm@2026#App');
+    addTarget(
+      saved.lastSuccessfulServer,
+      saved.dbUser || 'alm_app',
+      saved.dbPassword || 'Alm@2026#App',
+      savedDbPort
+    );
   }
   if (saved?.instanceName && (saved?.host || saved?.server)) {
     const host = saved.host || saved.server || 'localhost';
-    addTarget(`${host}\\${saved.instanceName}`, saved.dbUser || 'alm_app', saved.dbPassword || 'Alm@2026#App');
+    addTarget(
+      `${host}\\${saved.instanceName}`,
+      saved.dbUser || 'alm_app',
+      saved.dbPassword || 'Alm@2026#App',
+      savedDbPort
+    );
+  } else if (saved?.host) {
+    addTarget(
+      saved.host,
+      saved.dbUser || 'alm_app',
+      saved.dbPassword || 'Alm@2026#App',
+      savedDbPort || 1433
+    );
   }
 
-  // 2. Candidate servers requested: localhost\SQLEXPRESS, localhost, 127.0.0.1
-  addTarget('localhost\\SQLEXPRESS', 'alm_app', 'Alm@2026#App');
-  addTarget('.\\SQLEXPRESS', 'alm_app', 'Alm@2026#App');
-  addTarget('localhost', 'alm_app', 'Alm@2026#App');
-  addTarget('127.0.0.1', 'alm_app', 'Alm@2026#App');
+  // 2. Standard TCP & SQL Browser candidates with configured or default alm_app credentials
+  const fallbackUser = saved?.dbUser || process.env.DB_USER || 'alm_app';
+  const fallbackPass = saved?.dbPassword || process.env.DB_PASSWORD || 'Alm@2026#App';
+  addTarget('127.0.0.1', fallbackUser, fallbackPass, 1433);
+  addTarget('localhost', fallbackUser, fallbackPass, 1433);
+  addTarget('localhost\\SQLEXPRESS', fallbackUser, fallbackPass);
+  addTarget('localhost\\SQLEXPRESS', fallbackUser, fallbackPass, 1433);
+  addTarget('.\\SQLEXPRESS', fallbackUser, fallbackPass);
 
-  // 3. Fallbacks with sa user (in case sa is already configured)
-  addTarget('localhost\\SQLEXPRESS', 'sa', 'Alm@2026#App');
-  addTarget('localhost\\SQLEXPRESS', 'sa', '');
-  addTarget('localhost', 'sa', 'Alm@2026#App');
-  addTarget('localhost', 'sa', '');
-  addTarget('127.0.0.1', 'sa', 'Alm@2026#App');
-  addTarget('127.0.0.1', 'sa', '');
+  // 3. Fallbacks with sa user only during initial unconfigured setup
+  const hasExplicitCredentials = Boolean((saved?.dbUser && saved?.dbPassword) || process.env.DB_PASSWORD);
+  if (!hasExplicitCredentials) {
+    addTarget('localhost\\SQLEXPRESS', 'sa', 'Alm@2026#App');
+    addTarget('localhost\\SQLEXPRESS', 'sa', '');
+    addTarget('localhost', 'sa', 'Alm@2026#App', 1433);
+    addTarget('localhost', 'sa', '', 1433);
+    addTarget('127.0.0.1', 'sa', 'Alm@2026#App', 1433);
+    addTarget('127.0.0.1', 'sa', '', 1433);
+  }
 
   return list;
 }
@@ -112,7 +153,7 @@ async function ensureDatabaseExists(activeConfig: any): Promise<void> {
     const masterConfig = { 
       ...activeConfig, 
       database: 'master',
-      connectionTimeout: 5000,
+      connectionTimeout: 2500,
       requestTimeout: 5000 
     };
     masterPool = await sql.connect(masterConfig);
@@ -204,43 +245,51 @@ async function tryConnectMssql(): Promise<any> {
 
 /** The MSSQL connection pool. */
 export let mssqlPool: any = null;
+let poolInFlight: Promise<any> | null = null;
 
-export const poolPromise: Promise<any> = (async () => {
-  const pool = await tryConnectMssql();
-  if (!pool) {
-    throw new Error(
-      `[FATAL] Unable to connect to Microsoft SQL Server at ${config.sql.server}:${config.sql.port}.\n` +
-      `Please ensure SQL Server is running and reachable.`
-    );
+/**
+ * Ensures an active MSSQL ConnectionPool exists, retrying cleanly if an earlier
+ * boot attempt failed before SQL Server finished provisioning/restarting.
+ */
+export async function ensurePool(): Promise<any> {
+  if (mssqlPool && mssqlPool.connected) {
+    return mssqlPool;
   }
-  mssqlPool = pool;
-  return pool;
-})();
+  if (poolInFlight) {
+    return poolInFlight;
+  }
 
+  poolInFlight = (async () => {
+    const pool = await tryConnectMssql();
+    if (!pool) {
+      throw new Error(
+        `[FATAL] Unable to connect to Microsoft SQL Server at ${config.sql.server}:${config.sql.port}.\n` +
+          `Please ensure SQL Server is running and reachable.`
+      );
+    }
+    mssqlPool = pool;
+    return pool;
+  })().finally(() => {
+    poolInFlight = null;
+  });
+
+  return poolInFlight;
+}
+
+/** Retrying promise-like wrapper compatible with `await poolPromise` callers. */
+export const poolPromise: Promise<any> = {
+  then: (onFulfilled, onRejected) => ensurePool().then(onFulfilled, onRejected),
+  catch: (onRejected) => ensurePool().catch(onRejected),
+  finally: (onFinally) => ensurePool().finally(onFinally),
+  [Symbol.toStringTag]: 'Promise',
+} as Promise<any>;
 
 export const dbPromise = (async () => {
-  const pool = await poolPromise;
-
-  // ── MSSQL path (pool is connected) ────────────────────────────────────
-
-  let activePool = pool;
-
   async function getHealthyPool(): Promise<any> {
-    if (activePool && activePool.connected) {
-      return activePool;
+    if (mssqlPool && mssqlPool.connected) {
+      return mssqlPool;
     }
-    console.log('[DB] MSSQL pool disconnected or dead. Reconnecting...');
-    try {
-      const newPool = await tryConnectMssql();
-      if (newPool && newPool.connected) {
-        activePool = newPool;
-        mssqlPool = newPool;
-        return activePool;
-      }
-    } catch (err: any) {
-      console.warn('[DB] Reconnection attempt failed:', err?.message || err);
-    }
-    return activePool || pool;
+    return await ensurePool();
   }
 
   // Simulated critical alert hook for database latency/timeouts
@@ -256,17 +305,18 @@ export const dbPromise = (async () => {
   }
 
   async function executeQueryWithMonitoring<T>(
-    queryFn: () => Promise<T>,
+    queryFn: (pool: any) => Promise<T>,
     sqlText: string,
     params: QueryParams = []
   ): Promise<T> {
     const startTime = Date.now();
+    const pool = await getHealthyPool();
     try {
-      return await queryFn();
+      return await queryFn(pool);
     } catch (error: any) {
       const errMsg = String(error?.message || '').toLowerCase();
       const isConnectionDead =
-        !activePool?.connected ||
+        !mssqlPool?.connected ||
         errMsg.includes('closed') ||
         errMsg.includes('connection') ||
         errMsg.includes('socket') ||
@@ -274,8 +324,9 @@ export const dbPromise = (async () => {
 
       if (isConnectionDead) {
         console.warn('[DB] Broken DB connection detected (e.g. sleep/wake). Reconnecting and retrying...');
-        await getHealthyPool();
-        return await queryFn();
+        mssqlPool = null;
+        const freshPool = await ensurePool();
+        return await queryFn(freshPool);
       }
 
       const elapsed = Date.now() - startTime;
@@ -291,8 +342,8 @@ export const dbPromise = (async () => {
     }
   }
 
-  function prepareRequest(query: string, params: QueryParams, request?: RequestLike) {
-    const currentPool = activePool || pool;
+  function prepareRequest(query: string, params: QueryParams, request?: RequestLike, pool?: any) {
+    const currentPool = pool || mssqlPool;
     return prepareSqlRequest(query, params, request || currentPool.request());
   }
 
@@ -316,7 +367,13 @@ export const dbPromise = (async () => {
     return { params: args };
   }
 
-  function extractPaginationAndPrepare(query: string, params: QueryParams, pagination?: PaginationOptions, request?: RequestLike) {
+  function extractPaginationAndPrepare(
+    query: string,
+    params: QueryParams,
+    pagination?: PaginationOptions,
+    request?: RequestLike,
+    pool?: any
+  ) {
     const cleanParams = [...params];
     let finalQuery = query.trim();
 
@@ -324,58 +381,71 @@ export const dbPromise = (async () => {
       finalQuery = applyPagination(finalQuery, pagination);
     }
 
-    const { request: req, preparedQuery } = prepareRequest(finalQuery, cleanParams, request);
+    const { request: req, preparedQuery } = prepareRequest(finalQuery, cleanParams, request, pool);
     return { request: req, preparedQuery, cleanParams, finalQuery };
   }
   return {
     /** Execute a query that returns multiple rows. */
     async all<T = any>(query: string, ...args: QueryParam[]): Promise<T[]> {
       const { params: actualParams, pagination } = normalizeReadArgs(args);
-      const { request, preparedQuery, cleanParams, finalQuery } = extractPaginationAndPrepare(query, actualParams, pagination);
-      return await executeQueryWithMonitoring(async () => {
-        const result = await request.query(preparedQuery);
-        return result.recordset as T[];
-      }, finalQuery, cleanParams);
+      return await executeQueryWithMonitoring(
+        async (pool) => {
+          const { request, preparedQuery } = extractPaginationAndPrepare(query, actualParams, pagination, undefined, pool);
+          const result = await request.query(preparedQuery);
+          return result.recordset as T[];
+        },
+        query,
+        actualParams
+      );
     },
     /** Execute a query that returns a single row. */
     async get<T = any>(query: string, ...args: QueryParam[]): Promise<T | undefined> {
       const { params: actualParams, pagination } = normalizeReadArgs(args);
-      const { request, preparedQuery, cleanParams, finalQuery } = extractPaginationAndPrepare(query, actualParams, pagination);
-      return await executeQueryWithMonitoring(async () => {
-        const result = await request.query(preparedQuery);
-        return result.recordset[0] as T | undefined;
-      }, finalQuery, cleanParams);
+      return await executeQueryWithMonitoring(
+        async (pool) => {
+          const { request, preparedQuery } = extractPaginationAndPrepare(query, actualParams, pagination, undefined, pool);
+          const result = await request.query(preparedQuery);
+          return result.recordset[0] as T | undefined;
+        },
+        query,
+        actualParams
+      );
     },
-    /** Execute a nonâ€گselect statement (INSERT/UPDATE/DELETE). */
+    /** Execute a non-select statement (INSERT/UPDATE/DELETE). */
     async run(query: string, ...params: QueryParam[]) {
-      const { request, preparedQuery } = prepareRequest(query, params);
-      return await executeQueryWithMonitoring(async () => {
-        return await request.query(preparedQuery);
-      }, query, params);
+      return await executeQueryWithMonitoring(
+        async (pool) => {
+          const { request, preparedQuery } = prepareRequest(query, params, undefined, pool);
+          return await request.query(preparedQuery);
+        },
+        query,
+        params
+      );
     },
     /** Execute operations within a transaction with transient deadlock retries. */
     async withTransaction<T>(work: (db: any) => Promise<T>, maxRetries = 3, delayMs = 100): Promise<T> {
       let attempt = 0;
       while (true) {
-        const transaction = new sql.Transaction(pool);
+        const healthyPool = await getHealthyPool();
+        const transaction = new sql.Transaction(healthyPool);
         try {
           await transaction.begin();
           const txDb = {
             all: async (q: string, ...args: QueryParam[]) => {
               const { params: actualParams, pagination } = normalizeReadArgs(args);
-              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pagination, new sql.Request(transaction));
+              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pagination, new sql.Request(transaction), healthyPool);
               const result = await request.query(preparedQuery);
               return result.recordset;
             },
             get: async (q: string, ...args: QueryParam[]) => {
               const { params: actualParams, pagination } = normalizeReadArgs(args);
-              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pagination, new sql.Request(transaction));
+              const { request, preparedQuery } = extractPaginationAndPrepare(q, actualParams, pagination, new sql.Request(transaction), healthyPool);
               const result = await request.query(preparedQuery);
               return result.recordset[0];
             },
             run: async (q: string, ...p: QueryParam[]) => {
               const { params: actualParams } = normalizeReadArgs(p);
-              const { request, preparedQuery } = prepareRequest(q, actualParams, new sql.Request(transaction));
+              const { request, preparedQuery } = prepareRequest(q, actualParams, new sql.Request(transaction), healthyPool);
               return await request.query(preparedQuery);
             }
           };
@@ -407,7 +477,8 @@ export const dbPromise = (async () => {
  * Initialise the DB connection and run migrations.
  */
 export async function initDb(): Promise<void> {
-  const db = await dbPromise; // ensure the pool is created
+  await ensurePool(); // ensure active connection (retries if earlier boot failed)
+  const db = await dbPromise;
 
   // ── MSSQL path: run MSSQL migrations ──────────────────────────────────
   await db.run(`
@@ -569,7 +640,7 @@ export async function initDb(): Promise<void> {
     paid DECIMAL(18,2) NOT NULL DEFAULT 0,
     remaining DECIMAL(18,2) NOT NULL,
     status NVARCHAR(30) NOT NULL,
-    date NVARCHAR(20) NOT NULL,
+    date NVARCHAR(50) NOT NULL,
     version INT NOT NULL DEFAULT 1,
     locked BIT NOT NULL DEFAULT 0,
     last_edited_by NVARCHAR(200),
@@ -577,6 +648,23 @@ export async function initDb(): Promise<void> {
     created_by NVARCHAR(200) NOT NULL,
     created_at NVARCHAR(40) NOT NULL
   );
+
+  IF COL_LENGTH('sales', 'subtotal') IS NULL ALTER TABLE sales ADD subtotal DECIMAL(18,2);
+  IF COL_LENGTH('sales', 'discount') IS NULL ALTER TABLE sales ADD discount DECIMAL(18,2);
+  IF COL_LENGTH('sales', 'tax') IS NULL ALTER TABLE sales ADD tax DECIMAL(18,2);
+  IF COL_LENGTH('sales', 'notes') IS NULL ALTER TABLE sales ADD notes NVARCHAR(MAX);
+  IF COL_LENGTH('sales', 'collection_note') IS NULL ALTER TABLE sales ADD collection_note NVARCHAR(500) NULL;
+  IF COL_LENGTH('sales', 'payment_method') IS NULL ALTER TABLE sales ADD payment_method NVARCHAR(30);
+  IF COL_LENGTH('sales', 'manual_invoice_ref') IS NULL ALTER TABLE sales ADD manual_invoice_ref NVARCHAR(100);
+  IF COL_LENGTH('sales', 'sales_rep_id') IS NULL ALTER TABLE sales ADD sales_rep_id NVARCHAR(64);
+  IF COL_LENGTH('sales', 'sales_rep_name') IS NULL ALTER TABLE sales ADD sales_rep_name NVARCHAR(200);
+  IF COL_LENGTH('sales', 'commission_rate') IS NULL ALTER TABLE sales ADD commission_rate DECIMAL(18,2);
+  IF COL_LENGTH('sales', 'commission_amount') IS NULL ALTER TABLE sales ADD commission_amount DECIMAL(18,2);
+  IF COL_LENGTH('sales', 'installment_months') IS NULL ALTER TABLE sales ADD installment_months INT;
+  IF COL_LENGTH('sales', 'installment_start_date') IS NULL ALTER TABLE sales ADD installment_start_date NVARCHAR(50);
+  IF COL_LENGTH('sales', 'upfront_amount') IS NULL ALTER TABLE sales ADD upfront_amount DECIMAL(18,2);
+  IF COL_LENGTH('sales', 'monthly_installment_amount') IS NULL ALTER TABLE sales ADD monthly_installment_amount DECIMAL(18,2);
+
   BEGIN TRY
     IF COL_LENGTH('sales', 'notes') IS NOT NULL ALTER TABLE sales ALTER COLUMN notes NVARCHAR(MAX);
     IF COL_LENGTH('sales', 'customer_name') IS NOT NULL ALTER TABLE sales ALTER COLUMN customer_name NVARCHAR(MAX);
@@ -586,40 +674,6 @@ export async function initDb(): Promise<void> {
   BEGIN CATCH
     PRINT 'Skipping sales column alter during startup migration';
   END CATCH;
-
-  BEGIN TRY
-    IF COL_LENGTH('purchases', 'date') IS NOT NULL ALTER TABLE purchases ALTER COLUMN date NVARCHAR(50) NOT NULL;
-  END TRY
-  BEGIN CATCH
-    PRINT 'Skipping purchases column alter during startup migration';
-  END CATCH;
-  BEGIN TRY
-    IF COL_LENGTH('installment_schedules', 'due_date') IS NOT NULL ALTER TABLE installment_schedules ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
-    IF COL_LENGTH('payments', 'date') IS NOT NULL ALTER TABLE payments ALTER COLUMN date NVARCHAR(50) NOT NULL;
-    IF COL_LENGTH('expenses', 'date') IS NOT NULL ALTER TABLE expenses ALTER COLUMN date NVARCHAR(50) NOT NULL;
-    IF COL_LENGTH('shareholder_transactions', 'date') IS NOT NULL ALTER TABLE shareholder_transactions ALTER COLUMN date NVARCHAR(50) NOT NULL;
-    IF COL_LENGTH('collection_tasks', 'due_date') IS NOT NULL ALTER TABLE collection_tasks ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
-    IF COL_LENGTH('closing_periods', 'period_date') IS NOT NULL ALTER TABLE closing_periods ALTER COLUMN period_date NVARCHAR(50) NOT NULL;
-  END TRY
-  BEGIN CATCH
-    PRINT 'Skipping date column alters during startup migration';
-  END CATCH;
-
-  IF COL_LENGTH('sales', 'subtotal') IS NULL ALTER TABLE sales ADD subtotal DECIMAL(18,2);
-  IF COL_LENGTH('sales', 'discount') IS NULL ALTER TABLE sales ADD discount DECIMAL(18,2);
-  IF COL_LENGTH('sales', 'tax') IS NULL ALTER TABLE sales ADD tax DECIMAL(18,2);
-  IF COL_LENGTH('sales', 'notes') IS NULL ALTER TABLE sales ADD notes NVARCHAR(1000);
-  IF COL_LENGTH('sales', 'collection_note') IS NULL ALTER TABLE sales ADD collection_note NVARCHAR(500) NULL;
-  IF COL_LENGTH('sales', 'payment_method') IS NULL ALTER TABLE sales ADD payment_method NVARCHAR(30);
-  IF COL_LENGTH('sales', 'manual_invoice_ref') IS NULL ALTER TABLE sales ADD manual_invoice_ref NVARCHAR(100);
-  IF COL_LENGTH('sales', 'sales_rep_id') IS NULL ALTER TABLE sales ADD sales_rep_id NVARCHAR(64);
-  IF COL_LENGTH('sales', 'sales_rep_name') IS NULL ALTER TABLE sales ADD sales_rep_name NVARCHAR(200);
-  IF COL_LENGTH('sales', 'commission_rate') IS NULL ALTER TABLE sales ADD commission_rate DECIMAL(18,2);
-  IF COL_LENGTH('sales', 'commission_amount') IS NULL ALTER TABLE sales ADD commission_amount DECIMAL(18,2);
-  IF COL_LENGTH('sales', 'installment_months') IS NULL ALTER TABLE sales ADD installment_months INT;
-  IF COL_LENGTH('sales', 'installment_start_date') IS NULL ALTER TABLE sales ADD installment_start_date NVARCHAR(20);
-  IF COL_LENGTH('sales', 'upfront_amount') IS NULL ALTER TABLE sales ADD upfront_amount DECIMAL(18,2);
-  IF COL_LENGTH('sales', 'monthly_installment_amount') IS NULL ALTER TABLE sales ADD monthly_installment_amount DECIMAL(18,2);
 
   -- 6. Sale Items
   IF OBJECT_ID('sale_items', 'U') IS NULL
@@ -655,7 +709,7 @@ export async function initDb(): Promise<void> {
     paid DECIMAL(18,2) NOT NULL DEFAULT 0,
     remaining DECIMAL(18,2) NOT NULL,
     status NVARCHAR(30) NOT NULL,
-    date NVARCHAR(20) NOT NULL,
+    date NVARCHAR(50) NOT NULL,
     notes NVARCHAR(1000),
     created_by NVARCHAR(200) NOT NULL,
     created_at NVARCHAR(40) NOT NULL
@@ -684,7 +738,7 @@ export async function initDb(): Promise<void> {
     id NVARCHAR(64) PRIMARY KEY,
     sale_id NVARCHAR(64) NOT NULL,
     month_index INT NOT NULL,
-    due_date NVARCHAR(20) NOT NULL,
+    due_date NVARCHAR(50) NOT NULL,
     amount DECIMAL(18,2) NOT NULL,
     paid_amount DECIMAL(18,2) NOT NULL DEFAULT 0,
     status NVARCHAR(30) NOT NULL,
@@ -709,7 +763,7 @@ export async function initDb(): Promise<void> {
     sale_id NVARCHAR(64) NULL,
     installment_id NVARCHAR(64) NULL,
     description NVARCHAR(600) NOT NULL,
-    date NVARCHAR(20) NOT NULL,
+    date NVARCHAR(50) NOT NULL,
     receipt_number NVARCHAR(100) NOT NULL UNIQUE,
     status NVARCHAR(20) NOT NULL DEFAULT 'posted',
     void_ref NVARCHAR(64) NULL,
@@ -733,7 +787,7 @@ export async function initDb(): Promise<void> {
     category NVARCHAR(100) NOT NULL,
     description NVARCHAR(600) NOT NULL,
     amount DECIMAL(18,2) NOT NULL,
-    date NVARCHAR(20) NOT NULL,
+    date NVARCHAR(50) NOT NULL,
     receipt NVARCHAR(MAX),
     created_by NVARCHAR(200) NOT NULL,
     created_at NVARCHAR(40) NOT NULL
@@ -811,7 +865,7 @@ export async function initDb(): Promise<void> {
     shareholder_name NVARCHAR(200) NOT NULL,
     type NVARCHAR(50) NOT NULL,
     amount DECIMAL(18,2) NOT NULL,
-    date NVARCHAR(20) NOT NULL,
+    date NVARCHAR(50) NOT NULL,
     description NVARCHAR(600) NOT NULL,
     created_by NVARCHAR(200) NOT NULL,
     created_at NVARCHAR(40) NOT NULL
@@ -825,7 +879,7 @@ export async function initDb(): Promise<void> {
     customer_name NVARCHAR(200) NOT NULL,
     sale_id NVARCHAR(64) NOT NULL,
     installment_id NVARCHAR(64) NOT NULL,
-    due_date NVARCHAR(20) NOT NULL,
+    due_date NVARCHAR(50) NOT NULL,
     amount DECIMAL(18,2) NOT NULL,
     status NVARCHAR(30) NOT NULL,
     assigned_to_user_id NVARCHAR(64),
@@ -853,7 +907,7 @@ export async function initDb(): Promise<void> {
   CREATE TABLE closing_periods (
     id NVARCHAR(64) PRIMARY KEY,
     period_type NVARCHAR(20) NOT NULL,
-    period_date NVARCHAR(20) NOT NULL,
+    period_date NVARCHAR(50) NOT NULL,
     status NVARCHAR(20) NOT NULL,
     closed_by NVARCHAR(200) NULL,
     closed_at NVARCHAR(40) NULL,
@@ -884,7 +938,7 @@ export async function initDb(): Promise<void> {
     customer_name NVARCHAR(200) NOT NULL,
     sale_id NVARCHAR(64) NOT NULL,
     installment_id NVARCHAR(64) NOT NULL,
-    due_date NVARCHAR(20) NOT NULL,
+    due_date NVARCHAR(50) NOT NULL,
     amount DECIMAL(18,2) NOT NULL,
     status NVARCHAR(30) NOT NULL,
     assigned_to_user_id NVARCHAR(64),
@@ -903,7 +957,7 @@ export async function initDb(): Promise<void> {
     sale_id NVARCHAR(64) NULL,
     installment_id NVARCHAR(64) NULL,
     description NVARCHAR(600) NOT NULL,
-    date NVARCHAR(20) NOT NULL,
+    date NVARCHAR(50) NOT NULL,
     receipt_number NVARCHAR(100) NOT NULL,
     status NVARCHAR(20) NOT NULL,
     void_ref NVARCHAR(64) NULL,
@@ -918,6 +972,38 @@ export async function initDb(): Promise<void> {
     invoice_number NVARCHAR(100),
     affects_customer_balance BIT
   );
+
+  -- 22. Document Templates (Legal & Invoice Print Templates)
+  IF OBJECT_ID('document_templates', 'U') IS NULL
+  CREATE TABLE document_templates (
+    id NVARCHAR(64) PRIMARY KEY,
+    template_key NVARCHAR(64) NULL,
+    name NVARCHAR(200) NOT NULL,
+    description NVARCHAR(500) NULL,
+    html_content NVARCHAR(MAX) NOT NULL DEFAULT N'',
+    page_size NVARCHAR(20) NOT NULL DEFAULT 'A4',
+    is_builtin BIT NOT NULL DEFAULT 0,
+    is_active BIT NOT NULL DEFAULT 1,
+    default_checked BIT NOT NULL DEFAULT 1,
+    repeat_for_signatories BIT NOT NULL DEFAULT 0,
+    sort_order INT NOT NULL DEFAULT 100,
+    created_at NVARCHAR(40) NOT NULL,
+    updated_at NVARCHAR(40) NOT NULL
+  );
+
+  -- Widen any legacy NVARCHAR(20) date columns on existing databases
+  BEGIN TRY
+    IF COL_LENGTH('purchases', 'date') IS NOT NULL ALTER TABLE purchases ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('installment_schedules', 'due_date') IS NOT NULL ALTER TABLE installment_schedules ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('payments', 'date') IS NOT NULL ALTER TABLE payments ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('expenses', 'date') IS NOT NULL ALTER TABLE expenses ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('shareholder_transactions', 'date') IS NOT NULL ALTER TABLE shareholder_transactions ALTER COLUMN date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('collection_tasks', 'due_date') IS NOT NULL ALTER TABLE collection_tasks ALTER COLUMN due_date NVARCHAR(50) NOT NULL;
+    IF COL_LENGTH('closing_periods', 'period_date') IS NOT NULL ALTER TABLE closing_periods ALTER COLUMN period_date NVARCHAR(50) NOT NULL;
+  END TRY
+  BEGIN CATCH
+    PRINT 'Skipping date column alters during startup migration';
+  END CATCH;
   `);
 
 
@@ -1007,41 +1093,46 @@ export async function initDb(): Promise<void> {
     console.error('Error creating performance indexes:', err);
   }
 
-  // Automatically seed default admin user on startup if users table has no admin user
+  // Seed default admin user ONLY if database has 0 users or ALLOW_SEED=true
   try {
-    const admin = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
-    if (!admin?.id) {
-      const passwordHash = await hashPassword('admin123');
-      const allPermissions = {
-        'sales:read': true,
-        'sales:write': true,
-        'sales:reschedule': true,
-        'payments:read': true,
-        'payments:write': true,
-        'payments:reverse': true,
-        'reports:read': true,
-        'closing:write': true,
-        'users:manage': true,
-        'inventory:manage': true,
-        'purchases:manage': true,
-        'settings:manage': true,
-        'shareholders:manage': true,
-        'notifications:read': true,
-      };
-      await db.run(
-        `INSERT INTO users (id, name, username, password_hash, role, is_active, phone, permissions, created_at)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-        uid(),
-        'المدير العام',
-        'admin',
-        passwordHash,
-        'admin',
-        '01000000000',
-        JSON.stringify(allPermissions),
-        new Date().toISOString()
-      );
-      // eslint-disable-next-line no-console
-      console.log('✅ Default admin user created (admin / admin123).');
+    const userCountRow = await db.get<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM users');
+    const totalUsers = Number(userCountRow?.cnt || 0);
+    const allowSeed = (process.env.ALLOW_SEED || '').toLowerCase() === 'true';
+    if (totalUsers === 0 || allowSeed) {
+      const admin = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
+      if (!admin?.id) {
+        const passwordHash = await hashPassword('admin123');
+        const allPermissions = {
+          'sales:read': true,
+          'sales:write': true,
+          'sales:reschedule': true,
+          'payments:read': true,
+          'payments:write': true,
+          'payments:reverse': true,
+          'reports:read': true,
+          'closing:write': true,
+          'users:manage': true,
+          'inventory:manage': true,
+          'purchases:manage': true,
+          'settings:manage': true,
+          'shareholders:manage': true,
+          'notifications:read': true,
+        };
+        await db.run(
+          `INSERT INTO users (id, name, username, password_hash, role, is_active, phone, permissions, created_at)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+          uid(),
+          'المدير العام',
+          'admin',
+          passwordHash,
+          'admin',
+          '01000000000',
+          JSON.stringify(allPermissions),
+          new Date().toISOString()
+        );
+        // eslint-disable-next-line no-console
+        console.log('✅ Default admin user created (admin / admin123).');
+      }
     }
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -1132,11 +1223,11 @@ export async function initDb(): Promise<void> {
         SELECT @inventory = COALESCE(SUM(quantity * purchase_price), 0)
           FROM products;
 
-        SELECT @receivables = COALESCE(SUM(remaining), 0)
-          FROM sales WHERE status <> 'cancelled' AND remaining > 0;
+        SELECT @receivables = COALESCE(SUM(balance), 0)
+          FROM customers;
 
-        SELECT @payables = COALESCE(SUM(remaining), 0)
-          FROM purchases WHERE status <> 'cancelled' AND remaining > 0;
+        SELECT @payables = COALESCE(SUM(balance), 0)
+          FROM suppliers;
 
         SELECT @sub_capital = COALESCE(SUM(capital), 0) FROM shareholders;
 
@@ -1146,13 +1237,24 @@ export async function initDb(): Promise<void> {
         SELECT @cap_withdraw = COALESCE(SUM(amount), 0)
           FROM shareholder_transactions WHERE type = 'capital_withdrawal';
 
-        SELECT @all_sales = COALESCE(SUM(total), 0)
-          FROM sales WHERE status <> 'cancelled';
-
-        SELECT @all_cogs = COALESCE(SUM(si.quantity * si.unit_cost), 0)
-          FROM sale_items si
-          INNER JOIN sales s ON s.id = si.sale_id
-          WHERE s.status <> 'cancelled';
+        SELECT
+          @all_sales = COALESCE(SUM(eff_total), 0),
+          @all_cogs = COALESCE(SUM(sale_cost), 0)
+        FROM (
+          SELECT
+            s.id,
+            CASE WHEN s.status = 'settled_early' THEN s.paid ELSE s.total END AS eff_total,
+            CASE
+              WHEN COUNT(si.id) > 0
+                THEN SUM(si.quantity * COALESCE(NULLIF(si.unit_cost, 0), pr.purchase_price, 0))
+              ELSE COALESCE(s.subtotal, 0)
+            END AS sale_cost
+          FROM sales s
+          LEFT JOIN sale_items si ON si.sale_id = s.id
+          LEFT JOIN products pr ON pr.id = si.product_id
+          WHERE s.status <> 'cancelled'
+          GROUP BY s.id, s.status, s.paid, s.total, s.subtotal
+        ) AS sc_all;
 
         SELECT @all_expenses = COALESCE(SUM(amount), 0) FROM expenses;
 
@@ -1166,11 +1268,11 @@ export async function initDb(): Promise<void> {
         SELECT @tot_supp = COUNT(*) FROM suppliers;
 
         SELECT @pending_inst = COUNT(*)
-          FROM installment_schedules WHERE status <> 'paid';
+          FROM installment_schedules WHERE status NOT IN ('paid', 'settled_early');
 
         SELECT @overdue_inst = COUNT(*)
           FROM installment_schedules
-          WHERE status <> 'paid'
+          WHERE status NOT IN ('paid', 'settled_early')
             AND TRY_CONVERT(DATE, due_date) < CAST(GETDATE() AS DATE);
 
         MERGE dashboard_metrics_cache AS target
@@ -1249,15 +1351,27 @@ export async function initDb(): Promise<void> {
     console.error('Error applying foreign key constraints:', err);
   }
 
-  // Normalize any negative zero rounding artifacts
+  // Normalize negative rounding artifacts and void historical double-counted reversal contra-entries
   try {
     await db.run(`
       UPDATE customers SET balance = 0 WHERE balance < 0 AND balance > -1;
       UPDATE sales SET remaining = 0 WHERE remaining < 0 AND remaining > -1;
+      UPDATE payments
+      SET status = 'voided'
+      WHERE status = 'posted'
+        AND type = 'out'
+        AND description LIKE 'Reverse of %'
+        AND void_ref IN (SELECT id FROM payments WHERE status = 'voided');
     `);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('Error normalizing negative rounding balances:', err);
+  }
+
+  // Final verification: ensure core schema tables actually exist
+  const usersTableCheck = await db.get<{ id: number | null }>("SELECT OBJECT_ID('users', 'U') AS id");
+  if (!usersTableCheck?.id) {
+    throw new Error('[DB] Schema verification failed: users table was not created.');
   }
 }
 

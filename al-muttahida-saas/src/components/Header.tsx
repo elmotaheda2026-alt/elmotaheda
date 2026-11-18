@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bell, LogOut, Mail, Menu, Search, Shield, User, Wifi, WifiOff } from 'lucide-react';
+import { Bell, HelpCircle, LogOut, Mail, Menu, Search, Shield, User, Wifi, WifiOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getNotifications, markAllNotificationsRead, markNotificationRead, syncNotifications } from '../lib/storage';
 import { checkBackendHealth, isMobileDevice } from '../lib/apiClient';
+import { canViewNotification } from '../lib/permissions';
+import HelpGuideDrawer from './HelpGuideDrawer';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -16,9 +18,12 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   const [isConnected, setIsConnected] = useState<boolean | null>(true);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showHelpGuide, setShowHelpGuide] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
-  const [notifications, setNotifications] = useState(() => getNotifications().slice(0, 5));
+  const [notifications, setNotifications] = useState(() =>
+    getNotifications().filter((n) => canViewNotification(user, n)).slice(0, 5),
+  );
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
 
   useEffect(() => {
@@ -27,11 +32,32 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
       const ok = await checkBackendHealth();
       if (active) setIsConnected(ok);
     };
+    const handleHealthEvent = (event: Event) => {
+      const detail = (event as CustomEvent<boolean>).detail;
+      if (active && typeof detail === 'boolean') {
+        setIsConnected(detail);
+      }
+    };
+    const handleOnline = () => {
+      void testConnection();
+    };
+    const handleOffline = () => {
+      if (active) setIsConnected(false);
+    };
+
     void testConnection();
-    const interval = window.setInterval(testConnection, 10000);
+    const interval = window.setInterval(testConnection, 5000);
+    window.addEventListener('api-health-change', handleHealthEvent);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleOnline);
     return () => {
       active = false;
       window.clearInterval(interval);
+      window.removeEventListener('api-health-change', handleHealthEvent);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleOnline);
     };
   }, []);
   const roleLabel =
@@ -58,7 +84,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
         console.error('Failed to sync notifications:', error);
       }
       if (active && !showNotifications) {
-        setNotifications(getNotifications().slice(0, 5));
+        setNotifications(getNotifications().filter((n) => canViewNotification(user, n)).slice(0, 5));
       }
     };
 
@@ -68,7 +94,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
       active = false;
       window.clearInterval(interval);
     };
-  }, [showNotifications]);
+  }, [showNotifications, user]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -91,14 +117,18 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   };
 
   const refreshNotificationState = () => {
-    setNotifications(getNotifications().slice(0, 5));
+    setNotifications(getNotifications().filter((n) => canViewNotification(user, n)).slice(0, 5));
   };
 
-  const openNotifications = async () => {
+  const openNotifications = () => {
     const nextOpen = !showNotifications;
     setShowNotifications(nextOpen);
-    if (!nextOpen) return;
+    if (nextOpen) {
+      refreshNotificationState();
+    }
+  };
 
+  const handleMarkAllRead = async () => {
     setNotifications((current) => current.map((notification) => ({ ...notification, isRead: true })));
     try {
       await markAllNotificationsRead();
@@ -164,6 +194,16 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
             )}
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowHelpGuide(true)}
+            title="دليل المستخدم — شرح الصفحة الحالية"
+            aria-label="دليل المستخدم"
+            className="rounded-xl p-2 text-slate-600 hover:bg-slate-100 hover:text-blue-700 transition-colors cursor-pointer"
+          >
+            <HelpCircle size={18} />
+          </button>
+
           <div className="relative">
             <button onClick={openNotifications} className="relative rounded-xl p-2 hover:bg-slate-100">
               <Bell size={18} className="text-slate-600" />
@@ -176,8 +216,17 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
 
             {showNotifications && (
                <div ref={notificationsRef} className="absolute left-0 top-full z-50 mt-2 w-80 rounded-2xl border border-slate-200 bg-white shadow-xl">
-                <div className="border-b border-slate-100 p-4">
+                <div className="border-b border-slate-100 p-4 flex items-center justify-between gap-2">
                   <h3 className="font-bold text-slate-800">الإشعارات</h3>
+                  {unreadCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleMarkAllRead}
+                      className="text-xs font-bold text-blue-600 hover:text-blue-800 cursor-pointer"
+                    >
+                      تحديد الكل كمقروء
+                    </button>
+                  )}
                 </div>
                 <div className="max-h-72 overflow-y-auto">
                   {notifications.length === 0 ? (
@@ -199,23 +248,24 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
             )}
           </div>
 
-          <div ref={userMenuRef} className="relative flex items-center gap-3 border-r border-slate-200 pr-3">
+          <div ref={userMenuRef} className="relative border-r border-slate-200 pr-2">
             <button
               type="button"
               onClick={() => {
                 setShowUserMenu((current) => !current);
                 setShowNotifications(false);
               }}
-              className="absolute inset-0 z-10 rounded-2xl transition-colors hover:bg-slate-100"
+              className="flex items-center gap-3 rounded-2xl px-2.5 py-1.5 transition-colors hover:bg-slate-100 cursor-pointer"
               aria-label="فتح بيانات المستخدم"
-            />
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-100">
-              <User size={16} className="text-sky-600" />
-            </div>
-            <div className="hidden sm:block">
-              <p className="text-sm font-semibold text-slate-800">{user?.name}</p>
-              <p className="text-xs text-slate-500">{roleLabel}</p>
-            </div>
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-100 shrink-0">
+                <User size={16} className="text-sky-600" />
+              </div>
+              <div className="hidden sm:block text-right">
+                <p className="text-sm font-semibold text-slate-800">{user?.name}</p>
+                <p className="text-xs text-slate-500">{roleLabel}</p>
+              </div>
+            </button>
             {showUserMenu && (
               <div className="absolute left-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white text-right shadow-xl">
                 <div className="bg-slate-50 p-4">
@@ -261,6 +311,7 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
           </div>
         </div>
       </div>
+      <HelpGuideDrawer isOpen={showHelpGuide} onClose={() => setShowHelpGuide(false)} />
     </header>
   );
 }

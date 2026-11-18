@@ -1,10 +1,25 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
 import { Permission } from './types.js';
 
 export function uid() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return crypto.randomUUID();
+}
+
+export async function isPeriodClosed(db: any, dateStr: string): Promise<boolean> {
+  if (!dateStr) return false;
+  const day = String(dateStr).slice(0, 10);
+  const month = String(dateStr).slice(0, 7);
+  const closed = await db.get(
+    `SELECT 1 FROM closing_periods 
+     WHERE status = 'closed' 
+       AND ((period_type = 'daily' AND period_date = ?) OR (period_type = 'monthly' AND period_date = ?))`,
+    day,
+    month
+  );
+  return !!closed;
 }
 
 export async function hashPassword(password: string) {

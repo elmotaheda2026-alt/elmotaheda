@@ -16,11 +16,13 @@ import {
   MapPin,
   Send,
   Scale,
+  Trash2,
 } from 'lucide-react';
 import { Supplier, SupplierStatement } from '../types';
 import { getSupplierStatement } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
+import { isAdmin } from '../lib/permissions';
 import { formatWholeCurrency } from '../lib/utils';
 import { formatDateDisplay, today } from '../lib/dateUtils';
 import { api, isApiMode } from '../lib/apiClient';
@@ -42,7 +44,8 @@ export default function SupplierStatementModal({
   onBalanceUpdated,
 }: SupplierStatementModalProps) {
   const { settings, user } = useAuth();
-  const { showToast } = useDialog();
+  const { confirmDialog, showToast } = useDialog();
+  const [deletingPurchaseId, setDeletingPurchaseId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [statement, setStatement] = useState<SupplierStatement | null>(null);
@@ -111,6 +114,29 @@ export default function SupplierStatementModal({
       }
       return next;
     });
+  };
+
+  const handleDeletePurchase = async (purchaseId: string, docLabel: string) => {
+    const confirmed = await confirmDialog({
+      title: 'تأكيد إلغاء فاتورة شراء',
+      message: `هل أنت متأكد من إلغاء فاتورة الشراء (${docLabel})؟ سيتم خصم كمياتها من المخزون وعكس قيد المورد والدفعة المقدمة.`,
+      confirmText: 'نعم، إلغاء الفاتورة',
+      cancelText: 'تراجع',
+      type: 'danger',
+    });
+    if (!confirmed) return;
+
+    setDeletingPurchaseId(purchaseId);
+    try {
+      await api.deletePurchase(purchaseId);
+      showToast('تم إلغاء فاتورة الشراء وعكس قيودها بنجاح', 'success');
+      await loadStatement();
+      onBalanceUpdated?.();
+    } catch (err: any) {
+      showToast(err?.message || 'تعذر إلغاء فاتورة الشراء', 'error');
+    } finally {
+      setDeletingPurchaseId(null);
+    }
   };
 
   const formatCurrency = (amt: number) => formatWholeCurrency(amt, settings?.currency || 'ج.م');
@@ -217,7 +243,9 @@ export default function SupplierStatementModal({
       const docNumber = tx.docNumber && tx.docNumber !== '—' ? tx.docNumber : '-';
       const creditStr = tx.credit > 0 ? `+${formatWholeCurrency(tx.credit, currencyStr)}` : '-';
       const debitStr = tx.debit > 0 ? `-${formatWholeCurrency(tx.debit, currencyStr)}` : '-';
-      const balanceStr = formatWholeCurrency(tx.runningBalance, currencyStr);
+      const balanceStr = tx.runningBalance < 0
+        ? `${formatWholeCurrency(Math.abs(tx.runningBalance), currencyStr)} (لنا)`
+        : formatWholeCurrency(tx.runningBalance, currencyStr);
 
       let itemsHtml = '';
       if (tx.items && tx.items.length > 0) {
@@ -261,7 +289,19 @@ export default function SupplierStatementModal({
 
     const totalPurchasesFormatted = formatWholeCurrency(statement?.summary?.totalPurchasesAmount ?? 0, currencyStr);
     const totalPaidFormatted = formatWholeCurrency(statement?.summary?.totalPaymentsAmount ?? 0, currencyStr);
-    const currentBalanceFormatted = formatWholeCurrency(currentBal, currencyStr);
+    const currentBalanceFormatted = currentBal < 0
+      ? formatWholeCurrency(Math.abs(currentBal), currencyStr)
+      : formatWholeCurrency(currentBal, currencyStr);
+    const currentBalanceLabel = currentBal > 0
+      ? 'الرصيد المستحق'
+      : currentBal < 0
+        ? 'رصيد لنا عند المورد'
+        : 'الحساب مصفى';
+    const currentBalanceCardStyle = currentBal > 0
+      ? 'background:#fff1f2; border-color:#fecdd3;'
+      : 'background:#f0fdf4; border-color:#86efac;';
+    const currentBalanceTextStyle = currentBal > 0 ? 'color:#be123c;' : 'color:#15803d;';
+    const currentBalanceValueStyle = currentBal > 0 ? 'color:#9f1239;' : 'color:#166534;';
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -270,14 +310,15 @@ export default function SupplierStatementModal({
         <meta charset="utf-8" />
         <title>كشف حساب مورد - ${supplier.name}</title>
         <style>
-          @page { size: A4; margin: 12mm 10mm; }
+          @page { size: A4; margin: 0; }
           body {
             font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
             color: #0f172a;
             margin: 0;
-            padding: 0;
+            padding: 12mm 10mm;
             direction: rtl;
             background: #fff;
+            box-sizing: border-box;
           }
           .header {
             display: flex;
@@ -379,9 +420,9 @@ export default function SupplierStatementModal({
             <span style="color:#15803d;">إجمالي المسدد</span>
             <strong style="color:#166534;">${totalPaidFormatted}</strong>
           </div>
-          <div class="summary-card" style="background:#fff1f2; border-color:#fecdd3;">
-            <span style="color:#be123c;">الرصيد المستحق</span>
-            <strong style="color:#9f1239;">${currentBalanceFormatted}</strong>
+          <div class="summary-card" style="${currentBalanceCardStyle}">
+            <span style="${currentBalanceTextStyle}">${currentBalanceLabel}</span>
+            <strong style="${currentBalanceValueStyle}">${currentBalanceFormatted}</strong>
           </div>
         </div>
 
@@ -425,6 +466,7 @@ export default function SupplierStatementModal({
       width: 900,
       height: 800,
       delayMs: 250,
+      paperSize: 'a4',
     });
     if (!opened) {
       showToast('يرجى السماح بالنوافذ المنبثقة لطباعة كشف الحساب', 'warning');
@@ -447,7 +489,7 @@ export default function SupplierStatementModal({
     .reduce((acc, t) => acc + (t.debit || 0), 0);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-4 animate-fadeIn">
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 animate-fadeIn">
       <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[92vh] shadow-2xl border border-slate-200 flex flex-col overflow-hidden relative">
         {/* Harmonious Header Bar */}
         <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
@@ -470,7 +512,11 @@ export default function SupplierStatementModal({
                       : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   }`}
                 >
-                  {currentBal > 0 ? `الرصيد: ${formatCurrency(currentBal)}` : 'الحساب مصفى تماماً'}
+                  {currentBal > 0
+                    ? `الرصيد المستحق: ${formatCurrency(currentBal)}`
+                    : currentBal < 0
+                      ? `رصيد دائن لنا: ${formatCurrency(Math.abs(currentBal))}`
+                      : 'الحساب مصفى تماماً'}
                 </span>
               </div>
               <div className="flex items-center gap-4 text-xs text-slate-500 mt-0.5 flex-wrap">
@@ -680,17 +726,25 @@ export default function SupplierStatementModal({
                     currentBal > 0 ? 'text-rose-800' : 'text-emerald-800'
                   }`}
                 >
-                  الرصيد
+                  {currentBal > 0
+                    ? 'الرصيد المستحق للمورد'
+                    : currentBal < 0
+                      ? 'رصيد لنا عند المورد'
+                      : 'الرصيد'}
                 </span>
                 <span
                   className={`text-base sm:text-lg font-black font-mono ${
                     currentBal > 0 ? 'text-rose-700' : 'text-emerald-700'
                   }`}
                 >
-                  {formatCurrency(currentBal)}
+                  {formatCurrency(Math.abs(currentBal))}
                 </span>
                 <span className="text-[10px] text-slate-500 block mt-0.5">
-                  {currentBal > 0 ? 'مبلغ مستحق للمورد' : 'الحساب مصفى تماماً'}
+                  {currentBal > 0
+                    ? 'مبلغ مستحق للمورد'
+                    : currentBal < 0
+                      ? 'دفعة مقدمة تُخصم من الفواتير القادمة'
+                      : 'الحساب مصفى تماماً'}
                 </span>
               </div>
               <div
@@ -872,18 +926,32 @@ export default function SupplierStatementModal({
                                 <span className="truncate" title={tx.type === 'opening_balance' ? 'الرصيد المسجل للمورد' : tx.description}>
                                   {tx.type === 'opening_balance' ? 'الرصيد المسجل للمورد' : tx.description}
                                 </span>
-                                {hasItems && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleInvoiceItems(tx.id)}
-                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition-colors shrink-0 cursor-pointer"
-                                    title="عرض أو إخفاء تفاصيل أصناف الفاتورة"
-                                  >
-                                    <Package size={10} />
-                                    <span>{tx.items?.length} صنف</span>
-                                    {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                                  </button>
-                                )}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {hasItems && (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleInvoiceItems(tx.id)}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition-colors cursor-pointer"
+                                      title="عرض أو إخفاء تفاصيل أصناف الفاتورة"
+                                    >
+                                      <Package size={10} />
+                                      <span>{tx.items?.length} صنف</span>
+                                      {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                                    </button>
+                                  )}
+                                  {tx.type === 'purchase' && isApiMode() && isAdmin(user) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePurchase(tx.id, tx.docNumber || tx.description)}
+                                      disabled={deletingPurchaseId === tx.id}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition-colors cursor-pointer disabled:opacity-50"
+                                      title="إلغاء فاتورة الشراء واسترجاع أثرها"
+                                    >
+                                      <Trash2 size={10} />
+                                      <span>{deletingPurchaseId === tx.id ? 'جاري الإلغاء...' : 'إلغاء'}</span>
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </td>
 
@@ -906,7 +974,9 @@ export default function SupplierStatementModal({
                                     : 'text-emerald-700 font-bold'
                                 }`}
                               >
-                                {formatCurrency(tx.runningBalance)}
+                                {tx.runningBalance < 0
+                                  ? `${formatCurrency(Math.abs(tx.runningBalance))} (لنا)`
+                                  : formatCurrency(tx.runningBalance)}
                               </span>
                             </td>
                           </tr>
@@ -968,7 +1038,13 @@ export default function SupplierStatementModal({
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <span>الرصيد المستحق:</span>
+                <span>
+                  {currentBal > 0
+                    ? 'الرصيد المستحق:'
+                    : currentBal < 0
+                      ? 'رصيد دائن لنا عند المورد:'
+                      : 'حالة الحساب:'}
+                </span>
                 <span
                   className={`text-sm font-black font-mono px-3 py-0.5 rounded-md ${
                     currentBal > 0
@@ -976,7 +1052,7 @@ export default function SupplierStatementModal({
                       : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                   }`}
                 >
-                  {formatCurrency(currentBal)}
+                  {currentBal === 0 ? 'مصفى (0)' : formatCurrency(Math.abs(currentBal))}
                 </span>
               </div>
             </div>

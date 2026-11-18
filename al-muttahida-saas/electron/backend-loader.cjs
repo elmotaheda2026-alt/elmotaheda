@@ -114,11 +114,10 @@ function startBackend() {
 
     const env = {
       PORT: '4000',
-      JWT_SECRET: 'AlMuttahida_Secure_Production_JWT_Secret_Key_2026_Fallback',
       DB_HOST: '127.0.0.1',
       DB_PORT: '1433',
-      DB_USER: 'sa',
-      DB_PASSWORD: '',
+      DB_USER: 'alm_app',
+      DB_PASSWORD: 'Alm@2026#App',
       DB_NAME: 'AlMuttahida_New',
       DB_ENCRYPT: 'false',
       DB_TRUST_CERT: 'true',
@@ -127,26 +126,7 @@ function startBackend() {
       ELECTRON_RUN_AS_NODE: '1',
     };
 
-    // Load config.json if present (check %PROGRAMDATA% first, then %APPDATA%)
-    const configCandidates = [
-      path.join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Al-Muttahida ERP', 'config.json'),
-      path.join(getAppDataDir(), 'config.json'),
-    ];
-    for (const appConfigFile of configCandidates) {
-      try {
-        if (fs.existsSync(appConfigFile)) {
-          const parsed = JSON.parse(fs.readFileSync(appConfigFile, 'utf-8'));
-          if (parsed.host) env.DB_HOST = parsed.host;
-          if (parsed.port) env.DB_PORT = String(parsed.port);
-          if (parsed.database) env.DB_NAME = parsed.database;
-          break;
-        }
-      } catch (err) {
-        console.warn('Could not read config.json:', err.message);
-      }
-    }
-
-    // Read .env file if present
+    // Read .env file first as base defaults
     const envPath = getBackendEnvPath();
     if (envPath) {
       try {
@@ -167,6 +147,34 @@ function startBackend() {
         });
       } catch (err) {
         console.warn('Could not read .env file:', err.message);
+      }
+    }
+
+    // Load config.json if present (overrides .env defaults; check %PROGRAMDATA% first, then %APPDATA%)
+    const configCandidates = [
+      path.join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'Al-Muttahida ERP', 'config.json'),
+      path.join(getAppDataDir(), 'config.json'),
+    ];
+    for (const appConfigFile of configCandidates) {
+      try {
+        if (fs.existsSync(appConfigFile)) {
+          const raw = fs.readFileSync(appConfigFile, 'utf-8').replace(/^\uFEFF/, '');
+          const parsed = JSON.parse(raw);
+          if (parsed.host || parsed.lastSuccessfulServer) {
+            env.DB_HOST = parsed.host || parsed.lastSuccessfulServer;
+          }
+          if (parsed.dbPort && Number(parsed.dbPort) !== 4000) {
+            env.DB_PORT = String(parsed.dbPort);
+          } else {
+            env.DB_PORT = '1433';
+          }
+          if (parsed.dbUser) env.DB_USER = parsed.dbUser;
+          if (parsed.dbPassword) env.DB_PASSWORD = parsed.dbPassword;
+          if (parsed.database) env.DB_NAME = parsed.database;
+          break;
+        }
+      } catch (err) {
+        console.warn('Could not read config.json:', err.message);
       }
     }
 

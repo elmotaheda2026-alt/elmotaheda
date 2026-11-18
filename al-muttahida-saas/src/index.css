@@ -115,6 +115,11 @@
     @apply flex flex-col h-full flex-1 min-h-0 overflow-hidden space-y-3;
   }
 
+  /* Prevent space-y-* parent margins from shifting fixed fullscreen overlays down from top: 0 */
+  .fixed.inset-0 {
+    margin: 0 !important;
+  }
+
   .desktop-table-card {
     @apply flex-1 min-h-[260px] md:min-h-[420px] flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden;
   }

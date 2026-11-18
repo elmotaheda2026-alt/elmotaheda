@@ -11,15 +11,18 @@ import {
   Printer,
   FileSpreadsheet,
   Edit3,
+  Eye,
   CalendarCheck,
   ArrowRight,
   Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { Customer, Product, PurchaseItem, SaleItem, Supplier, SalesRep, Sale } from '../types';
 import {
   createNotification,
   createPayment,
   createProduct,
+  deleteProduct,
   createPurchase,
   createSale,
   getCustomers,
@@ -30,6 +33,7 @@ import {
   getSales,
   updateSale,
   deleteSale,
+  returnSale,
   syncSales,
   syncCustomers,
   syncProducts,
@@ -38,7 +42,7 @@ import {
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
-import { isAdmin } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -127,7 +131,9 @@ const normalizeArabic = (str: string): string => {
 export default function Invoices() {
   const { settings, user } = useAuth();
   const { confirmDialog, showToast } = useDialog();
-  const canDelete = isAdmin(user) && user?.role !== 'manager';
+  const canDelete = isAdmin(user);
+  const canWriteSale = hasPermission(user, 'sales:write');
+  const [cashPaidManuallyEdited, setCashPaidManuallyEdited] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -151,7 +157,8 @@ export default function Invoices() {
     return customers.filter(
       (c) =>
         normalizeArabic(c.name).includes(term) ||
-        (c.phone && c.phone.includes(term))
+        (c.phone && c.phone.includes(term)) ||
+        (c.nationalId && c.nationalId.includes(term))
     );
   }, [customers, customerSearchTerm]);
 
@@ -319,6 +326,15 @@ export default function Invoices() {
   const [deferPenaltyPaymentType, setDeferPenaltyPaymentType] = useState<'add_to_debt' | 'collect_cash'>('add_to_debt');
   const [deferLoading, setDeferLoading] = useState(false);
   const [deferMessage, setDeferMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [rescheduleModalSale, setRescheduleModalSale] = useState<Sale | null>(null);
+  const [rescheduleMonths, setRescheduleMonths] = useState<number>(6);
+  const [rescheduleExtraInterest, setRescheduleExtraInterest] = useState<number>(0);
+  const [rescheduleStartDate, setRescheduleStartDate] = useState<string>('');
+  const [rescheduleReason, setRescheduleReason] = useState<string>('');
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
+  const [rescheduleMessage, setRescheduleMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [detailsModalSale, setDetailsModalSale] = useState<Sale | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const customerInputRef = useRef<HTMLInputElement>(null);
   const productSelectRef = useRef<HTMLSelectElement>(null);
   const quantityInputRef = useRef<HTMLInputElement>(null);
@@ -394,7 +410,17 @@ export default function Invoices() {
   }, [showSearchModal, modalSearchQuery]);
 
   const handleLoadForEdit = (sale: Sale) => {
+    if (sale.status === 'cancelled') {
+      setMessage({ type: 'error', text: 'لا يمكن تعديل تعاقد ملغى أو مرتجع.' });
+      return;
+    }
+    if (sale.locked || Number(sale.paid || 0) > 0) {
+      setMessage({ type: 'error', text: 'هذا التعاقد مقفل لوجود مدفوعات مسددة عليه. يرجى عكس السدادات أولاً أو عمل مرتجع.' });
+      return;
+    }
+
     setEditingSaleId(sale.id);
+    setCashPaidManuallyEdited(true);
     setSelectedCustomerId(sale.customerId);
     setSelectedSalesRepId(sale.financing?.salesRepId || '');
     setInvoiceNumber(sale.invoiceNumber);
@@ -413,13 +439,23 @@ export default function Invoices() {
     setInvoiceNotes(sale.notes || '');
 
     setDraftItems(
-      (sale.items || []).map((item) => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discount: item.discount,
-        tax: item.tax,
-      }))
+      (sale.items || []).map((item) => {
+        const matchedProd = products.find((p) => p.id === item.productId);
+        const inferredSource: 'warehouse' | 'on_demand' =
+          item.fulfillmentType === 'on_demand' || matchedProd?.fulfillmentType === 'on_demand'
+            ? 'on_demand'
+            : 'warehouse';
+        return {
+          productId: item.productId,
+          productName: item.productName,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          discount: item.discount,
+          tax: item.tax,
+          sourceType: inferredSource,
+          cost: item.unitCost || matchedProd?.purchasePrice || item.unitPrice,
+        };
+      })
     );
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -427,6 +463,44 @@ export default function Invoices() {
       type: 'success',
       text: `تم تحميل بيانات التعاقد رقم ${sale.invoiceNumber} للتعديل والمراجعة بنجاح. يمكنك الآن تعديل أي خانات أو أصناف ثم الحفظ.`,
     });
+  };
+
+  const handleReturnContract = async (sale: Sale) => {
+    const isConfirmed = await confirmDialog({
+      title: 'تأكيد مرتجع وإلغاء التعاقد',
+      message: `هل أنت متأكد من عمل مرتجع وإلغاء للتعاقد رقم ${sale.invoiceNumber}؟`,
+      subMessage: sale.paid > 0
+        ? `سيتم رد مبلغ ${formatCurrency(sale.paid)} للعميل من الخزينة، وإرجاع البضاعة للمخزون، وإسقاط المديونية المتبقية.`
+        : 'سيتم إرجاع البضاعة للمخزون وإسقاط المديونية المتبقية مع الاحتفاظ بسجل العملية.',
+      confirmText: 'نعم، تأكيد المرتجع',
+      cancelText: 'تراجع',
+      type: 'danger',
+    });
+    if (!isConfirmed) return;
+
+    try {
+      const res = await returnSale(sale.id, {
+        reason: 'مرتجع فاتورة من سجل التعاقدات',
+        returnDate: today(),
+        refundAmount: Number(sale.paid || 0),
+      });
+      await refreshSalesList();
+      setModalContracts((current) =>
+        current.map((entry) =>
+          entry.id === sale.id
+            ? { ...entry, status: 'cancelled', remaining: 0 }
+            : entry,
+        ),
+      );
+      showToast(res.message || 'تم تسجيل المرتجع وإلغاء التعاقد بنجاح', 'success');
+      setMessage({ type: 'success', text: res.message || `تم تسجيل مرتجع التعاقد ${sale.invoiceNumber} بنجاح.` });
+      if (editingSaleId === sale.id) {
+        resetForm();
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'حدث خطأ أثناء تنفيذ المرتجع.', 'error');
+      setMessage({ type: 'error', text: err?.message || 'حدث خطأ أثناء تنفيذ المرتجع.' });
+    }
   };
 
   const handleDeleteContract = async (sale: Sale) => {
@@ -527,6 +601,105 @@ export default function Invoices() {
       setDeferMessage({ type: 'error', text: errorText });
     } finally {
       setDeferLoading(false);
+    }
+  };
+
+  const handleUndoDeferInstallment = async (saleId: string, installmentId: string) => {
+    const confirmed = await confirmDialog({
+      title: 'التراجع عن ترحيل القسط',
+      message: 'هل أنت متأكد من إلغاء الترحيل وإعادة جدول الأقساط والغرامات المرتبطة به لحالته السابقة؟',
+      confirmText: 'نعم، تراجع عن الترحيل',
+      cancelText: 'إلغاء',
+      type: 'warning',
+    });
+    if (!confirmed) return;
+
+    setDeferLoading(true);
+    setDeferMessage(null);
+    try {
+      const result = await api.undoDeferInstallment(saleId, installmentId);
+      if (result.sale && deferModalSale?.id === saleId) {
+        setDeferModalSale(result.sale);
+      } else if (deferModalSale?.id === saleId) {
+        setDeferModalSale(await api.getSale(saleId));
+      }
+      await refreshSalesList();
+      showToast(result.message || 'تم التراجع عن الترحيل بنجاح', 'success');
+      setDeferMessage({ type: 'success', text: result.message || 'تم التراجع عن الترحيل بنجاح.' });
+    } catch (err: any) {
+      const errorText = err?.message || 'تعذر التراجع عن ترحيل القسط.';
+      showToast(errorText, 'error');
+      setDeferMessage({ type: 'error', text: errorText });
+    } finally {
+      setDeferLoading(false);
+    }
+  };
+
+  const openDetailsModal = async (sale: Sale) => {
+    setDetailsModalSale(sale);
+    setShowSearchModal(false);
+    if (isApiMode() && (!sale.items || sale.items.length === 0)) {
+      setDetailsLoading(true);
+      try {
+        const fullSale = await api.getSale(sale.id);
+        if (fullSale) setDetailsModalSale(fullSale);
+      } catch (err) {
+        console.error('Failed to load full sale details:', err);
+      } finally {
+        setDetailsLoading(false);
+      }
+    }
+  };
+
+  const openRescheduleModal = (sale: Sale) => {
+    const unpaidSchedules = (sale.financing?.schedules ?? []).filter(
+      (s) => s.status !== 'paid' && s.status !== 'settled_early',
+    );
+    const defaultMonths = Math.max(2, unpaidSchedules.length + 3);
+    const firstPendingDate = unpaidSchedules[0]?.dueDate || addMonths(today(), 1);
+    setRescheduleModalSale(sale);
+    setRescheduleMonths(defaultMonths);
+    setRescheduleExtraInterest(0);
+    setRescheduleStartDate(firstPendingDate.includes('T') ? firstPendingDate.split('T')[0] : firstPendingDate);
+    setRescheduleReason('');
+    setRescheduleMessage(null);
+    setShowSearchModal(false);
+  };
+
+  const handleRescheduleSubmit = async () => {
+    if (!rescheduleModalSale) return;
+    if (!rescheduleMonths || rescheduleMonths < 1) {
+      setRescheduleMessage({ type: 'error', text: 'يرجى تحديد عدد الأقساط الجديدة (1 على الأقل).' });
+      return;
+    }
+    if (!rescheduleStartDate) {
+      setRescheduleMessage({ type: 'error', text: 'يرجى تحديد تاريخ بداية أول قسط جديد.' });
+      return;
+    }
+
+    setRescheduleLoading(true);
+    setRescheduleMessage(null);
+    try {
+      const result = await api.rescheduleSale(rescheduleModalSale.id, {
+        newInstallmentCount: Math.max(1, Math.round(rescheduleMonths)),
+        extraInterestPercent: Math.max(0, Number(rescheduleExtraInterest || 0)),
+        firstNewDueDate: rescheduleStartDate,
+        reason: rescheduleReason.trim(),
+      });
+      await refreshSalesList();
+      if (result.sale) {
+        setModalContracts((prev) =>
+          prev.map((item) => (item.id === result.sale.id ? result.sale : item)),
+        );
+      }
+      showToast(result.message || 'تمت إعادة جدولة المتبقي بنجاح', 'success');
+      setRescheduleModalSale(null);
+      setRescheduleMessage(null);
+    } catch (err: any) {
+      const errorText = err?.message || 'تعذر إعادة جدولة الأقساط.';
+      setRescheduleMessage({ type: 'error', text: errorText });
+    } finally {
+      setRescheduleLoading(false);
     }
   };
 
@@ -691,9 +864,15 @@ export default function Invoices() {
   }));
 
   const procurementSubtotal = procurementRows.reduce(
-    (sum, item) => sum + item.shortageQuantity * (item.product?.purchasePrice || 0),
+    (sum, item) => sum + item.shortageQuantity * (item.product?.purchasePrice || item.cost || 0),
     0,
   );
+
+  useEffect(() => {
+    if (!editingSaleId && paymentMethod !== 'installment' && !cashPaidManuallyEdited) {
+      setPaidAmount(Number(total.toFixed(2)));
+    }
+  }, [paymentMethod, total, editingSaleId, cashPaidManuallyEdited]);
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -704,6 +883,7 @@ export default function Invoices() {
 
   const resetForm = () => {
     setEditingSaleId(null);
+    setCashPaidManuallyEdited(false);
     setInvoiceNumber(getNextSaleInvoiceNumber());
     setInvoiceDate(today());
     setPaymentDate(today());
@@ -816,8 +996,19 @@ export default function Invoices() {
   };
 
   const addOnDemandItem = () => {
-    if (!onDemandName.trim()) {
+    const trimmedName = onDemandName.trim();
+    if (!trimmedName) {
       setMessage({ type: 'error', text: 'يرجى إدخال اسم الصنف.' });
+      return;
+    }
+    if (
+      selectedCustomer &&
+      normalizeArabic(trimmedName) === normalizeArabic(selectedCustomer.name)
+    ) {
+      setMessage({
+        type: 'error',
+        text: 'اسم الصنف مطابق لاسم العميل المختار! يرجى كتابة اسم الصنف الفعلي وليس اسم العميل.',
+      });
       return;
     }
     const cost = Number(onDemandPurchasePrice) || 0;
@@ -837,6 +1028,7 @@ export default function Invoices() {
 
     const tempId = `temp_ondemand_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const sup = suppliers.find((s) => s.id === onDemandSupplierId);
+    const cashSellPrice = Number(onDemandSalePrice) > 0 ? Number(onDemandSalePrice) : cost;
 
     setDraftItems((current) => [
       ...current,
@@ -844,7 +1036,7 @@ export default function Invoices() {
         productId: tempId,
         productName: onDemandName.trim(),
         quantity: qty,
-        unitPrice: cost,
+        unitPrice: cashSellPrice,
         cost: cost,
         discount: 0,
         tax: Number(onDemandTax) || 0,
@@ -924,8 +1116,19 @@ export default function Invoices() {
   };
 
   const handleQuickProductSave = async () => {
-    if (!quickProduct.name.trim()) {
+    const trimmedQuickName = quickProduct.name.trim();
+    if (!trimmedQuickName) {
       setMessage({ type: 'error', text: 'أدخل اسم الصنف السريع.' });
+      return;
+    }
+    if (
+      selectedCustomer &&
+      normalizeArabic(trimmedQuickName) === normalizeArabic(selectedCustomer.name)
+    ) {
+      setMessage({
+        type: 'error',
+        text: 'اسم الصنف مطابق لاسم العميل المختار! يرجى كتابة اسم الصنف الفعلي وليس اسم العميل.',
+      });
       return;
     }
 
@@ -967,6 +1170,128 @@ export default function Invoices() {
     setMessage({ type: 'success', text: `تم إنشاء الصنف ${createdProduct.name} ويمكن إضافته مباشرة للفاتورة.` });
   };
 
+  const ensureOnDemandProductsMap = async (): Promise<{
+    idMap: Map<string, string>;
+    createdProductIds: string[];
+  }> => {
+    const idMap = new Map<string, string>();
+    const createdProductIds: string[] = [];
+    for (const dItem of draftItems) {
+      if (dItem.sourceType === 'on_demand' && dItem.productId.startsWith('temp_ondemand_')) {
+        const cost = dItem.cost || dItem.unitPrice;
+        const created = await createProduct({
+          name: dItem.productName || 'صنف حسب الطلب',
+          barcode: null,
+          category: 'حسب الطلب',
+          fulfillmentType: 'on_demand',
+          unit: 'قطعة',
+          purchasePrice: cost,
+          salePrice: dItem.unitPrice,
+          discount: 0,
+          tax: dItem.tax,
+          quantity: 0,
+          minQuantity: 0,
+          description: 'صنف حسب الطلب',
+        });
+        idMap.set(dItem.productId, created.id);
+        createdProductIds.push(created.id);
+      }
+    }
+    return { idMap, createdProductIds };
+  };
+
+  const buildFinalSaleItems = (idMap: Map<string, string>): SaleItem[] =>
+    draftRows.map((item) => {
+      const realProductId = idMap.get(item.productId) || item.productId;
+      const prod = products.find((p) => p.id === realProductId);
+      return {
+        productId: realProductId,
+        productName: item.productName,
+        barcode: prod?.barcode || '',
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        unitCost: item.cost || Number(prod?.purchasePrice || item.unitPrice || 0),
+        discount: item.discount,
+        tax: item.tax,
+        total: item.total,
+        fulfillmentType: item.sourceType === 'warehouse' ? 'stocked' : 'on_demand',
+      };
+    });
+
+  const createAutoPurchasesForSale = async (
+    targetInvoiceNumber: string,
+    customerName: string,
+    idMap: Map<string, string>,
+  ): Promise<string> => {
+    let autoPurchaseNumber = '';
+    if (!autoProcureEnabled || procurementRows.length === 0) return autoPurchaseNumber;
+
+    const supplierGroups = new Map<string, typeof procurementRows>();
+    for (const row of procurementRows) {
+      const sId = row.supplierId || procurementSupplierId || selectedProcurementSupplier?.id;
+      if (!sId) continue;
+      const group = supplierGroups.get(sId) || [];
+      group.push(row);
+      supplierGroups.set(sId, group);
+    }
+
+    if (supplierGroups.size === 0 && selectedProcurementSupplier) {
+      supplierGroups.set(selectedProcurementSupplier.id, procurementRows);
+    }
+
+    for (const [sId, groupRows] of supplierGroups.entries()) {
+      const targetSupplier = suppliers.find((s) => s.id === sId) || selectedProcurementSupplier;
+      if (!targetSupplier) continue;
+
+      const purchaseItems: PurchaseItem[] = groupRows.map((item) => {
+        const realProductId = idMap.get(item.productId) || item.productId;
+        const unitPrice = item.product?.purchasePrice || item.cost || item.unitPrice || 0;
+        const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
+
+        return {
+          productId: realProductId,
+          productName: item.productName,
+          barcode: item.barcode,
+          quantity: item.shortageQuantity,
+          unitPrice,
+          discount: 0,
+          tax: taxPerUnit,
+          total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
+        };
+      });
+
+      const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+      const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
+      const purchaseTotal = purchaseSubtotal + purchaseTax;
+
+      const createdPurchase = await createPurchase({
+        supplierId: targetSupplier.id,
+        supplierName: targetSupplier.name,
+        items: purchaseItems,
+        subtotal: purchaseSubtotal,
+        discount: 0,
+        tax: purchaseTax,
+        total: purchaseTotal,
+        paid: 0,
+        remaining: purchaseTotal,
+        status: 'pending',
+        date: invoiceDate,
+        notes: `شراء تلقائي مرتبط بالفاتورة ${targetInvoiceNumber} للعميل ${customerName}`,
+        createdBy: user?.name || 'مدير النظام',
+      });
+
+      autoPurchaseNumber = createdPurchase.invoiceNumber;
+
+      createNotification({
+        type: 'info',
+        title: 'شراء تلقائي وتحديث مديونية المورد',
+        message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} وتحديث مديونية المورد ${targetSupplier.name} بمبلغ ${formatCurrency(purchaseTotal)}`,
+      });
+    }
+
+    return autoPurchaseNumber;
+  };
+
   const saveInvoice = async () => {
     setMessage(null);
     if (!selectedCustomer) {
@@ -989,12 +1314,21 @@ export default function Invoices() {
       return;
     }
 
+    if (autoProcureEnabled && procurementRows.some((r) => !r.supplierId && !procurementSupplierId)) {
+      setMessage({ type: 'error', text: 'لا يمكن إتمام العملية: يجب تحديد المورد لكل صنف حسب الطلب.' });
+      return;
+    }
+
     if (editingSaleId) {
+      let createdOnDemandIds: string[] = [];
       try {
+        const { idMap, createdProductIds } = await ensureOnDemandProductsMap();
+        createdOnDemandIds = createdProductIds;
+        const finalSaleItems = buildFinalSaleItems(idMap);
         const updatedSale = await updateSale(editingSaleId, {
           customerId: selectedCustomer.id,
           customerName: selectedCustomer.name,
-          items,
+          items: finalSaleItems,
           subtotal,
           discount: discountAmount,
           tax: taxAmount,
@@ -1005,6 +1339,7 @@ export default function Invoices() {
           date: invoiceDate,
           notes: invoiceNotes,
           createdBy: user?.name || 'مدير النظام',
+          replaceAutoPurchases: true,
           financing: {
             paymentMethod,
             salesRepId: selectedSalesRepId || undefined,
@@ -1014,17 +1349,18 @@ export default function Invoices() {
             upfrontAmount: paid,
             monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
           },
-        });
+        } as any);
+
+        await createAutoPurchasesForSale(updatedSale.invoiceNumber, selectedCustomer.name, idMap);
 
         createNotification({
           type: 'success',
-          title: 'تعديل تعاقد سابقى',
+          title: 'تعديل تعاقد سابق',
           message: `تم تعديل وحفظ التعاقد رقم ${updatedSale.invoiceNumber} للعميل ${selectedCustomer.name} بنجاح`,
         });
 
-        const refreshedProducts = getProducts();
-        setProducts(refreshedProducts);
-
+        await syncProducts();
+        setProducts(getProducts());
         setSales(sortSalesNewestFirst(getSales()));
 
         setMessage({
@@ -1036,60 +1372,32 @@ export default function Invoices() {
         setEditingSaleId(null);
         resetForm();
       } catch (err: any) {
+        for (const prodId of createdOnDemandIds) {
+          try {
+            await deleteProduct(prodId);
+          } catch (prodRollbackErr) {
+            console.error('[Invoices] Product rollback cleanup failed:', prodRollbackErr);
+          }
+        }
+        if (createdOnDemandIds.length > 0) {
+          try {
+            await syncProducts();
+            setProducts(getProducts());
+          } catch (syncErr) {
+            console.error('[Invoices] Product sync after rollback failed:', syncErr);
+          }
+        }
         setMessage({ type: 'error', text: err.message || 'حدث خطأ أثناء تعديل التعاقد' });
       }
       return;
     }
 
-    const missingSupplierRows = procurementRows.filter((r) => !r.supplierId);
-    if (missingSupplierRows.length > 0) {
-      setMessage({ type: 'error', text: 'لا يمكن إتمام العملية: يجب تحديد المورد لكل صنف حسب الطلب.' });
-      return;
-    }
-
+    let createdSaleId: string | null = null;
+    let createdOnDemandIds: string[] = [];
     try {
-      let autoPurchaseNumber = '';
-
-      // 1. Create on-demand products in database NOW upon saving invoice
-      const idMap = new Map<string, string>();
-      for (const dItem of draftItems) {
-        if (dItem.sourceType === 'on_demand' && dItem.productId.startsWith('temp_ondemand_')) {
-          const cost = dItem.cost || dItem.unitPrice;
-          const created = await createProduct({
-            name: dItem.productName || 'صنف حسب الطلب',
-            barcode: null,
-            category: 'حسب الطلب',
-            fulfillmentType: 'on_demand',
-            unit: 'قطعة',
-            purchasePrice: cost,
-            salePrice: dItem.unitPrice,
-            discount: 0,
-            tax: dItem.tax,
-            quantity: 0,
-            minQuantity: 0,
-            description: 'صنف حسب الطلب',
-          });
-          idMap.set(dItem.productId, created.id);
-        }
-      }
-
-      // Map sale items with new real product IDs
-      const finalSaleItems: SaleItem[] = draftRows.map((item) => {
-        const realProductId = idMap.get(item.productId) || item.productId;
-        const prod = products.find((p) => p.id === realProductId);
-        return {
-          productId: realProductId,
-          productName: item.productName,
-          barcode: prod?.barcode || '',
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          unitCost: item.cost || Number(prod?.purchasePrice || item.unitPrice || 0),
-          discount: item.discount,
-          tax: item.tax,
-          total: item.total,
-          fulfillmentType: item.sourceType === 'warehouse' ? 'stocked' : 'on_demand',
-        };
-      });
+      const { idMap, createdProductIds } = await ensureOnDemandProductsMap();
+      createdOnDemandIds = createdProductIds;
+      const finalSaleItems = buildFinalSaleItems(idMap);
 
       const createdSale = await createSale({
         customerId: selectedCustomer.id,
@@ -1115,72 +1423,13 @@ export default function Invoices() {
           monthlyInstallmentAmount: paymentMethod === 'installment' ? monthlyInstallment : undefined,
         },
       });
+      createdSaleId = createdSale.id;
 
-      if (autoProcureEnabled && procurementRows.length > 0) {
-        // Group by supplierId
-        const supplierGroups = new Map<string, typeof procurementRows>();
-        for (const row of procurementRows) {
-          const sId = row.supplierId || procurementSupplierId || selectedProcurementSupplier?.id;
-          if (!sId) continue;
-          const group = supplierGroups.get(sId) || [];
-          group.push(row);
-          supplierGroups.set(sId, group);
-        }
-
-        if (supplierGroups.size === 0 && selectedProcurementSupplier) {
-          supplierGroups.set(selectedProcurementSupplier.id, procurementRows);
-        }
-
-        for (const [sId, groupRows] of supplierGroups.entries()) {
-          const targetSupplier = suppliers.find((s) => s.id === sId) || selectedProcurementSupplier;
-          if (!targetSupplier) continue;
-
-          const purchaseItems: PurchaseItem[] = groupRows.map((item) => {
-            const realProductId = idMap.get(item.productId) || item.productId;
-            const unitPrice = item.product?.purchasePrice || item.unitPrice || 0;
-            const taxPerUnit = unitPrice * ((item.product?.tax || 0) / 100);
-
-            return {
-              productId: realProductId,
-              productName: item.productName,
-              barcode: item.barcode,
-              quantity: item.shortageQuantity,
-              unitPrice,
-              discount: 0,
-              tax: taxPerUnit,
-              total: item.shortageQuantity * unitPrice + item.shortageQuantity * taxPerUnit,
-            };
-          });
-
-          const purchaseSubtotal = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-          const purchaseTax = purchaseItems.reduce((sum, item) => sum + item.quantity * item.tax, 0);
-          const purchaseTotal = purchaseSubtotal + purchaseTax;
-
-          const createdPurchase = await createPurchase({
-            supplierId: targetSupplier.id,
-            supplierName: targetSupplier.name,
-            items: purchaseItems,
-            subtotal: purchaseSubtotal,
-            discount: 0,
-            tax: purchaseTax,
-            total: purchaseTotal,
-            paid: 0,
-            remaining: purchaseTotal,
-            status: 'pending',
-            date: invoiceDate,
-            notes: `شراء تلقائي مرتبط بالفاتورة ${createdSale.invoiceNumber} للعميل ${selectedCustomer.name}`,
-            createdBy: user?.name || 'مدير النظام',
-          });
-
-          autoPurchaseNumber = createdPurchase.invoiceNumber;
-
-          createNotification({
-            type: 'info',
-            title: 'شراء تلقائي وتحديث مديونية المورد',
-            message: `تم إنشاء فاتورة شراء ${createdPurchase.invoiceNumber} وتحديث مديونية المورد ${targetSupplier.name} بمبلغ ${formatCurrency(purchaseTotal)}`,
-          });
-        }
-      }
+      const autoPurchaseNumber = await createAutoPurchasesForSale(
+        createdSale.invoiceNumber,
+        selectedCustomer.name,
+        idMap,
+      );
 
       if (paid > 0) {
         if (isApiMode()) {
@@ -1240,6 +1489,28 @@ export default function Invoices() {
       resetForm();
     } catch (err: any) {
       console.error('[Invoices] Failed to save invoice', err);
+      if (createdSaleId) {
+        try {
+          await deleteSale(createdSaleId, user?.name || 'system');
+        } catch (rollbackErr) {
+          console.error('[Invoices] Rollback cleanup failed:', rollbackErr);
+        }
+      }
+      for (const prodId of createdOnDemandIds) {
+        try {
+          await deleteProduct(prodId);
+        } catch (prodRollbackErr) {
+          console.error('[Invoices] Product rollback cleanup failed:', prodRollbackErr);
+        }
+      }
+      if (createdOnDemandIds.length > 0) {
+        try {
+          await syncProducts();
+          setProducts(getProducts());
+        } catch (syncErr) {
+          console.error('[Invoices] Product sync after rollback failed:', syncErr);
+        }
+      }
       setMessage({ type: 'error', text: err.message || 'تعذر حفظ الفاتورة. راجع البيانات وحاول مرة أخرى.' });
     }
   };
@@ -1317,6 +1588,7 @@ export default function Invoices() {
                   <input
                     ref={customerInputRef}
                     autoFocus
+                    autoComplete="off"
                     value={customerSearchTerm}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -1399,7 +1671,20 @@ export default function Invoices() {
               </Field>
 
               <Field label="طريقة الدفع">
-                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)} className="input-ui">
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => {
+                    const nextMethod = e.target.value as PaymentMethod;
+                    setPaymentMethod(nextMethod);
+                    setCashPaidManuallyEdited(false);
+                    if (nextMethod === 'installment') {
+                      if (!editingSaleId) setPaidAmount(0);
+                    } else if (!editingSaleId) {
+                      setPaidAmount(Number(total.toFixed(2)));
+                    }
+                  }}
+                  className="input-ui"
+                >
                   <option value="cash">نقدي</option>
                   <option value="card">بطاقة</option>
                   <option value="transfer">تحويل</option>
@@ -1414,7 +1699,10 @@ export default function Invoices() {
                   step="0.01"
                   placeholder="0"
                   value={paidAmount === 0 ? '' : paidAmount}
-                  onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
+                  onChange={(e) => {
+                    setCashPaidManuallyEdited(true);
+                    setPaidAmount(Number(e.target.value) || 0);
+                  }}
                   className="input-ui font-black text-slate-800"
                   onKeyDown={(e) => ['e', 'E', '+', '-'].includes(e.key) && e.preventDefault()}
                 />
@@ -1616,10 +1904,11 @@ export default function Invoices() {
             {itemSourceMode === 'on_demand' && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50/20 p-4">
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12 items-end">
-                  <div className="lg:col-span-3">
+                  <div className="lg:col-span-2">
                     <Field label="اسم الصنف">
                       <input
                         type="text"
+                        autoComplete="off"
                         placeholder="اكتب اسم الصنف..."
                         value={onDemandName}
                         onChange={(e) => setOnDemandName(e.target.value)}
@@ -1641,7 +1930,20 @@ export default function Invoices() {
                     </Field>
                   </div>
 
-                  <div className="lg:col-span-3">
+                  <div className="lg:col-span-2">
+                    <Field label="سعر البيع الكاش">
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder={onDemandPurchasePrice ? String(onDemandPurchasePrice) : '0'}
+                        value={onDemandSalePrice}
+                        onChange={(e) => setOnDemandSalePrice(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="input-ui font-black text-emerald-700"
+                      />
+                    </Field>
+                  </div>
+
+                  <div className="lg:col-span-2">
                     <Field label="المورد *">
                       <div className="relative w-full">
                         <input
@@ -1947,26 +2249,40 @@ export default function Invoices() {
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-center">
-                              {canDelete && !isPaid ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeferModalSale(editingSale);
-                                    setDeferInstallmentId(sch.id);
-                                    setDeferNewDueDate(addMonths(sch.dueDate, 1));
-                                    setDeferPenaltyFee(0);
-                                    setDeferStrategy('shift_subsequent');
-                                    setDeferPenaltyPaymentType('add_to_debt');
-                                    setDeferMessage(null);
-                                  }}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs"
-                                >
-                                  <CalendarCheck size={12} />
-                                  ترحيل القسط
-                                </button>
-                              ) : (
-                                <span className="text-slate-400 text-[10px]">-</span>
-                              )}
+                              <div className="inline-flex items-center justify-center gap-1.5 flex-wrap">
+                                {canDelete && !isPaid && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeferModalSale(editingSale);
+                                      setDeferInstallmentId(sch.id);
+                                      setDeferNewDueDate(addMonths(sch.dueDate, 1));
+                                      setDeferPenaltyFee(0);
+                                      setDeferStrategy('shift_subsequent');
+                                      setDeferPenaltyPaymentType('add_to_debt');
+                                      setDeferMessage(null);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs"
+                                  >
+                                    <CalendarCheck size={12} />
+                                    ترحيل القسط
+                                  </button>
+                                )}
+                                {canDelete && isDeferred && isApiMode() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUndoDeferInstallment(editingSale.id, sch.id)}
+                                    disabled={deferLoading}
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded-lg text-[11px] font-bold transition-all"
+                                  >
+                                    <RotateCcw size={12} />
+                                    تراجع
+                                  </button>
+                                )}
+                                {(!canDelete || (isPaid && !isDeferred)) && (
+                                  <span className="text-slate-400 text-[10px]">-</span>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2034,7 +2350,7 @@ export default function Invoices() {
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs">
                           {procurementRows.map((item, idx) => {
-                            const unitCost = item.product?.purchasePrice || item.unitPrice || 0;
+                            const unitCost = item.product?.purchasePrice || item.cost || item.unitPrice || 0;
                             return (
                               <tr key={`procurement-${item.productId}-${idx}`} className="hover:bg-slate-50">
                                 <td className="px-4 py-3 font-black text-slate-800">{item.productName}</td>
@@ -2070,17 +2386,23 @@ export default function Invoices() {
             <div className="space-y-3">
               <SummaryRow label="العميل" value={selectedCustomer?.name || 'غير محدد'} />
               <SummaryRow label="إجمالي الأصناف" value={formatCurrency(subtotal)} />
+              <SummaryRow label="المقدم / المدفوع" value={formatCurrency(paid)} />
+              <SummaryRow
+                label="المبلغ المموَّل (أصل التمويل)"
+                value={formatCurrency(Math.max(preTaxTotal - upfrontAgainstItems, 0))}
+                tone="blue"
+                strong
+              />
               <SummaryRow label="إجمالي الفائدة" value={formatCurrency(taxAmount)} />
               <SummaryRow label="صافي الفاتورة" value={formatCurrency(total)} tone="green" strong />
-              <SummaryRow label="المقدم / المدفوع" value={formatCurrency(paid)} />
               <SummaryRow label="المتبقي" value={formatCurrency(remaining)} tone="amber" strong />
               <SummaryRow label="شراء مطلوب" value={formatCurrency(procurementSubtotal)} tone="slate" />
             </div>
 
             <div className="mt-5 grid gap-3">
-              {user?.role === 'manager' ? (
+              {!canWriteSale ? (
                 <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold text-center">
-                  حساب المشرف: وضع المتابعة والعرض فقط (لا يمكن إصدار أو تعديل الفواتير)
+                  حساب عرض فقط (ليس لديك صلاحية إصدار أو تعديل الفواتير)
                 </div>
               ) : (
                 <button
@@ -2195,7 +2517,7 @@ export default function Invoices() {
           onClick={() => setShowSearchModal(false)}
         >
           <div
-            className="w-full max-w-3xl h-[85vh] max-h-[680px] rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
+            className="w-full max-w-4xl h-[85vh] max-h-[680px] rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -2250,88 +2572,183 @@ export default function Invoices() {
                     لا توجد تعاقدات سابقة مسجلة أو مطابقة لبحثك الحالي.
                   </div>
                 ) : (
-                  modalContracts.map((sale) => (
-                    <div
-                      key={sale.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200/90 hover:border-blue-400 hover:bg-blue-50/35 transition-all shadow-xs bg-white"
-                    >
-                      <div className="space-y-1 text-right min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono font-black text-blue-700 bg-blue-50 border border-blue-200/80 px-2 py-0.5 rounded-md text-xs sm:text-sm">{sale.invoiceNumber}</span>
-                          <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold">
-                            {formatDateDisplay(sale.date)}
-                          </span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold ${sale.financing?.paymentMethod === 'installment' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}>
-                            {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
-                          </span>
-                        </div>
-                        <p className="font-bold text-slate-900 text-sm truncate">{sale.customerName}</p>
-                        <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
-                          <span>الإجمالي: <b className="text-slate-800 font-bold">{formatCurrency(sale.total)}</b></span>
-                          <span>•</span>
-                          <span>المتبقي: <b className={`font-bold ${sale.remaining > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{formatCurrency(sale.remaining)}</b></span>
-                        </div>
-                      </div>
+                  modalContracts.map((sale) => {
+                    const hasPayments = Number(sale.paid || 0) > 0;
+                    const isLocked = Boolean(sale.locked || hasPayments);
+                    const hasRemainingInstallments =
+                      sale.financing?.paymentMethod === 'installment' &&
+                      (sale.financing?.schedules?.length ?? 0) > 0 &&
+                      Number(sale.remaining || 0) > 0;
 
-                      {/* Actions */}
-                      <div className="flex items-center gap-1.5 shrink-0 justify-end sm:justify-start flex-wrap">
-                        {user?.role !== 'manager' && (
+                    return (
+                      <div
+                        key={sale.id}
+                        className="p-4 rounded-2xl border border-slate-200/90 hover:border-blue-400 hover:shadow-md transition-all bg-white"
+                      >
+                        {/* Top Info Row */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-right">
+                          <div className="space-y-1.5 min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-black text-blue-700 bg-blue-50 border border-blue-200/80 px-2.5 py-0.5 rounded-lg text-xs sm:text-sm">
+                                {sale.invoiceNumber}
+                              </span>
+                              <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-slate-100 text-slate-700 font-bold whitespace-nowrap">
+                                {formatDateDisplay(sale.date)}
+                              </span>
+                              <span
+                                className={`text-[11px] px-2.5 py-0.5 rounded-lg font-bold whitespace-nowrap ${
+                                  sale.financing?.paymentMethod === 'installment'
+                                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                {sale.financing?.paymentMethod === 'installment' ? 'تقسيط' : 'نقدي'}
+                              </span>
+                              {sale.status === 'cancelled' && (
+                                <span className="text-[11px] px-2.5 py-0.5 rounded-lg font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
+                                  ملغى / مرتجع
+                                </span>
+                              )}
+                            </div>
+                            <p className="font-extrabold text-slate-900 text-sm sm:text-base truncate">
+                              {sale.customerName}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs whitespace-nowrap">
+                              <span className="text-slate-500">الإجمالي: </span>
+                              <b className="text-slate-900 font-black">{formatCurrency(sale.total)}</b>
+                            </div>
+                            {Number(sale.subtotal || 0) > 0 && (
+                              <div className="px-3 py-1.5 rounded-xl bg-indigo-50/70 border border-indigo-200/80 text-xs whitespace-nowrap">
+                                <span className="text-indigo-700">المموَّل: </span>
+                                <b className="text-indigo-900 font-black">
+                                  {formatCurrency(
+                                    Math.max(
+                                      Number(sale.subtotal || 0) - Number(sale.financing?.upfrontAmount || 0),
+                                      0,
+                                    ),
+                                  )}
+                                </b>
+                              </div>
+                            )}
+                            <div
+                              className={`px-3 py-1.5 rounded-xl border text-xs whitespace-nowrap ${
+                                sale.remaining > 0
+                                  ? 'bg-rose-50/70 border-rose-200/80'
+                                  : 'bg-emerald-50/70 border-emerald-200/80'
+                              }`}
+                            >
+                              <span className="text-slate-600">المتبقي: </span>
+                              <b className={`font-black ${sale.remaining > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                                {formatCurrency(sale.remaining)}
+                              </b>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Clean Actions Row */}
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => void openDetailsModal(sale)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                              title="عرض كافة تفاصيل العقد والأصناف والأقساط (للقراءة فقط)"
+                            >
+                              <Eye size={13} />
+                              <span>عرض التفاصيل</span>
+                            </button>
+                            {sale.status !== 'cancelled' && (
+                              <>
+                                {canWriteSale && !isLocked && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleLoadForEdit(sale);
+                                      setShowSearchModal(false);
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                                  >
+                                    <Edit3 size={13} />
+                                    <span>تعديل البيانات</span>
+                                  </button>
+                                )}
+
+                                {canDelete && hasPayments && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReturnContract(sale)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                                    title="تسجيل مرتجع وإلغاء التعاقد مع استرداد المدفوع وإرجاع المخزون"
+                                  >
+                                    <RotateCcw size={13} />
+                                    <span>مرتجع / إلغاء</span>
+                                  </button>
+                                )}
+
+                                {canDelete && !hasPayments && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteContract(sale)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                                    title="حذف الفاتورة نهائياً لعدم وجود أي مدفوعات مسجلة عليها"
+                                  >
+                                    <Trash2 size={13} />
+                                    <span>حذف التعاقد</span>
+                                  </button>
+                                )}
+
+                                {canDelete && hasRemainingInstallments && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeferModalSale(sale);
+                                        setDeferInstallmentId('');
+                                        setDeferNewDueDate('');
+                                        setDeferPenaltyFee(0);
+                                        setDeferStrategy('shift_subsequent');
+                                        setDeferPenaltyPaymentType('add_to_debt');
+                                        setDeferMessage(null);
+                                        setShowSearchModal(false);
+                                      }}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                                    >
+                                      <CalendarCheck size={13} />
+                                      <span>ترحيل قسط</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openRescheduleModal(sale)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                                      title="تمديد أو تعديل عدد الأقساط المتبقية بدون المساس بالأقساط المدفوعة أو الخزينة"
+                                    >
+                                      <CalendarDays size={13} />
+                                      <span>إعادة جدولة المتبقي</span>
+                                    </button>
+                                  </>
+                                )}
+                              </>
+                            )}
+                          </div>
+
                           <button
                             type="button"
                             onClick={() => {
-                              handleLoadForEdit(sale);
+                              setSavedSaleForPrinting(sale);
                               setShowSearchModal(false);
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap mr-auto"
                           >
-                            <Edit3 size={12} />
-                            <span>تعديل البيانات</span>
+                            <Printer size={13} />
+                            <span>طباعة المستندات</span>
                           </button>
-                        )}
-                        {canDelete && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteContract(sale)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
-                          >
-                            <Trash2 size={12} />
-                            <span>حذف التعاقد</span>
-                          </button>
-                        )}
-                        {canDelete && sale.financing?.paymentMethod === 'installment' && (sale.financing?.schedules?.length ?? 0) > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDeferModalSale(sale);
-                              setDeferInstallmentId('');
-                              setDeferNewDueDate('');
-                              setDeferPenaltyFee(0);
-                              setDeferStrategy('shift_subsequent');
-                              setDeferPenaltyPaymentType('add_to_debt');
-                              setDeferMessage(null);
-                              setShowSearchModal(false);
-                            }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 cursor-pointer"
-                          >
-                            <CalendarCheck size={12} />
-                            <span>ترحيل قسط</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSavedSaleForPrinting(sale);
-                            setShowSearchModal(false);
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white rounded-lg text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
-                        >
-                          <Printer size={12} />
-                          <span>طباعة المستندات</span>
-                        </button>
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -2442,24 +2859,37 @@ export default function Invoices() {
                               </span>
                             </td>
                             <td className="px-4 py-3 text-center">
-                              {!isPaid && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeferInstallmentId(sch.id);
-                                    const suggestedDate = addMonths(sch.dueDate, 1);
-                                    setDeferNewDueDate(suggestedDate);
-                                    setDeferMessage(null);
-                                  }}
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${deferInstallmentId === sch.id
-                                      ? 'bg-violet-600 text-white'
-                                      : 'bg-violet-50 text-violet-700 hover:bg-violet-100'
-                                    }`}
-                                >
-                                  <ArrowRight size={12} />
-                                  ترحيل
-                                </button>
-                              )}
+                              <div className="inline-flex items-center justify-center gap-1.5 flex-wrap">
+                                {!isPaid && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeferInstallmentId(sch.id);
+                                      const suggestedDate = addMonths(sch.dueDate, 1);
+                                      setDeferNewDueDate(suggestedDate);
+                                      setDeferMessage(null);
+                                    }}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${deferInstallmentId === sch.id
+                                        ? 'bg-violet-600 text-white'
+                                        : 'bg-violet-50 text-violet-700 hover:bg-violet-100'
+                                      }`}
+                                  >
+                                    <ArrowRight size={12} />
+                                    ترحيل
+                                  </button>
+                                )}
+                                {isDeferred && canDelete && deferModalSale?.id !== 'draft-new-contract' && isApiMode() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUndoDeferInstallment(deferModalSale.id, sch.id)}
+                                    disabled={deferLoading}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-all"
+                                  >
+                                    <RotateCcw size={12} />
+                                    تراجع
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2592,6 +3022,431 @@ export default function Invoices() {
           </div>
         </div>
       )}
+
+      {/* ─── Reschedule Remaining Installments Modal (Admin Only) ────────── */}
+      {rescheduleModalSale && (() => {
+        const currentRemaining = Number(rescheduleModalSale.remaining || 0);
+        const safeExtraPct = Math.max(0, Number(rescheduleExtraInterest || 0));
+        const extraAmount = Math.round(((currentRemaining * safeExtraPct) / 100) * 100) / 100;
+        const newRemainingPreview = Math.round((currentRemaining + extraAmount) * 100) / 100;
+        const safeCount = Math.max(1, Math.round(Number(rescheduleMonths || 1)));
+        const monthlyPreview = Math.round(newRemainingPreview / safeCount);
+        const paidCount = (rescheduleModalSale.financing?.schedules ?? []).filter(
+          (s) => s.status === 'paid' || s.status === 'settled_early' || Number(s.paidAmount || 0) > 0,
+        ).length;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="w-full max-w-2xl rounded-[28px] bg-white shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-indigo-600 to-blue-700 p-6 text-white flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="text-xl font-bold flex items-center gap-2">
+                    <CalendarDays size={22} />
+                    إعادة جدولة المتبقي - {rescheduleModalSale.invoiceNumber}
+                  </h3>
+                  <p className="text-xs text-indigo-100 mt-1">
+                    تُحفظ الأقساط المدفوعة وإيصالات الخزينة كما هي تماماً، ويُعاد توزيع المبلغ المتبقي فقط على عدد الأشهر الجديد.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setRescheduleModalSale(null); setRescheduleMessage(null); }}
+                  className="text-white/80 hover:text-white text-3xl font-light p-1 leading-none cursor-pointer"
+                >&times;</button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 overflow-y-auto flex-1 space-y-5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <p className="text-slate-500 mb-0.5">العميل</p>
+                    <p className="font-bold text-slate-900 truncate">{rescheduleModalSale.customerName}</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <p className="text-slate-500 mb-0.5">المسدد (محمي)</p>
+                    <p className="font-black text-emerald-700">{formatCurrency(rescheduleModalSale.paid)}</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-rose-50/70 border border-rose-200">
+                    <p className="text-rose-700 mb-0.5">المتبقي الحالي</p>
+                    <p className="font-black text-rose-700">{formatCurrency(currentRemaining)}</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200">
+                    <p className="text-emerald-700 mb-0.5">أقساط محمية</p>
+                    <p className="font-black text-emerald-800">{paidCount} قسط</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1.5">عدد الأقساط الجديدة للمتبقي *</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={rescheduleMonths}
+                      onChange={(e) => setRescheduleMonths(Math.max(1, Number(e.target.value) || 1))}
+                      className="input-ui font-black text-indigo-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1.5">فائدة تمديد إضافية % (اختياري)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={200}
+                      step="0.5"
+                      value={rescheduleExtraInterest}
+                      onChange={(e) => setRescheduleExtraInterest(Math.max(0, Number(e.target.value) || 0))}
+                      className="input-ui font-bold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1.5">تاريخ بداية أول قسط جديد *</label>
+                    <DatePicker
+                      value={rescheduleStartDate}
+                      onChange={setRescheduleStartDate}
+                      className="w-full border-slate-200 px-3 py-2"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">ملاحظة / سبب إعادة الجدولة (اختياري)</label>
+                  <input
+                    type="text"
+                    value={rescheduleReason}
+                    onChange={(e) => setRescheduleReason(e.target.value)}
+                    placeholder="مثال: طلب العميل تمديد المدة لتخفيف قيمة القسط الشهري"
+                    className="input-ui text-xs"
+                  />
+                </div>
+
+                {/* Live Preview Box */}
+                <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
+                  <div>
+                    <p className="text-[11px] text-indigo-700 font-semibold">المتبقي الجديد</p>
+                    <p className="text-base font-black text-indigo-950">{formatCurrency(newRemainingPreview)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-indigo-700 font-semibold">قيمة القسط الشهري الجديد</p>
+                    <p className="text-base font-black text-emerald-700">{formatCurrency(monthlyPreview)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-indigo-700 font-semibold">ينتهي السداد في</p>
+                    <p className="text-sm font-black text-slate-800">
+                      {rescheduleStartDate ? formatDateDisplay(addMonths(rescheduleStartDate, safeCount - 1)) : '-'}
+                    </p>
+                  </div>
+                </div>
+
+                {rescheduleMessage && (
+                  <div className={`rounded-xl px-4 py-2.5 text-xs font-bold ${
+                    rescheduleMessage.type === 'success'
+                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                      : 'bg-rose-50 border border-rose-200 text-rose-700'
+                  }`}>
+                    {rescheduleMessage.text}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="bg-slate-50 p-4 border-t border-slate-100 flex items-center justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => { setRescheduleModalSale(null); setRescheduleMessage(null); }}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRescheduleSubmit}
+                  disabled={rescheduleLoading}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs transition-all cursor-pointer"
+                >
+                  {rescheduleLoading ? <Loader2 size={14} className="animate-spin" /> : <CalendarDays size={14} />}
+                  <span>تأكيد إعادة الجدولة</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ─── Read-Only Contract Details Modal ──────────────────────── */}
+      {detailsModalSale && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onClick={() => setDetailsModalSale(null)}
+        >
+          <div
+            className="w-full max-w-5xl max-h-[90vh] rounded-[24px] bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] px-6 py-4 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-xl font-black flex items-center gap-2.5">
+                  <Eye size={22} />
+                  <span>تفاصيل التعاقد — {detailsModalSale.invoiceNumber}</span>
+                  {detailsModalSale.status === 'cancelled' && (
+                    <span className="text-xs px-3 py-0.5 rounded-full bg-rose-500/90 text-white font-bold">
+                      ملغى / مرتجع
+                    </span>
+                  )}
+                </h3>
+                <p className="text-xs sm:text-sm text-blue-100 mt-1">
+                  عرض شامل لبيانات العقد والأصناف وجدول الأقساط (وضع القراءة فقط لحماية الحسابات)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailsModalSale(null)}
+                className="text-white/80 hover:text-white text-3xl font-light p-1 leading-none cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-5 bg-slate-50/60 custom-scrollbar">
+              {/* Top Info Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                <div className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
+                  <p className="text-xs font-semibold text-slate-500 mb-1">العميل</p>
+                  <p className="text-sm sm:text-[15px] font-black text-slate-900 leading-snug">{detailsModalSale.customerName}</p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
+                  <p className="text-xs font-semibold text-slate-500 mb-1">تاريخ التعاقد</p>
+                  <p className="text-sm sm:text-[15px] font-bold text-slate-900">{formatDateDisplay(detailsModalSale.date)}</p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
+                  <p className="text-xs font-semibold text-slate-500 mb-1">طريقة السداد</p>
+                  <p className="text-sm sm:text-[15px] font-bold text-indigo-700">
+                    {detailsModalSale.financing?.paymentMethod === 'installment'
+                      ? `تقسيط (${detailsModalSale.financing?.installmentMonths || detailsModalSale.financing?.schedules?.length || 0} شهر)`
+                      : detailsModalSale.financing?.paymentMethod === 'card'
+                      ? 'بطاقة'
+                      : detailsModalSale.financing?.paymentMethod === 'transfer'
+                      ? 'تحويل'
+                      : 'نقدي'}
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
+                  <p className="text-xs font-semibold text-slate-500 mb-1">مندوب المبيعات</p>
+                  <p className="text-sm sm:text-[15px] font-bold text-slate-900">
+                    {detailsModalSale.financing?.salesRepName || 'غير محدد'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Financial Summary */}
+              {(() => {
+                const upfront = Math.max(Number(detailsModalSale.financing?.upfrontAmount || 0), 0);
+                const financedPrincipal = Math.max(
+                  Number(detailsModalSale.subtotal || 0) - upfront,
+                  0,
+                );
+                const effectiveInterest =
+                  Number(detailsModalSale.tax || 0) > 0
+                    ? Number(detailsModalSale.tax)
+                    : Math.max(
+                        0,
+                        Number(detailsModalSale.total || 0) -
+                          Number(detailsModalSale.subtotal || 0) +
+                          Number(detailsModalSale.discount || 0),
+                      );
+                return (
+                  <div className="space-y-2.5">
+                    {/* Row 1: Contract Breakdown */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      <div className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-slate-500 mb-1">قيمة الأصناف</p>
+                        <p className="text-base sm:text-lg font-black text-slate-800 whitespace-nowrap">{formatCurrency(detailsModalSale.subtotal)}</p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-amber-700 mb-1">المقدم</p>
+                        <p className="text-base sm:text-lg font-black text-amber-800 whitespace-nowrap">{formatCurrency(upfront)}</p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-indigo-50/80 border border-indigo-200 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-indigo-700 mb-1">المبلغ المموَّل</p>
+                        <p className="text-base sm:text-lg font-black text-indigo-900 whitespace-nowrap">{formatCurrency(financedPrincipal)}</p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-slate-500 mb-1">الفائدة</p>
+                        <p className="text-base sm:text-lg font-black text-slate-800 whitespace-nowrap">{formatCurrency(effectiveInterest)}</p>
+                      </div>
+                    </div>
+
+                    {/* Row 2: Totals & Settlement */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <div className="p-3.5 rounded-2xl bg-blue-50/80 border border-blue-200 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-blue-700 mb-1">صافي العقد</p>
+                        <p className="text-base sm:text-lg font-black text-blue-900 whitespace-nowrap">{formatCurrency(detailsModalSale.total)}</p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-emerald-700 mb-1">المدفوع</p>
+                        <p className="text-base sm:text-lg font-black text-emerald-800 whitespace-nowrap">{formatCurrency(detailsModalSale.paid)}</p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200 shadow-2xs text-center">
+                        <p className="text-xs font-bold text-rose-700 mb-1">المتبقي</p>
+                        <p className="text-base sm:text-lg font-black text-rose-700 whitespace-nowrap">{formatCurrency(detailsModalSale.remaining)}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {detailsModalSale.notes && (
+                <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 text-sm text-amber-950 whitespace-pre-line leading-relaxed">
+                  <strong className="block mb-1 text-amber-900">ملاحظات العقد:</strong>
+                  {detailsModalSale.notes}
+                </div>
+              )}
+
+              {/* Items Table */}
+              <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 text-sm font-black text-slate-800">
+                  الأصناف المدرجة في العقد
+                </div>
+                {detailsLoading ? (
+                  <div className="py-10 text-center text-sm text-slate-500 font-bold flex items-center justify-center gap-2">
+                    <Loader2 size={18} className="animate-spin text-blue-600" />
+                    <span>جاري تحميل تفاصيل الأصناف...</span>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50/80 text-slate-600 border-b border-slate-200 text-xs sm:text-sm">
+                        <tr>
+                          <th className="px-4 py-3 text-right font-bold">الصنف</th>
+                          <th className="px-4 py-3 text-center font-bold">الكمية</th>
+                          <th className="px-4 py-3 text-right font-bold">سعر الوحدة</th>
+                          <th className="px-4 py-3 text-center font-bold">الخصم %</th>
+                          <th className="px-4 py-3 text-center font-bold">الفائدة %</th>
+                          <th className="px-4 py-3 text-right font-bold">الإجمالي</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(detailsModalSale.items ?? []).length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="px-4 py-7 text-center text-slate-400 font-semibold text-sm">
+                              لا توجد أصناف مسجلة لهذا العقد.
+                            </td>
+                          </tr>
+                        ) : (
+                          (detailsModalSale.items ?? []).map((item, idx) => (
+                            <tr key={`${item.productId}-${idx}`} className="hover:bg-slate-50/70">
+                              <td className="px-4 py-3 font-bold text-slate-900">{item.productName}</td>
+                              <td className="px-4 py-3 text-center font-bold text-slate-700">{item.quantity}</td>
+                              <td className="px-4 py-3 font-semibold text-slate-700">{formatCurrency(item.unitPrice)}</td>
+                              <td className="px-4 py-3 text-center text-slate-600">{item.discount || 0}%</td>
+                              <td className="px-4 py-3 text-center text-slate-600">{item.tax || 0}%</td>
+                              <td className="px-4 py-3 font-black text-blue-700">{formatCurrency(item.total)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Installments Schedule Table */}
+              {(detailsModalSale.financing?.schedules ?? []).length > 0 && (
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 text-sm font-black text-slate-800">
+                    جدول الأقساط ({detailsModalSale.financing?.schedules?.length || 0} قسط)
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50/80 text-slate-600 border-b border-slate-200 text-xs sm:text-sm">
+                        <tr>
+                          <th className="px-4 py-3 text-right font-bold">القسط</th>
+                          <th className="px-4 py-3 text-right font-bold">تاريخ الاستحقاق</th>
+                          <th className="px-4 py-3 text-right font-bold">القيمة</th>
+                          <th className="px-4 py-3 text-right font-bold">المدفوع</th>
+                          <th className="px-4 py-3 text-right font-bold">المتبقي</th>
+                          <th className="px-4 py-3 text-center font-bold">الحالة</th>
+                          <th className="px-4 py-3 text-right font-bold">ملاحظات</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(detailsModalSale.financing?.schedules ?? []).map((sch) => {
+                          const rem = Math.max(0, Number(sch.amount || 0) - Number(sch.paidAmount || 0));
+                          const isPaid = sch.status === 'paid' || sch.status === 'settled_early';
+                          return (
+                            <tr key={sch.id} className="hover:bg-slate-50/70">
+                              <td className="px-4 py-3 font-bold text-slate-900">القسط {sch.monthIndex}</td>
+                              <td className="px-4 py-3 font-semibold text-slate-700">{formatDateDisplay(sch.dueDate)}</td>
+                              <td className="px-4 py-3 font-bold text-slate-800">{formatCurrency(sch.amount)}</td>
+                              <td className="px-4 py-3 font-bold text-emerald-700">{formatCurrency(sch.paidAmount || 0)}</td>
+                              <td className="px-4 py-3 font-bold text-rose-700">{formatCurrency(rem)}</td>
+                              <td className="px-4 py-3 text-center">
+                                <span
+                                  className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                    isPaid
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : sch.status === 'partial'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-slate-100 text-slate-700'
+                                  }`}
+                                >
+                                  {isPaid ? 'مسدد' : sch.status === 'partial' ? 'جزئي' : 'مستحق'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-slate-500 text-xs sm:text-sm">{sch.notes || '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between gap-2 flex-wrap shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setDetailsModalSale(null);
+                  setShowSearchModal(true);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold rounded-xl text-sm transition-colors cursor-pointer"
+              >
+                <ArrowRight size={15} />
+                <span>العودة لسجل التعاقدات</span>
+              </button>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = detailsModalSale;
+                    setDetailsModalSale(null);
+                    setSavedSaleForPrinting(target);
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-bold rounded-xl text-sm transition-all cursor-pointer"
+                >
+                  <Printer size={15} />
+                  <span>طباعة المستندات</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDetailsModalSale(null)}
+                  className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl text-sm transition-colors cursor-pointer"
+                >
+                  إغلاق
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2661,7 +3516,7 @@ function SummaryRow({
 }: {
   label: string;
   value: string;
-  tone?: 'slate' | 'green' | 'red' | 'amber';
+  tone?: 'slate' | 'green' | 'red' | 'amber' | 'blue';
   strong?: boolean;
 }) {
   const toneClass = {
@@ -2669,6 +3524,7 @@ function SummaryRow({
     green: 'bg-emerald-50 text-emerald-700',
     red: 'bg-rose-50 text-rose-700',
     amber: 'bg-amber-50 text-amber-700',
+    blue: 'bg-blue-50 text-blue-800',
   }[tone];
 
   return (

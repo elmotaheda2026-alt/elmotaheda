@@ -1,36 +1,37 @@
-import React, { useEffect } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import companyLogo from './assets/company-logo-sm.jpg';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DialogProvider } from './context/DialogContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Users from './pages/Users';
-import Customers from './pages/Customers';
-import Suppliers from './pages/Suppliers';
-import Sales from './pages/Sales';
-import Invoices from './pages/Invoices';
-import Payments from './pages/Payments';
-import Expenses from './pages/Expenses';
-import Accounts from './pages/Accounts';
 
-import Settings from './pages/Settings';
-import Notifications from './pages/Notifications';
-import SalesReps from './pages/SalesReps';
-import CollectionStatement from './pages/CollectionStatement';
-import Shareholders from './pages/Shareholders';
-import ProductsInventory from './pages/ProductsInventory';
-import OnboardingWizard from './pages/OnboardingWizard';
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Users = lazy(() => import('./pages/Users'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Suppliers = lazy(() => import('./pages/Suppliers'));
+const Sales = lazy(() => import('./pages/Sales'));
+const Invoices = lazy(() => import('./pages/Invoices'));
+const Payments = lazy(() => import('./pages/Payments'));
+const Expenses = lazy(() => import('./pages/Expenses'));
+const Accounts = lazy(() => import('./pages/Accounts'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const SalesReps = lazy(() => import('./pages/SalesReps'));
+const CollectionStatement = lazy(() => import('./pages/CollectionStatement'));
+const Shareholders = lazy(() => import('./pages/Shareholders'));
+const ProductsInventory = lazy(() => import('./pages/ProductsInventory'));
+const OnboardingWizard = lazy(() => import('./pages/OnboardingWizard'));
 
 import ProtectedRoute from './components/ProtectedRoute';
+import { isAdmin } from './lib/permissions';
 import WhatsappReminderRunner from './components/WhatsappReminderRunner';
 import LoadingState from './components/LoadingState';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Building2 } from 'lucide-react';
 
 function AppRoutes() {
-  const { isAuthenticated, settings, isLoading } = useAuth();
+  const { isAuthenticated, user, settings, isLoading } = useAuth();
   const isNetworkWebBrowser =
     typeof window !== 'undefined' &&
     !(window as any).electronAPI &&
@@ -42,11 +43,13 @@ function AppRoutes() {
     settings.isConfigured;
 
   useEffect(() => {
-    // Keyboard shortcut (Ctrl + Shift + S or F2) to open Setup / Onboarding anytime
+    // Allow Ctrl+Shift+S/O for Admins (or when unauthenticated), and F2 only before login so it doesn't collide with form F2 shortcuts
     const handleKeyDown = (e: KeyboardEvent) => {
+      const canOpenOnboarding = !isAuthenticated || isAdmin(user);
+      if (!canOpenOnboarding) return;
       if (
         (e.ctrlKey && e.shiftKey && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'o')) ||
-        e.key === 'F2'
+        (!isAuthenticated && e.key === 'F2')
       ) {
         window.location.hash = '#/onboarding';
       }
@@ -60,7 +63,7 @@ function AppRoutes() {
     }
 
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isAuthenticated, user]);
 
   if (isLoading) {
     return (
@@ -90,15 +93,17 @@ function AppRoutes() {
   // If system is not configured yet, direct user to /onboarding
   if (!isConfigured) {
     return (
-      <Routes>
-        <Route path="/onboarding" element={<OnboardingWizard />} />
-        <Route path="*" element={<Navigate to="/onboarding" replace />} />
-      </Routes>
+      <Suspense fallback={<LoadingState />}>
+        <Routes>
+          <Route path="/onboarding" element={<OnboardingWizard />} />
+          <Route path="*" element={<Navigate to="/onboarding" replace />} />
+        </Routes>
+      </Suspense>
     );
   }
 
   return (
-    <>
+    <Suspense fallback={<LoadingState />}>
       <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
       <Routes>
         <Route path="/onboarding" element={<OnboardingWizard />} />
@@ -110,21 +115,21 @@ function AppRoutes() {
           <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
           <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
           <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
-          <Route path="sales" element={<ProtectedRoute adminOnly><Sales /></ProtectedRoute>} />
+          <Route path="sales" element={<ProtectedRoute permission="sales:read"><Sales /></ProtectedRoute>} />
           <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
           <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
           <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
-          <Route path="accounts" element={<ProtectedRoute adminOnly><Accounts /></ProtectedRoute>} />
+          <Route path="accounts" element={<ProtectedRoute permission="reports:read"><Accounts /></ProtectedRoute>} />
           <Route path="reports" element={<Navigate to="/accounts" replace />} />
 
           <Route path="settings" element={<ProtectedRoute permission="settings:manage"><Settings /></ProtectedRoute>} />
-          <Route path="notifications" element={<ProtectedRoute permission="notifications:read"><Notifications /></ProtectedRoute>} />
+          <Route path="notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
           <Route path="sales-reps" element={<ProtectedRoute permission="sales:read"><SalesReps /></ProtectedRoute>} />
           <Route path="collection-statement" element={<ProtectedRoute permission="payments:read"><CollectionStatement /></ProtectedRoute>} />
           <Route path="shareholders" element={<ProtectedRoute permission="shareholders:manage"><Shareholders /></ProtectedRoute>} />
         </Route>
       </Routes>
-    </>
+    </Suspense>
   );
 }
 

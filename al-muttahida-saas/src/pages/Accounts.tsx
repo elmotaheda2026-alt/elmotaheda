@@ -29,10 +29,18 @@ type DashboardMetrics = {
   cashInSafe: number;
   totalCustomersBalance: number;
   totalSuppliersBalance: number;
+  periodGrossSales: number;
+  periodEarlySettlementDiscounts: number;
   periodSales: number;
+  periodCostOfGoodsSold: number;
+  periodGrossProfit: number;
+  periodOperatingNetProfit: number;
   warehouseProfit: number;
+  realizedCashCollections: number;
+  realizedSaleMargin: number;
   realizedProfits: number;
   periodExpenses: number;
+  allTimeExpenses: number;
   monthlyAverageExpenses: number;
   accountingVariance: number;
   isBalanced: boolean;
@@ -92,7 +100,8 @@ function getPresetRange(key: PresetKey): { startDate: string; endDate: string } 
 
 function normalizeMetrics(
   data: Partial<DashboardMetrics> | null | undefined,
-  computedCash?: number
+  computedCash?: number,
+  computedAllTimeExpenses?: number
 ): DashboardMetrics {
   const cashInSafe = computedCash !== undefined ? computedCash : toNumber(data?.cashInSafe);
 
@@ -100,10 +109,18 @@ function normalizeMetrics(
     cashInSafe,
     totalCustomersBalance: toNumber(data?.totalCustomersBalance),
     totalSuppliersBalance: toNumber(data?.totalSuppliersBalance),
+    periodGrossSales: toNumber(data?.periodGrossSales ?? data?.periodSales),
+    periodEarlySettlementDiscounts: toNumber(data?.periodEarlySettlementDiscounts),
     periodSales: toNumber(data?.periodSales),
+    periodCostOfGoodsSold: toNumber(data?.periodCostOfGoodsSold),
+    periodGrossProfit: toNumber(data?.periodGrossProfit ?? data?.warehouseProfit),
+    periodOperatingNetProfit: toNumber(data?.periodOperatingNetProfit),
     warehouseProfit: toNumber(data?.warehouseProfit),
+    realizedCashCollections: toNumber(data?.realizedCashCollections),
+    realizedSaleMargin: toNumber(data?.realizedSaleMargin),
     realizedProfits: toNumber(data?.realizedProfits),
     periodExpenses: toNumber(data?.periodExpenses),
+    allTimeExpenses: computedAllTimeExpenses !== undefined ? computedAllTimeExpenses : toNumber(data?.allTimeExpenses),
     monthlyAverageExpenses: toNumber(data?.monthlyAverageExpenses),
     accountingVariance: toNumber(data?.accountingVariance),
     isBalanced: Boolean(data?.isBalanced),
@@ -155,9 +172,9 @@ export default function Accounts() {
       setError(null);
       try {
         const [data, paymentsList, expensesList] = await Promise.all([
-          api.getDashboardMetrics({ startDate, endDate }).catch(() => null),
-          isApiMode() ? api.listPayments({ limit: 10000 }).catch(() => []) : Promise.resolve(getPayments()),
-          isApiMode() ? api.listExpenses().catch(() => []) : Promise.resolve(getExpenses()),
+          isApiMode() ? api.getDashboardMetrics({ startDate, endDate }) : Promise.resolve(null),
+          isApiMode() ? api.listPayments({ limit: 10000 }) : Promise.resolve(getPayments()),
+          isApiMode() ? api.listExpenses() : Promise.resolve(getExpenses()),
         ]);
 
         if (!active) return;
@@ -165,8 +182,11 @@ export default function Accounts() {
         // Cumulative Cash Balance (All historical cash inflows minus all historical cash outflows)
         const ob = getOpeningBalances();
         const totalCashBalance = calculateTotalCashBalance(paymentsList, expensesList, ob.startingCashBalance);
+        const totalAllTimeExpenses = Array.isArray(expensesList)
+          ? expensesList.reduce((sum, exp: any) => sum + (Number(exp?.amount) || 0), 0)
+          : 0;
 
-        setMetrics(normalizeMetrics(data, totalCashBalance));
+        setMetrics(normalizeMetrics(data, totalCashBalance, totalAllTimeExpenses));
       } catch (err) {
         console.error('Financial dashboard metrics request failed:', err);
         if (!active) return;
@@ -199,18 +219,22 @@ export default function Accounts() {
   const m = metrics;
 
   const sales = m ? toNumber(m.periodSales) : 0;
-  const warehouseProfit = m ? toNumber(m.warehouseProfit) : 0;
+  const grossSales = m ? toNumber(m.periodGrossSales) : 0;
+  const earlySettlementDiscounts = m ? toNumber(m.periodEarlySettlementDiscounts) : 0;
+  const cogs = m ? toNumber(m.periodCostOfGoodsSold) : 0;
+  const warehouseProfit = m ? toNumber(m.periodGrossProfit || m.warehouseProfit) : 0;
   const expenses = m ? toNumber(m.periodExpenses) : 0;
   const rawRealizedProfits = m ? toNumber(m.realizedProfits) : 0;
+  const realizedCashCollections = m ? toNumber(m.realizedCashCollections) : 0;
+  const realizedSaleMargin = m ? toNumber(m.realizedSaleMargin) : 0;
   const receivables = m ? toNumber(m.totalCustomersBalance) : 0;
 
-  // NET REALIZED PROFIT (period-scoped):
-  //   When period sales = 0 and expenses > 0, result is negative (loss).
-  //   Formula: Realized Profits (from backend, period-filtered) − Operating Expenses
-  //   Math.abs guards against backend sign-inversion on profits only.
-  const netPeriodResult = Math.abs(rawRealizedProfits) - expenses;
+  // True operating profit of period = Period Gross Profit (Sales - COGS) - Operating Expenses
+  const netPeriodResult = m
+    ? (m.periodOperatingNetProfit !== undefined ? toNumber(m.periodOperatingNetProfit) : warehouseProfit - expenses)
+    : -expenses;
 
-  // Net Financial Position = Cash + Receivables − Payables
+  // Net Financial Position = Cash (already net of expenses) + Receivables - Payables
   const netFinancialPosition = m
     ? toNumber(m.cashInSafe) + receivables - toNumber(m.totalSuppliersBalance)
     : 0;
@@ -362,7 +386,7 @@ export default function Accounts() {
               />
               <KPICard
                 title="صافي الموقف المالي"
-                formula="النقدية + مستحقات العملاء − مستحقات الموردين"
+                formula="النقدية (بعد خصم المصروفات) + مستحقات العملاء − مستحقات الموردين"
                 value={formatCurrency(netFinancialPosition)}
                 icon={Scale}
                 iconTone="bg-blue-50 text-blue-600 border-blue-100"
@@ -384,8 +408,12 @@ export default function Accounts() {
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <KPICard
-                title="إجمالي المبيعات"
-                formula="مجموع الفواتير المصدرة خلال الفترة"
+                title="صافي مبيعات الفترة"
+                formula={
+                  earlySettlementDiscounts > 0
+                    ? `التعاقدي ${formatCurrency(grossSales)} − خصم سداد مبكر ${formatCurrency(earlySettlementDiscounts)}`
+                    : 'مجموع الفواتير المصدرة خلال الفترة'
+                }
                 value={formatCurrency(sales)}
                 icon={ShoppingBag}
                 iconTone="bg-blue-50 text-blue-600 border-blue-100"
@@ -393,8 +421,8 @@ export default function Accounts() {
                 onClick={() => navigate('/sales')}
               />
               <KPICard
-                title="أرباح مبيعات المخزن"
-                formula="هامش ربح بضاعة المخزن (سعر البيع − تكلفة الشراء)"
+                title="مجمل ربح مبيعات الفترة"
+                formula={`صافي المبيعات − تكلفة البضاعة (${formatCurrency(cogs)})`}
                 value={formatCurrency(warehouseProfit)}
                 icon={Package}
                 iconTone="bg-teal-50 text-teal-600 border-teal-100"
@@ -411,8 +439,8 @@ export default function Accounts() {
                 onClick={() => navigate('/expenses')}
               />
               <KPICard
-                title="صافي الربح الفعلي"
-                formula="الأرباح المحصلة نقداً − المصروفات التشغيلية"
+                title="صافي الربح التشغيلي"
+                formula="مجمل ربح مبيعات الفترة − المصروفات التشغيلية"
                 value={formatCurrency(netPeriodResult)}
                 icon={TrendingUp}
                 iconTone={netPeriodResult >= 0
@@ -437,7 +465,7 @@ export default function Accounts() {
             <div className="space-y-3">
               {/* Sales Row */}
               <div className="flex items-center gap-4">
-                <span className="w-36 shrink-0 text-xs font-bold text-slate-500">إجمالي المبيعات</span>
+                <span className="w-36 shrink-0 text-xs font-bold text-slate-500">صافي مبيعات الفترة</span>
                 <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
                   <div
                     className="absolute inset-y-0 right-0 rounded-lg bg-blue-500/20 transition-all duration-500"
@@ -453,7 +481,7 @@ export default function Accounts() {
 
               {/* Warehouse Profit Row */}
               <div className="flex items-center gap-4">
-                <span className="w-36 shrink-0 text-xs font-bold text-slate-500">أرباح بضاعة المخزن</span>
+                <span className="w-36 shrink-0 text-xs font-bold text-slate-500">مجمل ربح المبيعات</span>
                 <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
                   <div
                     className="absolute inset-y-0 right-0 rounded-lg bg-teal-500/20 transition-all duration-500"
@@ -505,7 +533,10 @@ export default function Accounts() {
                     </span>
                   </div>
                   <p className="mt-1 text-[10px] font-semibold text-slate-400">
-                    الأرباح المحصلة ({formatCurrency(Math.abs(rawRealizedProfits))}) − المصروفات ({formatCurrency(expenses)})
+                    مجمل ربح المبيعات ({formatCurrency(warehouseProfit)}) − المصروفات ({formatCurrency(expenses)})
+                    {realizedCashCollections > 0
+                      ? ` · التحصيلات النقدية للعملاء: ${formatCurrency(realizedCashCollections)} (حصة الربح المحققة بعد المصروفات: ${formatCurrency(rawRealizedProfits)} من هامش ${formatCurrency(realizedSaleMargin)})`
+                      : ''}
                   </p>
                 </div>
               </div>

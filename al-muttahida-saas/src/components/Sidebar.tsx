@@ -93,8 +93,8 @@ const menuGroups: {
       activeIcon: 'text-blue-600',
     },
     items: [
-      { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read', adminOnly: true },
-      { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'payments:read', adminOnly: true },
+      { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
+      { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'reports:read' },
       { icon: PieChart, label: 'الشركاء والمساهمين', path: '/shareholders', permission: 'shareholders:manage' },
     ],
   },
@@ -110,7 +110,7 @@ const menuGroups: {
     },
     items: [
       { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
-      { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
+      { icon: Bell, label: 'مركز التنبيهات', path: '/notifications' },
       { icon: Settings, label: 'الإعدادات', path: '/settings', permission: 'settings:manage' },
     ],
   },
@@ -168,24 +168,24 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
   return (
     <>
       {/* Mobile backdrop */}
-      {isOpen && <div className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden" onClick={onClose} />}
+      {isOpen && <div className="fixed inset-0 z-30 bg-slate-900/50 backdrop-blur-sm lg:hidden" onClick={onClose} />}
 
       <aside
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className={`fixed right-0 top-0 z-50 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${
+        className={`fixed right-0 top-0 z-40 lg:z-20 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${
           isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
         } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
         {/* Header / Branding with Custom Corporate Logo (exact h-14 match & seamless fade into Header) */}
         <div
           className={`relative overflow-hidden h-14 shrink-0 flex items-center justify-between border-b border-slate-200 ${
-            isExpanded ? 'px-3' : 'px-2 justify-center border-l border-slate-200'
+            isExpanded ? 'px-3' : 'px-2 justify-center'
           }`}
           style={{
             background: isExpanded
               ? 'linear-gradient(to left, #0f1f4a 0%, #162b61 42%, #476299 66%, #9fb0d1 83%, #e5ebf5 94%, #ffffff 100%)'
-              : 'linear-gradient(to bottom, #0f1f4a 0%, #162b61 100%)',
+              : 'linear-gradient(to left, #0f1f4a 0%, #162b61 55%, #476299 76%, #9fb0d1 90%, #e5ebf5 96%, #ffffff 100%)',
           }}
         >
           <button
@@ -212,7 +212,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
           <div className="space-y-3">
             {menuGroups.map((group) => {
               const allowedItems = group.items.filter(
-                (item) => (!item.adminOnly || isAdmin(user) || user?.role === 'manager') && hasPermission(item.permission)
+                (item) => (!item.adminOnly || isAdmin(user)) && hasPermission(item.permission)
               );
               if (allowedItems.length === 0) return null;
 

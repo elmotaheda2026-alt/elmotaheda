@@ -98,17 +98,19 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
       }
     }
 
-    // 3. Fetch all payments linked to this supplier
+    // 3. Fetch active non-voided payments linked to this supplier (excluding purchase downpayments already mirrored from purchases)
     const payments = await db.all<any>(
       `SELECT id, type, amount, description, date, receipt_number, status, channel, reference_id, reference_type, created_by, created_at
        FROM payments
-       WHERE supplier_id = ? OR (reference_type = 'supplier' AND reference_id = ?)
+       WHERE status = 'posted'
+         AND COALESCE(reference_type, '') <> 'purchase_downpayment'
+         AND (supplier_id = ? OR (reference_type = 'supplier' AND reference_id = ?))
        ORDER BY date ASC, created_at ASC`,
       supplierId,
       supplierId,
     );
 
-    // 4. Calculate opening balance:
+    // 4. Calculate opening balance (allowing negative advance/credit balances)
     const currentBalance = Number(supplier.balance || 0);
     const sumPurchasesRemaining = purchases.reduce((acc: number, p: any) => acc + Number(p.remaining || 0), 0);
     const sumPaymentsOut = payments
@@ -119,7 +121,7 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
       .reduce((acc: number, p: any) => acc + Number(p.amount || 0), 0);
 
     const calculatedOpeningBalance = Number((currentBalance - sumPurchasesRemaining + sumPaymentsOut - sumPaymentsIn).toFixed(2));
-    const openingBalance = Math.max(0, calculatedOpeningBalance);
+    const openingBalance = calculatedOpeningBalance;
 
     // 5. Build raw events list
     type RawEvent = {
@@ -131,7 +133,7 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
 
     const rawEvents: RawEvent[] = [];
 
-    if (openingBalance > 0) {
+    if (Math.abs(openingBalance) > 0.01) {
       rawEvents.push({
         date: supplier.created_at || '2000-01-01',
         createdAt: supplier.created_at || '2000-01-01',
@@ -139,7 +141,7 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
         data: {
           id: `op-${supplier.id}`,
           amount: openingBalance,
-          notes: supplier.notes || 'رصيد افتتاحي سابق للمورد',
+          notes: supplier.notes || (openingBalance < 0 ? 'رصيد دائن سابق لصالح الشركة عند المورد' : 'رصيد افتتاحي سابق للمورد'),
         },
       });
     }
@@ -180,7 +182,7 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
     for (const ev of rawEvents) {
       if (ev.type === 'opening_balance') {
         const amt = Number(ev.data.amount);
-        running += amt;
+        running = Number((running + amt).toFixed(2));
         transactions.push({
           id: ev.data.id,
           date: formatDateDisplay(ev.date),
@@ -189,8 +191,8 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
           typeLabel: 'الرصيد',
           docNumber: '—',
           description: ev.data.notes || 'الرصيد المسجل للمورد',
-          credit: amt,
-          debit: 0,
+          credit: amt > 0 ? amt : 0,
+          debit: amt < 0 ? Math.abs(amt) : 0,
           runningBalance: running,
         });
       } else if (ev.type === 'purchase') {
@@ -248,7 +250,7 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
       } else if (ev.type === 'payment_out') {
         const pay = ev.data;
         const amt = Number(pay.amount || 0);
-        running = Math.max(0, running - amt);
+        running = Number((running - amt).toFixed(2));
         transactions.push({
           id: pay.id,
           date: formatDateDisplay(pay.date),
@@ -358,10 +360,20 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
 
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM suppliers WHERE id = ?', req.params.id);
+    const existing = await db.get<{ id: string; balance: number }>(
+      'SELECT id, balance FROM suppliers WHERE id = ?',
+      req.params.id,
+    );
     if (!existing) {
       return res.status(404).json({ message: 'Supplier not found' });
     }
+
+    const ledgerLinks = await db.get<{ cnt: number }>(
+      `SELECT (SELECT COUNT(*) FROM purchases WHERE supplier_id = ?) + (SELECT COUNT(*) FROM payments WHERE supplier_id = ? AND status = 'posted') AS cnt`,
+      req.params.id,
+      req.params.id,
+    );
+    const nextBalance = Number(ledgerLinks?.cnt || 0) > 0 ? Number(existing.balance || 0) : data.balance;
 
     await db.run(
       `UPDATE suppliers
@@ -371,7 +383,7 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       data.phone,
       data.email || null,
       data.address,
-      data.balance,
+      nextBalance,
       data.notes || null,
       now,
       req.params.id,
@@ -399,59 +411,62 @@ router.delete('/:id', requireAnyPermission('users:manage', 'purchases:manage'), 
       return res.status(400).json({ message: 'لا يمكن حذف المورد لأن لديه رصيد مستحق' });
     }
 
-    const purchases = await db.all<{ id: string; remaining: number }>(
-      'SELECT id, remaining FROM purchases WHERE supplier_id = ?',
-      req.params.id,
-    );
-    const purchaseIds = purchases.map((purchase) => purchase.id);
+    let purchaseIds: string[] = [];
+    await db.withTransaction(async (txDb) => {
+      const purchases = (await txDb.all(
+        'SELECT id, remaining FROM purchases WHERE supplier_id = ?',
+        req.params.id,
+      )) as { id: string; remaining: number }[];
+      purchaseIds = purchases.map((purchase) => purchase.id);
 
-    if (purchaseIds.length) {
-      const purchaseItems = await db.all<{ product_id: string; quantity: number }>(
-        `SELECT product_id, quantity FROM purchase_items WHERE purchase_id IN (${purchaseIds.map(() => '?').join(',')})`,
-        ...purchaseIds,
-      );
+      if (purchaseIds.length) {
+        const purchaseItems = (await txDb.all(
+          `SELECT product_id, quantity FROM purchase_items WHERE purchase_id IN (${purchaseIds.map(() => '?').join(',')})`,
+          ...purchaseIds,
+        )) as { product_id: string; quantity: number }[];
 
-      for (const item of purchaseItems) {
-        await db.run(
-          `UPDATE products
-           SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
-               updated_at = ?
-           WHERE id = ?`,
-          item.quantity,
-          item.quantity,
-          now,
-          item.product_id,
+        for (const item of purchaseItems) {
+          await txDb.run(
+            `UPDATE products
+             SET quantity = CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END,
+                 updated_at = ?
+             WHERE id = ?`,
+            item.quantity,
+            item.quantity,
+            now,
+            item.product_id,
+          );
+        }
+
+        await txDb.run(
+          `DELETE FROM payments
+           WHERE supplier_id = ?
+              OR (reference_type = 'supplier' AND reference_id = ?)
+              OR (reference_type = 'purchase' AND reference_id IN (${purchaseIds.map(() => '?').join(',')}))`,
+          req.params.id,
+          req.params.id,
+          ...purchaseIds,
+        );
+        await txDb.run(
+          `DELETE FROM purchase_items WHERE purchase_id IN (${purchaseIds.map(() => '?').join(',')})`,
+          ...purchaseIds,
+        );
+        await txDb.run(
+          `DELETE FROM purchases WHERE id IN (${purchaseIds.map(() => '?').join(',')})`,
+          ...purchaseIds,
+        );
+      } else {
+        await txDb.run(
+          `DELETE FROM payments
+           WHERE supplier_id = ?
+              OR (reference_type = 'supplier' AND reference_id = ?)`,
+          req.params.id,
+          req.params.id,
         );
       }
 
-      await db.run(
-        `DELETE FROM payments
-         WHERE supplier_id = ?
-            OR (reference_type = 'supplier' AND reference_id = ?)
-            OR (reference_type = 'purchase' AND reference_id IN (${purchaseIds.map(() => '?').join(',')}))`,
-        req.params.id,
-        req.params.id,
-        ...purchaseIds,
-      );
-      await db.run(
-        `DELETE FROM purchase_items WHERE purchase_id IN (${purchaseIds.map(() => '?').join(',')})`,
-        ...purchaseIds,
-      );
-      await db.run(
-        `DELETE FROM purchases WHERE id IN (${purchaseIds.map(() => '?').join(',')})`,
-        ...purchaseIds,
-      );
-    } else {
-      await db.run(
-        `DELETE FROM payments
-         WHERE supplier_id = ?
-            OR (reference_type = 'supplier' AND reference_id = ?)`,
-        req.params.id,
-        req.params.id,
-      );
-    }
-
-    await db.run('DELETE FROM suppliers WHERE id = ?', req.params.id);
+      await txDb.run('DELETE FROM suppliers WHERE id = ?', req.params.id);
+    });
     await audit('supplier.delete', 'supplier', req.params.id, req.user?.name || 'system', {
       id: req.params.id,
       name: existing.name,

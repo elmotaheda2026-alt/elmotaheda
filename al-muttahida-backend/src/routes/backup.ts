@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import sql from 'mssql';
 import { dbPromise, poolPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { hashPassword, uid } from '../utils.js';
 import { getAutoBackupConfig, updateAutoBackupConfig, performAutoBackup } from '../autoBackupService.js';
@@ -26,8 +26,11 @@ const BACKUP_KEY_NAMES = [
   'SHAREHOLDER_TRANSACTIONS',
   'AUDIT_LOGS',
   'COLLECTION_TASKS',
+  'COLLECTION_TASKS_ARCHIVE',
+  'PAYMENTS_ARCHIVE',
   'RESCHEDULE_REQUESTS',
   'CLOSING_PERIODS',
+  'DOCUMENT_TEMPLATES',
 ] as const;
 
 type BackupKey = (typeof BACKUP_KEY_NAMES)[number];
@@ -56,8 +59,11 @@ const tableExportQueries: Record<Exclude<BackupKey, never>, string> = {
   SHAREHOLDER_TRANSACTIONS: 'SELECT * FROM shareholder_transactions',
   AUDIT_LOGS: 'SELECT * FROM audit_log',
   COLLECTION_TASKS: 'SELECT * FROM collection_tasks',
+  COLLECTION_TASKS_ARCHIVE: 'SELECT * FROM collection_tasks_archive',
+  PAYMENTS_ARCHIVE: 'SELECT * FROM payments_archive',
   RESCHEDULE_REQUESTS: 'SELECT * FROM reschedule_requests',
   CLOSING_PERIODS: 'SELECT * FROM closing_periods',
+  DOCUMENT_TEMPLATES: 'SELECT * FROM document_templates',
 };
 
 function safeStringify(value: unknown): string | null {
@@ -135,12 +141,120 @@ function normalizeBackupRow(row: any) {
   return normalized;
 }
 
+function toIsoDate(rawDate: unknown): string {
+  if (typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawDate.trim())) {
+    return rawDate.trim().slice(0, 10);
+  }
+  const parsed = rawDate ? new Date(String(rawDate)) : new Date();
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString().slice(0, 10);
+  }
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function addMonthsToIso(dateStr: string, monthsToAdd: number): string {
+  const base = toIsoDate(dateStr);
+  const [y, m, d] = base.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, (m - 1) + monthsToAdd, d));
+  return dt.toISOString().slice(0, 10);
+}
+
+/**
+ * Reconstructs installment schedules for legacy backups that exported `sales` without `installment_schedules`.
+ */
+export function buildFallbackSchedulesForSale(sale: any) {
+  const months = Math.trunc(Number(sale.installment_months || 0));
+  if (sale.payment_method !== 'installment' || months <= 0) return [];
+
+  const total = Number(sale.total || 0);
+  const paid = Math.max(0, Number(sale.paid || 0));
+  const upfront = Math.max(0, Number(sale.upfront_amount || 0));
+  const financedTotal = Math.max(0, Math.round(total - upfront));
+  if (financedTotal <= 0) return [];
+
+  const startDate = toIsoDate(sale.installment_start_date || sale.date);
+  const baseAmount = Math.round(financedTotal / months);
+  let remainingToDistribute = financedTotal;
+  let paidLeft = Math.max(0, Math.round(paid - upfront));
+  const schedules: Array<Record<string, any>> = [];
+
+  for (let index = 0; index < months; index++) {
+    const amount = index === months - 1 ? remainingToDistribute : baseAmount;
+    remainingToDistribute -= amount;
+
+    const paidAmount = Math.min(amount, paidLeft);
+    paidLeft -= paidAmount;
+
+    const status = paidAmount >= amount ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid';
+    schedules.push({
+      id: uid(),
+      month_index: index + 1,
+      due_date: addMonthsToIso(startDate, index),
+      amount,
+      paid_amount: paidAmount,
+      status,
+      paid_at: status === 'paid' ? startDate : null,
+    });
+  }
+
+  return schedules;
+}
+
 export async function exportBackup(): Promise<BackupFile> {
   const db = await dbPromise;
   const data = {} as Record<string, string | null>;
 
+  const [saleItems, installmentSchedules, purchaseItems] = await Promise.all([
+    db.all<any>('SELECT * FROM sale_items'),
+    db.all<any>('SELECT * FROM installment_schedules ORDER BY month_index ASC'),
+    db.all<any>('SELECT * FROM purchase_items'),
+  ]);
+
+  const saleItemsBySaleId = new Map<string, any[]>();
+  for (const item of saleItems) {
+    const list = saleItemsBySaleId.get(item.sale_id) || [];
+    list.push(item);
+    saleItemsBySaleId.set(item.sale_id, list);
+  }
+
+  const schedulesBySaleId = new Map<string, any[]>();
+  for (const sch of installmentSchedules) {
+    const list = schedulesBySaleId.get(sch.sale_id) || [];
+    list.push(sch);
+    schedulesBySaleId.set(sch.sale_id, list);
+  }
+
+  const purchaseItemsByPurchaseId = new Map<string, any[]>();
+  for (const item of purchaseItems) {
+    const list = purchaseItemsByPurchaseId.get(item.purchase_id) || [];
+    list.push(item);
+    purchaseItemsByPurchaseId.set(item.purchase_id, list);
+  }
+
   for (const key of BACKUP_KEY_NAMES) {
-    const rows = await db.all(tableExportQueries[key as keyof typeof tableExportQueries]);
+    let rows = await db.all<any>(tableExportQueries[key as keyof typeof tableExportQueries]);
+    if (key === 'SALES') {
+      rows = rows.map((sale) => ({
+        ...sale,
+        items: saleItemsBySaleId.get(sale.id) || [],
+        financing: {
+          paymentMethod: sale.payment_method,
+          installmentMonths: sale.installment_months,
+          installmentStartDate: sale.installment_start_date,
+          upfrontAmount: sale.upfront_amount,
+          monthlyInstallmentAmount: sale.monthly_installment_amount,
+          schedules: schedulesBySaleId.get(sale.id) || [],
+        },
+      }));
+    } else if (key === 'PURCHASES') {
+      rows = rows.map((purchase) => ({
+        ...purchase,
+        items: purchaseItemsByPurchaseId.get(purchase.id) || [],
+      }));
+    }
     data[key] = JSON.stringify(rows);
   }
 
@@ -215,6 +329,8 @@ export function generateSqlBackup(backup: BackupFile): string {
     SHAREHOLDER_TRANSACTIONS: 'shareholder_transactions',
     AUDIT_LOGS: 'audit_log',
     COLLECTION_TASKS: 'collection_tasks',
+    COLLECTION_TASKS_ARCHIVE: 'collection_tasks_archive',
+    PAYMENTS_ARCHIVE: 'payments_archive',
     RESCHEDULE_REQUESTS: 'reschedule_requests',
     CLOSING_PERIODS: 'closing_periods',
   };
@@ -338,7 +454,7 @@ router.post('/auto-backup/run', async (req: AuthedRequest, res) => {
   }
 });
 
-router.post('/restore-backup', async (req: AuthedRequest, res) => {
+router.post('/restore-backup', requireAdmin, async (req: AuthedRequest, res) => {
   let payload = req.body as BackupFile;
 
   // Handle raw SQL backup string if sent directly
@@ -368,30 +484,37 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
     await new sql.Request(trx).query('DELETE FROM installment_schedules');
     await new sql.Request(trx).query('DELETE FROM purchase_items');
     await new sql.Request(trx).query('DELETE FROM payments');
+    await new sql.Request(trx).query('DELETE FROM payments_archive');
     await new sql.Request(trx).query('DELETE FROM expenses');
     await new sql.Request(trx).query('DELETE FROM notifications');
     await new sql.Request(trx).query('DELETE FROM sales_reps');
     await new sql.Request(trx).query('DELETE FROM shareholder_transactions');
     await new sql.Request(trx).query('DELETE FROM collection_tasks');
+    await new sql.Request(trx).query('DELETE FROM collection_tasks_archive');
     await new sql.Request(trx).query('DELETE FROM audit_log');
     await new sql.Request(trx).query('DELETE FROM closing_periods');
     await new sql.Request(trx).query('DELETE FROM reschedule_requests');
+    await new sql.Request(trx).query('DELETE FROM document_templates');
+    await new sql.Request(trx).query('DELETE FROM dashboard_metrics_cache');
     await new sql.Request(trx).query('DELETE FROM sales');
     await new sql.Request(trx).query('DELETE FROM purchases');
     await new sql.Request(trx).query('DELETE FROM customers');
     await new sql.Request(trx).query('DELETE FROM suppliers');
     await new sql.Request(trx).query('DELETE FROM products');
     await new sql.Request(trx).query('DELETE FROM shareholders');
+    await new sql.Request(trx).query('DELETE FROM settings');
     await new sql.Request(trx).query('DELETE FROM users');
 
     restoreStep = 'users';
+    const validRoles = new Set(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']);
     const users = parseRows<any>(payload.data.USERS).map((user) => ({
       id: user.id || uid(),
       name: user.name || 'User',
       username: user.username || `user_${uid().slice(0, 6)}`,
       password_hash: user.password_hash || '',
-      role: user.role || 'staff',
-      is_active: user.is_active === true || user.is_active === 1 ? 1 : 0,
+      raw_password: typeof user.password === 'string' ? user.password : '',
+      role: validRoles.has(user.role) ? user.role : 'user',
+      is_active: user.is_active === true || user.is_active === 1 || user.isActive === true ? 1 : 0,
       phone: user.phone || null,
       permissions: safeStringify(user.permissions) || null,
       created_at: user.created_at || user.createdAt || new Date().toISOString(),
@@ -400,7 +523,7 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
     for (const user of users) {
       let passwordHash = user.password_hash;
       if (!passwordHash) {
-        const plain = payload.data.USERS?.includes('"password"') ? 'admin123' : 'admin123';
+        const plain = user.raw_password.trim().length > 0 ? user.raw_password : 'admin123';
         passwordHash = await hashPassword(plain);
       }
       const request = new sql.Request(trx);
@@ -418,27 +541,23 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
     }
 
     restoreStep = 'settings';
+    const settingsAllowedCols = await getTableColumns(trx, 'settings');
     const settingsRows = parseRows<any>(payload.data.SETTINGS);
     if (settingsRows.length > 0) {
-      const s = settingsRows[0];
-      const request = new sql.Request(trx);
-      request.input('company_name', s.company_name || s.companyName || '���� �������');
-      request.input('company_address', s.company_address || s.companyAddress || '');
-      request.input('company_phone', s.company_phone || s.companyPhone || '');
-      request.input('company_email', s.company_email || s.companyEmail || '');
-      request.input('tax_rate', Number(s.tax_rate ?? s.taxRate ?? 0));
-      request.input('currency', s.currency || '����');
-      request.input('invoice_prefix', s.invoice_prefix || s.invoicePrefix || 'INV');
-      request.input('invoice_footer', s.invoice_footer || s.invoiceFooter || null);
-      await request.query(`INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer)
-        VALUES (@company_name, @company_address, @company_phone, @company_email, @tax_rate, @currency, @invoice_prefix, @invoice_footer)`);
+      const normalizedSettings = filterRowColumns(normalizeBackupRow(settingsRows[0]), settingsAllowedCols);
+      const cols = Object.keys(normalizedSettings);
+      if (cols.length > 0) {
+        const request = new sql.Request(trx);
+        cols.forEach((col, index) => request.input(`p${index + 1}`, normalizeSqlValue(normalizedSettings[col])));
+        const vals = cols.map((_, index) => `@p${index + 1}`).join(', ');
+        await request.query(`INSERT INTO settings (${cols.join(', ')}) VALUES (${vals})`);
+      }
     }
 
     const directTables: Array<[string, string, string?]> = [
       ['CUSTOMERS', 'customers'],
       ['SUPPLIERS', 'suppliers'],
       ['PRODUCTS', 'products'],
-      ['PAYMENTS', 'payments'],
       ['EXPENSES', 'expenses'],
       ['NOTIFICATIONS', 'notifications'],
       ['SALES_REPS', 'sales_reps'],
@@ -446,8 +565,11 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
       ['SHAREHOLDER_TRANSACTIONS', 'shareholder_transactions'],
       ['AUDIT_LOGS', 'audit_log'],
       ['COLLECTION_TASKS', 'collection_tasks'],
+      ['COLLECTION_TASKS_ARCHIVE', 'collection_tasks_archive'],
+      ['PAYMENTS_ARCHIVE', 'payments_archive'],
       ['RESCHEDULE_REQUESTS', 'reschedule_requests'],
       ['CLOSING_PERIODS', 'closing_periods'],
+      ['DOCUMENT_TEMPLATES', 'document_templates'],
     ];
 
     for (const [key, table] of directTables) {
@@ -494,7 +616,8 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
         }
       }
 
-      const schedules = originalSale.financing?.schedules || [];
+      const rawSchedules = originalSale.financing?.schedules || [];
+      const schedules = rawSchedules.length > 0 ? rawSchedules : buildFallbackSchedulesForSale(sale);
       for (const schedule of schedules) {
         const req = new sql.Request(trx);
         req.input('id', normalizeSqlValue(schedule.id || uid()));
@@ -539,6 +662,19 @@ router.post('/restore-backup', async (req: AuthedRequest, res) => {
             VALUES (@id, @purchase_id, @product_id, @product_name, @barcode, @quantity, @unit_price, @unit_cost, @discount, @tax, @total)`);
         }
       }
+    }
+
+    // Insert payments after sales & customers to satisfy FK_payments_sales and FK_payments_customers
+    restoreStep = 'payments';
+    const paymentColumns = await getTableColumns(trx, 'payments');
+    const paymentRows = parseRows<any>(payload.data.PAYMENTS).map((row) => filterRowColumns(normalizeBackupRow(row), paymentColumns));
+    for (const row of paymentRows) {
+      const columns = Object.keys(row);
+      if (columns.length === 0) continue;
+      const request = new sql.Request(trx);
+      columns.forEach((column, index) => request.input(`p${index + 1}`, normalizeSqlValue(row[column])));
+      const values = columns.map((_, index) => `@p${index + 1}`).join(', ');
+      await request.query(`INSERT INTO payments (${columns.join(', ')}) VALUES (${values})`);
     }
 
     await trx.commit();

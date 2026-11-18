@@ -1,7 +1,20 @@
 !macro customCheckAppRunning
-  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f & exit 0"'
+  ; Try graceful termination first before force closing process tree (including backend child process)
+  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /t & exit 0"'
   Pop $0
-  nsExec::Exec 'cmd /c "taskkill /im \"AlMuttahida*\" /f & exit 0"'
+  Sleep 1500
+  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f /t & exit 0"'
+  Pop $0
+  nsExec::Exec 'cmd /c "taskkill /im \"AlMuttahida*\" /f /t & exit 0"'
+  Pop $0
+  Sleep 800
+!macroend
+
+!macro customUnInstall
+  DetailPrint "Stopping running application and backend processes before uninstall..."
+  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f /t & exit 0"'
+  Pop $0
+  nsExec::Exec 'cmd /c "taskkill /im \"AlMuttahida*\" /f /t & exit 0"'
   Pop $0
   Sleep 1000
 !macroend

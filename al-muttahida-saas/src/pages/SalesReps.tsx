@@ -5,12 +5,13 @@ import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSales
 import { isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
-import { isAdmin } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 
 export default function SalesReps() {
   const { user } = useAuth();
   const { confirmDialog, showToast } = useDialog();
-  const canDelete = isAdmin(user) && user?.role !== 'manager';
+  const canManageReps = hasPermission(user, 'users:manage');
+  const canDelete = isAdmin(user);
   const [reps, setReps] = useState<SalesRep[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingRep, setEditingRep] = useState<SalesRep | null>(null);
@@ -42,7 +43,7 @@ export default function SalesReps() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F2') {
+      if (event.key === 'F2' && canManageReps) {
         event.preventDefault();
         resetForm();
         setEditingRep(null);
@@ -64,15 +65,21 @@ export default function SalesReps() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingRep) {
-      await updateSalesRep(editingRep.id, formData);
-    } else {
-      await createSalesRep(formData);
+    try {
+      if (editingRep) {
+        await updateSalesRep(editingRep.id, formData);
+        showToast('تم تحديث بيانات المندوب بنجاح', 'success');
+      } else {
+        await createSalesRep(formData);
+        showToast('تم إضافة المندوب بنجاح', 'success');
+      }
+      await loadData();
+      setShowModal(false);
+      setEditingRep(null);
+      resetForm();
+    } catch (err: any) {
+      showToast(err?.message || 'تعذر حفظ بيانات المندوب.', 'error');
     }
-    setReps(getSalesReps());
-    setShowModal(false);
-    setEditingRep(null);
-    resetForm();
   };
 
   const handleEdit = (rep: SalesRep) => {
@@ -99,9 +106,13 @@ export default function SalesReps() {
       type: 'danger',
     });
     if (isConfirmed) {
-      deleteSalesRep(id);
-      setReps(getSalesReps());
-      showToast('تم حذف المندوب بنجاح', 'success');
+      try {
+        await deleteSalesRep(id);
+        await loadData();
+        showToast('تم حذف المندوب بنجاح', 'success');
+      } catch (err: any) {
+        showToast(err?.message || 'تعذر حذف المندوب.', 'error');
+      }
     }
   };
 
@@ -134,7 +145,7 @@ export default function SalesReps() {
             />
           </div>
         </div>
-        {user?.role !== 'manager' && (
+        {canManageReps && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
             className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs shrink-0 cursor-pointer"
@@ -189,7 +200,7 @@ export default function SalesReps() {
                       </a>
                     ) : <span />}
                     <div className="flex items-center gap-1.5">
-                      {user?.role !== 'manager' && (
+                      {canManageReps && (
                         <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
                           <Edit size={14} />
                         </button>
@@ -232,8 +243,8 @@ export default function SalesReps() {
                   return (
                     <tr
                       key={rep.id}
-                      onDoubleClick={() => user?.role !== 'manager' && handleEdit(rep)}
-                      title={user?.role !== 'manager' ? 'انقر مرتين للتعديل' : ''}
+                      onDoubleClick={() => canManageReps && handleEdit(rep)}
+                      title={canManageReps ? 'انقر مرتين للتعديل' : ''}
                       className="group cursor-pointer hover:bg-slate-50 transition-colors"
                     >
                       <td className="py-3 px-4">
@@ -258,7 +269,7 @@ export default function SalesReps() {
                       </td>
                       <td className="py-3 px-4 text-center">
                         <div className="erp-icon-actions">
-                          {user?.role !== 'manager' && (
+                          {canManageReps && (
                             <button onClick={() => handleEdit(rep)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="تعديل">
                               <Edit size={15} />
                             </button>
@@ -268,7 +279,7 @@ export default function SalesReps() {
                               <Trash2 size={15} />
                             </button>
                           )}
-                          {user?.role === 'manager' && (
+                          {!canManageReps && !canDelete && (
                             <span className="text-xs text-slate-400 font-bold">—</span>
                           )}
                         </div>

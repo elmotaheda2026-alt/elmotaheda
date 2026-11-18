@@ -19,13 +19,16 @@ import {
   ShieldCheck,
   X,
   Award,
-  Table as TableIcon,
-  LayoutGrid,
   ChevronDown,
   ChevronUp,
-  RotateCw,
+  Printer,
+  Scale,
+  CheckCircle2,
+  AlertTriangle,
+  BarChart3,
 } from 'lucide-react';
 import { Shareholder, ShareholderTransaction, Sale, Expense, Product } from '../types';
+import { printHtmlDocument } from '../lib/printHelper';
 import {
   getShareholders,
   createShareholder,
@@ -43,8 +46,7 @@ import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { formatDateDisplay } from '../lib/dateUtils';
-import { calculateNetProfit, calculateCostOfGoodsSold } from '../lib/accounting';
-import { formatWholeCurrency } from '../lib/utils';
+import { calculateCostOfGoodsSold } from '../lib/accounting';
 
 const TypedPieChart = PieChart as any;
 const TypedPie = Pie as any;
@@ -77,6 +79,7 @@ interface LedgerEntry {
 }
 
 interface LiveTradingMetrics {
+  profitBasis?: 'realized' | 'accrual';
   liveNetProfit: number;
   totalSalesRevenue: number;
   totalCogs: number;
@@ -89,6 +92,7 @@ interface LiveTradingMetrics {
   totalSupplierDebt?: number;
   totalGrossEquity?: number;
   netFreeCapital?: number;
+  accountantReport?: any;
 }
 
 function toIsoDay(dateVal?: string | null): string {
@@ -113,9 +117,14 @@ export default function Shareholders() {
   const [isLoading, setIsLoading] = useState(false);
   const [lastSynced, setLastSynced] = useState<Date>(new Date());
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'ledger'>('overview');
-  const [overviewDisplayMode, setOverviewDisplayMode] = useState<'table' | 'cards'>('table');
+  const [activeTab, setActiveTab] = useState<'overview' | 'ledger' | 'report'>('overview');
   const [showChartBanner, setShowChartBanner] = useState<boolean>(false);
+  const [showTranchesDetails, setShowTranchesDetails] = useState<boolean>(false);
+  const profitBasis = 'realized' as const;
+  const [reportPeriodFrom, setReportPeriodFrom] = useState<string>('');
+  const [reportPeriodTo, setReportPeriodTo] = useState<string>('');
+  const [isSettlingPeriod, setIsSettlingPeriod] = useState<boolean>(false);
+  const isUserAdmin = user?.role === 'admin';
 
   // Filters
   const [ledgerPartnerFilter, setLedgerPartnerFilter] = useState<string>('all');
@@ -155,9 +164,18 @@ export default function Shareholders() {
     affectsTreasury: true,
   });
 
-  const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
+  const formatCurrency = (amount: number) => {
+    const num = Number(amount || 0);
+    const cur = settings.currency || 'جنيه';
+    if (Math.abs(num) < 0.005 || Object.is(num, -0)) return `0 ${cur}`;
+    const rounded = Number(num.toFixed(2));
+    return `${new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(rounded)} ${cur}`;
+  };
   const formatWithdrawal = (amount?: number | null) => {
-    const val = Math.round(Number(amount || 0));
+    const val = Number(Number(amount || 0).toFixed(2));
     if (val <= 0) return formatCurrency(0);
     return `-${formatCurrency(val)}`;
   };
@@ -166,9 +184,14 @@ export default function Shareholders() {
     setIsLoading(true);
     try {
       if (isApiMode()) {
-        const liveData = await api.getShareholdersLiveTrading();
+        const liveData = await api.getShareholdersLiveTrading({
+          periodFrom: reportPeriodFrom || undefined,
+          periodTo: reportPeriodTo || undefined,
+          profitBasis,
+        });
         if (liveData) {
           setLiveMetrics({
+            profitBasis: liveData.profitBasis || profitBasis,
             liveNetProfit: Number(liveData.liveNetProfit || 0),
             totalSalesRevenue: Number(liveData.totalSalesRevenue || 0),
             totalCogs: Number(liveData.totalCogs || 0),
@@ -181,6 +204,7 @@ export default function Shareholders() {
             totalSupplierDebt: Number(liveData.totalSupplierDebt || 0),
             totalGrossEquity: Number(liveData.totalGrossEquity || 0),
             netFreeCapital: Number(liveData.netFreeCapital || 0),
+            accountantReport: liveData.accountantReport || null,
           });
           setShareholders(liveData.shareholders || []);
           setTransactions(liveData.transactions || []);
@@ -204,7 +228,7 @@ export default function Shareholders() {
   useEffect(() => {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [profitBasis, reportPeriodFrom, reportPeriodTo]);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -219,7 +243,7 @@ export default function Shareholders() {
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [profitBasis, reportPeriodFrom, reportPeriodTo]);
 
   // Compute time-weighted metrics locally or merge with backend metrics
   const computedState = useMemo(() => {
@@ -244,10 +268,17 @@ export default function Shareholders() {
     const activeSalesGlobal = sales.filter((s) => s.status !== 'cancelled');
     const activeExpensesGlobal = expenses;
 
-    const totalSalesRevenue = activeSalesGlobal.reduce((sum, s) => sum + Number(s.total || 0), 0);
-    const totalCogs = calculateCostOfGoodsSold(activeSalesGlobal, products);
-    const totalExpenses = activeExpensesGlobal.reduce((sum, e) => sum + Number(e.amount || 0), 0);
-    const systemLiveNetProfit = calculateNetProfit(activeSalesGlobal, products, activeExpensesGlobal);
+    const getOfflineSaleEffectiveTotal = (sale: Sale) =>
+      sale.status === 'settled_early' ? Math.max(0, Number(sale.paid || 0)) : Number(sale.total || 0);
+
+    const getOfflineSaleEarnedGross = (sale: Sale) => {
+      const effTotal = getOfflineSaleEffectiveTotal(sale);
+      const cost = calculateCostOfGoodsSold([sale], products);
+      const contractProfit = effTotal - cost;
+      const ratio = effTotal > 0 ? Math.min(1, Math.max(0, Number(sale.paid || 0) / effTotal)) : 0;
+      return Number((contractProfit * ratio).toFixed(2));
+    };
+
     const totalCapital = shareholders.reduce((sum, sh) => sum + Number(sh.capital || 0), 0);
 
     const ascTxs = [...transactions].sort(
@@ -268,18 +299,17 @@ export default function Shareholders() {
 
       const windowValid = effectiveStart <= effectiveEnd;
       const partnerWindowSales = windowValid
-        ? sales.filter(
-            (sale) => sale.status !== 'cancelled' && toIsoDay(sale.date) >= effectiveStart
-          )
+        ? activeSalesGlobal.filter((sale) => toIsoDay(sale.date) >= effectiveStart)
         : [];
       const partnerWindowExpenses = windowValid
-        ? expenses.filter((exp) => toIsoDay(exp.date) >= effectiveStart)
+        ? activeExpensesGlobal.filter((exp) => toIsoDay(exp.date) >= effectiveStart)
         : [];
 
-      const windowSalesRevenue = partnerWindowSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+      const windowSalesRevenue = partnerWindowSales.reduce((sum, sale) => sum + getOfflineSaleEffectiveTotal(sale), 0);
       const windowCogs = calculateCostOfGoodsSold(partnerWindowSales, products);
       const windowExpenses = partnerWindowExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
-      const windowCompanyNetProfit = windowSalesRevenue - windowCogs - windowExpenses;
+      const windowGrossProfit = partnerWindowSales.reduce((sum, sale) => sum + getOfflineSaleEarnedGross(sale), 0);
+      const windowCompanyNetProfit = Number((windowGrossProfit - windowExpenses).toFixed(2));
 
       const activePeersCapital = shareholders
         .filter((peer) => toIsoDay(peer.joinedDate || peer.createdAt) <= effectiveEnd)
@@ -510,7 +540,7 @@ export default function Shareholders() {
       liveShareholders,
       filteredTransactions,
     };
-  }, [isLoading, liveMetrics, shareholders, transactions, sales, expenses, products]);
+  }, [isLoading, liveMetrics, shareholders, transactions, sales, expenses, products, profitBasis]);
 
   const {
     totalCapital,
@@ -835,65 +865,297 @@ export default function Shareholders() {
     setShowTransactionModal(true);
   };
 
+  const handleSettlePeriod = async () => {
+    const targetTo = reportPeriodTo || new Date().toISOString().slice(0, 10);
+    const isConfirmed = await confirmDialog({
+      title: 'اعتماد وإقفال تسوية أرباح الفترة',
+      message:
+        `سيتم تثبيت واعتماد كافة الأرباح المستحقة غير الموزعة حتى تاريخ (${targetTo}) وفق أساس (${profitBasis === 'realized' ? 'الربح المحقق نقداً' : 'الربح التعاقدي'}) كقيود رسمية في سجل الشركاء وسجل الإقفالات.\n\nهل تريد المتابعة؟`,
+      confirmText: 'نعم، اعتماد وتثبيت التسوية',
+      cancelText: 'إلغاء',
+      type: 'info',
+    });
+    if (!isConfirmed) return;
+
+    setIsSettlingPeriod(true);
+    try {
+      if (!isApiMode()) {
+        showToast('تثبيت تسوية الأرباح يتطلب الاتصال بالسيرفر الرئيسي', 'error');
+        return;
+      }
+      const res = await api.settleShareholdersPeriod({
+        periodFrom: reportPeriodFrom || null,
+        periodTo: targetTo,
+        profitBasis,
+      });
+      await loadData();
+      showToast(res.message || 'تم اعتماد وتثبيت أرباح الشركاء بنجاح', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'تعذر تنفيذ تسوية الأرباح', 'error');
+    } finally {
+      setIsSettlingPeriod(false);
+    }
+  };
+
+  const handleDeleteSettlement = async (cp: any) => {
+    const isConfirmed = await confirmDialog({
+      title: 'فك وإلغاء تسوية معتمدة',
+      message: `هل أنت متأكد من إلغاء تسوية الفترة حتى (${formatDateDisplay(cp.periodDate)}) وعكس قيود توزيع الأرباح المرتبطة بها؟`,
+      confirmText: 'نعم، إلغاء التسوية',
+      cancelText: 'تراجع',
+      type: 'danger',
+    });
+    if (!isConfirmed) return;
+
+    try {
+      const res = await api.deleteShareholderSettlement(cp.id);
+      await loadData();
+      showToast(res.message || 'تم إلغاء التسوية وعكس قيودها بنجاح', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'تعذر إلغاء التسوية', 'error');
+    }
+  };
+
+  const handlePrintAccountantReport = () => {
+    const rpt = liveMetrics?.accountantReport;
+    if (!rpt) {
+      showToast('بيانات التقرير المحاسبي غير متوفرة حالياً للطباعة', 'error');
+      return;
+    }
+
+    const periodLabel = reportPeriodFrom || reportPeriodTo
+      ? `من ${reportPeriodFrom || 'بداية النشاط'} إلى ${reportPeriodTo || 'اليوم'}`
+      : 'الإجمالي التراكمي حتى تاريخه';
+
+    const tranchesRowsHtml = (rpt.tranches || []).length === 0
+      ? `<tr><td colspan="7" style="text-align:center;padding:10px;color:#64748b;">لا توجد شرائح زمنية برأس مال نشط في هذه الفترة</td></tr>`
+      : (rpt.tranches || [])
+          .map(
+            (tr: any, idx: number) => `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>${formatDateDisplay(tr.fromDate)} ← ${formatDateDisplay(tr.toDate)}</td>
+            <td>${tr.days} يوم</td>
+            <td>${formatCurrency(tr.totalActiveCapital)}</td>
+            <td>${formatCurrency(tr.netProfit)}</td>
+            <td style="font-family:monospace;font-weight:700;direction:ltr;">${Number(tr.roiPerEgp || 0).toFixed(4)} (${(Number(tr.roiPerEgp || 0) * 100).toFixed(2)}%)</td>
+            <td>${formatCurrency(tr.investorsShare)} / ${formatCurrency(tr.foundersShare)}</td>
+          </tr>`
+          )
+          .join('');
+
+    const partnerRowsHtml = liveShareholders
+      .map(
+        (s: any) => `
+        <tr>
+          <td><strong>${s.name}</strong><br/><span style="font-size:10px;color:#475569;">${s.isFounder ? 'شريك مؤسس' : 'مساهم بالتمويل'}</span></td>
+          <td>${formatDateDisplay(s.joinedDate)}</td>
+          <td>${formatCurrency(s.capital)}</td>
+          <td>${formatCurrency(s.weightedAvgCapital ?? s.capital)}</td>
+          <td>${formatCurrency(s.grossProfit)}</td>
+          <td>%${s.sharePercentage}</td>
+          <td style="color:#047857;font-weight:700;">${formatCurrency(s.netEntitlement)}</td>
+          <td>${s.isFounder ? '—' : `${formatCurrency(s.mgmtFee)} (%${s.managementFeePercentage})`}</td>
+          <td>${formatCurrency(s.totalWithdrawnProfits)}</td>
+          <td style="color:#1e40af;font-weight:700;">${formatCurrency(s.availableProfit)}</td>
+        </tr>`
+      )
+      .join('');
+
+    const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <title>التقرير المحاسبي لتوزيع أرباح الشركاء والمساهمين - ${settings.companyName || 'شركة المتحدة'}</title>
+  <style>
+    @page { size: A4 landscape; margin: 0; }
+    * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+    body { margin: 0; padding: 12mm; color: #0f172a; font-size: 11px; line-height: 1.45; }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f1f4a; padding-bottom: 10px; margin-bottom: 14px; }
+    .title h1 { margin: 0; font-size: 18px; color: #0f1f4a; }
+    .title p { margin: 2px 0 0; font-size: 11px; color: #475569; }
+    .meta { text-align: left; font-size: 11px; color: #334155; }
+    .section-title { background: #f1f5f9; border-right: 4px solid #1e40af; padding: 6px 10px; font-weight: 800; font-size: 12px; color: #0f1f4a; margin: 12px 0 8px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; }
+    th { background: #f8fafc; color: #1e293b; font-weight: 700; font-size: 10.5px; }
+    .num { font-family: monospace; font-weight: 700; text-align: left; direction: ltr; }
+    .total-row { background: #eff6ff; font-weight: 800; }
+    .badge-ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 2px 8px; border-radius: 4px; font-weight: 700; }
+    .sigs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 24px; text-align: center; font-size: 11px; color: #475569; }
+    .sig-line { border-top: 1px dashed #94a3b8; margin-top: 32px; padding-top: 4px; }
+    @media print { .no-print { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">
+      <h1>${settings.companyName || 'شركة المتحدة'} — التقرير المحاسبي التفصيلي لتوزيع أرباح الشركاء والمساهمين</h1>
+      <p>الأساس المحاسبي: <strong>${rpt.profitBasis === 'realized' ? 'الربح المحقق المحصّل نقداً (البيع بالتقسيط)' : 'الربح التعاقدي الإجمالي (الاستحقاق)'}</strong> | الفترة: <strong>${periodLabel}</strong></p>
+    </div>
+    <div class="meta">
+      <div>تاريخ الطباعة: ${new Date().toLocaleString('ar-EG')}</div>
+      <div>أعده: ${user?.name || 'المدير العام'}</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div>
+      <div class="section-title">أولاً: بيان الدخل وجسر تحقق الأرباح</div>
+      <table>
+        <tr><td>إجمالي قيمة عقود المبيعات</td><td class="num">${formatCurrency(rpt.totalContractGrossRevenue)}</td></tr>
+        <tr><td>(-) خصومات السداد المبكر</td><td class="num">-${formatCurrency(rpt.totalEarlySettlementDiscounts)}</td></tr>
+        <tr><td>(=) صافي المبيعات التعاقدية الفعلية</td><td class="num">${formatCurrency(rpt.totalEffectiveRevenue)}</td></tr>
+        <tr><td>(-) تكلفة البضاعة وأصل التمويل (بنود: ${rpt.costedByItemsCount} | أصل عقود: ${rpt.costedBySubtotalFallbackCount})</td><td class="num">-${formatCurrency(rpt.totalCogs)}</td></tr>
+        <tr class="total-row"><td>(=) مجمل الربح التعاقدي الإجمالي</td><td class="num">${formatCurrency(rpt.accrualGrossProfit)}</td></tr>
+        <tr><td>(-) أرباح مؤجلة بأقساط فواتير الفترة غير المحصلة (متبقي: ${formatCurrency(rpt.totalDeferredReceivables)})</td><td class="num">-${formatCurrency(rpt.deferredProfits)}</td></tr>
+        ${
+          rpt.isFilteredPeriod && Number(rpt.realizedFromPriorSales || 0) !== 0
+            ? `<tr><td>(+) أرباح محققة خلال الفترة من تحصيل أقساط فواتير سابقة</td><td class="num">+${formatCurrency(rpt.realizedFromPriorSales)}</td></tr>`
+            : ''
+        }
+        <tr><td>(=) مجمل الربح المحقق نقداً (من تحصيل فعلي ${formatCurrency(rpt.periodCashCollections ?? rpt.totalCollectedOnSales)})</td><td class="num">${formatCurrency(rpt.realizedGrossProfit)}</td></tr>
+        <tr><td>(-) إجمالي المصروفات التشغيلية</td><td class="num">-${formatCurrency(rpt.totalExpenses)}</td></tr>
+        <tr class="total-row"><td>(=) صافي الربح القابل للتوزيع (${rpt.profitBasis === 'realized' ? 'محقق نقداً' : 'تعاقدي'})</td><td class="num">${formatCurrency(rpt.selectedNetProfit)}</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="section-title">ثانياً: مطابقة التوزيع المحاسبية (Zero-Variance Audit)</div>
+      <table>
+        <tr><td>صافي حصة المساهمين بالتمويل</td><td class="num">${formatCurrency(rpt.totalInvestorsNet)}</td></tr>
+        <tr><td>حصة الإدارة / الشركة من عوائد المساهمين</td><td class="num">${formatCurrency(rpt.totalMgmtFees)}</td></tr>
+        <tr><td>صافي حصة الشركاء المؤسسين (شاملة رسوم الإدارة)</td><td class="num">${formatCurrency(rpt.totalFoundersNet)}</td></tr>
+        <tr><td>أرباح تحققت قبل تاريخ انضمام الشركاء المسجل</td><td class="num">${formatCurrency(rpt.preCapitalProfit)}</td></tr>
+        <tr><td>احتياطي غير مخصص لعدم وجود مؤسس بالشريحة</td><td class="num">${formatCurrency(rpt.companyUnclaimedRetainedPool)}</td></tr>
+        <tr class="total-row"><td>إجمالي الأرباح الموزعة والمطابقة</td><td class="num">${formatCurrency(rpt.allocatedSum)}</td></tr>
+        <tr><td>فارق المطابقة المحاسبية (Variance)</td><td class="num"><span class="badge-ok">${formatCurrency(rpt.reconciliationVariance)} ${rpt.isReconciled ? '— متطابق 100%' : ''}</span></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="section-title">ثالثاً: تفصيل الشرائح الزمنية وعائد الجنيه الواحد (Time-Weighted ROI)</div>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>الفترة الزمنية للشريحة</th>
+        <th>المدة</th>
+        <th>رأس المال العامل</th>
+        <th>صافي ربح الشريحة</th>
+        <th>ربح الجنيه الواحد (ROI)</th>
+        <th>حصة المساهمين / المؤسسين</th>
+      </tr>
+    </thead>
+    <tbody>${tranchesRowsHtml}</tbody>
+  </table>
+
+  <div class="section-title">رابعاً: كشف حساب وتوزيع أرباح الشركاء والمساهمين</div>
+  <table>
+    <thead>
+      <tr>
+        <th>الاسم والصفة</th>
+        <th>تاريخ الانضمام</th>
+        <th>رأس المال الحالي</th>
+        <th>متوسط رأس المال المرجح</th>
+        <th>إجمالي عائد أمواله</th>
+        <th>نسبة الشريك</th>
+        <th>صافي نصيب الفترة</th>
+        <th>حصة الشركة (إدارة)</th>
+        <th>المسحوبات السابقة</th>
+        <th>المتاح للسحب/الرسملة</th>
+      </tr>
+    </thead>
+    <tbody>${partnerRowsHtml}</tbody>
+  </table>
+
+  <div class="sigs">
+    <div><div class="sig-line">المحاسب المالي</div></div>
+    <div><div class="sig-line">المدير المالي</div></div>
+    <div><div class="sig-line">اعتماد المدير العام / الشركاء</div></div>
+  </div>
+
+</body>
+</html>`;
+
+    void printHtmlDocument(html, {
+      title: `التقرير المحاسبي - ${settings.companyName || 'شركة المتحدة'}`,
+      width: 1050,
+      height: 850,
+      paperSize: 'a4-landscape',
+    }).then((opened) => {
+      if (!opened) {
+        showToast('يرجى السماح بالنوافذ المنبثقة لطباعة التقرير', 'error');
+      }
+    });
+  };
+
   return (
-    <div className="flex flex-col h-full flex-1 min-h-0 space-y-2">
-      {/* TIER 1: Fixed Compact Action Header */}
-      <section className="bg-white rounded-xl px-3 py-1.5 border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-2xs shrink-0">
-            <Landmark size={15} />
+    <div className="flex flex-col h-full flex-1 min-h-0 space-y-2.5">
+      {/* TIER 1: Single-Row Compact Action Header */}
+      <section className="bg-white rounded-2xl px-4 py-2.5 border border-slate-200/90 shadow-2xs flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-[#0f1f4a] shrink-0">
+            <Landmark size={16} />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <h2 className="text-sm md:text-base font-black text-slate-900 leading-tight">
-                حسابات الشركاء والمساهمين
-              </h2>
-            </div>
-            <p className="text-[10px] text-slate-400 truncate">
-              متابعة رؤوس الأموال وحصص الأرباح (آخر تحديث: {lastSynced.toLocaleTimeString('ar-EG')})
-            </p>
+          <div>
+            <h2 className="text-base font-black text-slate-900 leading-tight whitespace-nowrap">
+              حسابات الشركاء والمساهمين
+            </h2>
           </div>
         </div>
 
         {/* Action Controls & View Switcher */}
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 flex-1 justify-end min-w-0">
           {/* Search Input */}
-          <div className="relative w-32 sm:w-40">
-            <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <div className="relative flex-1 min-w-[130px] max-w-[180px]">
+            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث..."
-              className="input-ui h-7 w-full pr-7 pl-2 text-xs bg-slate-50 border-slate-200 focus:bg-white"
+              placeholder="بحث باسم الشريك..."
+              className="input-ui h-8 w-full pr-9 pl-2.5 text-xs bg-slate-50/70 border-slate-200 focus:bg-white"
             />
           </div>
 
           {/* Main Tabs Switcher */}
-          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-bold">
+          <div className="inline-flex h-8 items-center rounded-xl border border-slate-200/90 bg-slate-100/90 p-0.5 text-xs font-bold shrink-0">
             <button
               type="button"
               onClick={() => setActiveTab('overview')}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition-all ${
+              className={`h-full flex items-center gap-1 px-2.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'overview'
-                  ? 'bg-white text-blue-700 shadow-2xs font-extrabold'
+                  ? 'bg-white text-slate-900 shadow-2xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <PieChartIcon size={12} />
+              <PieChartIcon size={12} className={activeTab === 'overview' ? 'text-[#1e40af]' : ''} />
               <span>الحصص ({liveShareholders.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('ledger')}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition-all ${
+              className={`h-full flex items-center gap-1 px-2.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${
                 activeTab === 'ledger'
-                  ? 'bg-white text-blue-700 shadow-2xs font-extrabold'
+                  ? 'bg-white text-slate-900 shadow-2xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <FileText size={12} />
+              <FileText size={12} className={activeTab === 'ledger' ? 'text-[#1e40af]' : ''} />
               <span>المعاملات ({displayedTransactions.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('report')}
+              className={`h-full flex items-center gap-1 px-2.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${
+                activeTab === 'report'
+                  ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Scale size={12} className={activeTab === 'report' ? 'text-[#1e40af]' : ''} />
+              <span>تقرير المحاسب</span>
             </button>
           </div>
 
@@ -902,9 +1164,9 @@ export default function Shareholders() {
             <button
               type="button"
               onClick={() => setShowChartBanner(!showChartBanner)}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition-all border ${
+              className={`h-8 flex items-center gap-1 px-2.5 rounded-xl text-xs font-bold transition-all border whitespace-nowrap shrink-0 cursor-pointer ${
                 showChartBanner
-                  ? 'bg-blue-50 border-blue-200 text-blue-700'
+                  ? 'bg-blue-50 border-blue-200 text-[#1e40af]'
                   : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
               title="عرض أو إخفاء مخطط توزيع الحصص"
@@ -919,14 +1181,14 @@ export default function Shareholders() {
             type="button"
             onClick={loadData}
             disabled={isLoading}
-            className="flex items-center gap-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2 py-1 rounded-lg text-xs font-bold transition-all shadow-2xs active:scale-95 disabled:opacity-50 cursor-pointer"
-            title="تحديث لحظي من قاعدة البيانات"
+            className="h-8 flex items-center gap-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-2.5 rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+            title={`آخر تحديث: ${lastSynced.toLocaleTimeString('ar-EG')}`}
           >
-            <RefreshCw size={12} className={isLoading ? 'animate-spin text-blue-600' : ''} />
+            <RefreshCw size={12} className={isLoading ? 'animate-spin text-[#1e40af]' : ''} />
             <span className="hidden sm:inline">تحديث</span>
           </button>
 
-          {user?.role !== 'manager' && (
+          {isUserAdmin && (
             <button
               type="button"
               onClick={() => {
@@ -944,128 +1206,82 @@ export default function Shareholders() {
                 });
                 setShowShareholderModal(true);
               }}
-              className="flex items-center gap-1 bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-2.5 py-1 rounded-lg transition-all text-xs font-bold shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
+              className="h-8 flex items-center gap-1 bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-3 rounded-xl transition-all text-xs font-bold shadow-xs active:scale-95 cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Plus size={13} />
+              <Plus size={14} />
               <span>إضافة شريك</span>
             </button>
           )}
         </div>
       </section>
 
-      {/* Financial Health & Equity vs Supplier Debt Summary Banner */}
-      <section className="bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] text-white rounded-2xl p-4 shadow-sm border border-slate-800/70 shrink-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3 mb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 font-bold">
-              ⚖️
-            </div>
-            <div>
-              <h3 className="text-sm font-black text-white">المركز المالي وصافي رأس المال الفعلي للشركة</h3>
-              <p className="text-[11px] text-slate-300">حقوق الشركاء الكلية مطروحاً منها التزامات ومديونيات الموردين القائمة</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/30 font-bold">
-              موقف مالي سليم وقابل للتوزيع
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-            <span className="text-[11px] text-slate-300 block font-semibold mb-1">إجمالي حقوق الشركاء (رأس المال + الأرباح)</span>
-            <span className="text-lg font-black text-white block">{formatCurrency(totalGrossEquity)}</span>
-            <span className="text-[10px] text-slate-400 block mt-0.5">
-              رأس المال: {formatCurrency(totalCapital)} + الأرباح: {formatCurrency(totalAvailableProfits)}
-            </span>
-          </div>
-
-          <div className="bg-rose-500/10 rounded-xl p-3 border border-rose-500/20">
-            <span className="text-[11px] text-rose-300 block font-semibold mb-1">مديونيات الموردين القائمة (التزامات متداولة)</span>
-            <span className="text-lg font-black text-rose-400 block">-{formatCurrency(totalSupplierDebt)}</span>
-            <span className="text-[10px] text-rose-300/80 block mt-0.5">
-              واجبة السداد للموردين وتُخصم من صافي المركز
-            </span>
-          </div>
-
-          <div className="bg-emerald-500/15 rounded-xl p-3 border border-emerald-500/30">
-            <span className="text-[11px] text-emerald-300 block font-semibold mb-1">صافي رأس المال الحر الفعلي للشركة</span>
-            <span className="text-xl font-black text-emerald-400 block">{formatCurrency(netFreeCapital)}</span>
-            <span className="text-[10px] text-emerald-300/80 block mt-0.5">
-              صافي القيمة الحقيقية للشركة بعد تغطية كافة الديون
-            </span>
-          </div>
-        </div>
-      </section>
-
-      {/* TIER 2: Streamlined 4-KPI Partner Summary Strip */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
-        {/* KPI 1: Total Active Capital */}
-        <div className="bg-white rounded-xl px-3 py-2 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">إجمالي رأس المال الفعلي</span>
-            <span className="text-base font-black text-slate-900 tabular-nums block leading-tight mt-0.5">
-              {formatCurrency(totalCapital)}
-            </span>
-            <span className="text-[10px] text-slate-400 block truncate mt-0.5">
-              الافتتاحي: {formatCurrency(foundersSummary.totalInitialCapital)}
-            </span>
-          </div>
-          <div className="w-7 h-7 bg-indigo-50 rounded-lg flex items-center justify-center text-indigo-600 shrink-0 border border-indigo-100">
-            <Wallet size={15} />
-          </div>
-        </div>
-
-        {/* KPI 2: Founders Ownership & Investors */}
-        <div className="bg-white rounded-xl px-3 py-2 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2">
+      {/* TIER 2: Simple, Clear Financial Summary Strip */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 shrink-0">
+        {/* KPI 1: Total Gross Equity */}
+        <div className="bg-gradient-to-br from-[#eef2ff] via-[#f6f8ff] to-white rounded-xl px-4 py-3 border border-indigo-200/70 shadow-xs flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">ملكية المنشأة والتمويل</span>
-            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-              <span className="inline-flex items-center gap-1 text-[11px] font-black text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200/60 tabular-nums">
-                الشركاء: %{foundersSummary.rawFoundersShare}
-              </span>
-              <span className="inline-flex items-center gap-1 text-[11px] font-black text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200/60 tabular-nums">
-                المساهمون: {foundersSummary.investorsCount} مساهم
-              </span>
+            <span className="text-[11px] font-bold text-slate-600 block">إجمالي حقوق الشركاء</span>
+            <span className="text-lg font-black text-[#0f1f4a] tabular-nums block leading-tight mt-0.5">
+              {formatCurrency(totalGrossEquity)}
+            </span>
+            <div className="text-[10px] text-slate-500 mt-1 font-medium leading-snug flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              <span className="whitespace-nowrap">رأس المال: {formatCurrency(totalCapital)}</span>
+              <span className="text-slate-300">•</span>
+              <span className="whitespace-nowrap">أرباح: {formatCurrency(totalAvailableProfits)}</span>
             </div>
           </div>
-          <div className="w-7 h-7 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0 border border-blue-100">
-            <Award size={15} />
+          <div className="w-9 h-9 bg-[#1e3a8a]/10 rounded-xl flex items-center justify-center text-[#1e3a8a] shrink-0">
+            <Wallet size={16} />
           </div>
         </div>
 
-        {/* KPI 3: Available Profits for Withdrawal */}
-        <div className="bg-white rounded-xl px-3 py-2 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">الأرباح المتاحة للصرف</span>
-            <span className="text-base font-black text-emerald-600 tabular-nums block leading-tight mt-0.5">
-              +{formatCurrency(totalAvailableProfits)}
-            </span>
-            <span className="text-[10px] text-slate-400 block truncate mt-0.5">
-              أرباح جاهزة للسحب الفوري
-            </span>
-          </div>
-          <div className="w-7 h-7 bg-emerald-50 rounded-lg flex items-center justify-center text-emerald-600 shrink-0 border border-emerald-100">
-            <DollarSign size={15} />
-          </div>
-        </div>
-
-        {/* KPI 4: Active Partners Count */}
-        <div className="bg-white rounded-xl px-3 py-2 border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2">
+        {/* KPI 2: Supplier Debt */}
+        <div className="bg-gradient-to-br from-[#fff1f2] via-[#fff7f8] to-white rounded-xl px-4 py-3 border border-rose-200/70 shadow-xs flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <span className="text-[11px] font-bold text-slate-500 block truncate">الشركاء والمساهمون</span>
-            <span className="text-base font-black text-slate-900 tabular-nums block leading-tight mt-0.5">
-              {liveShareholders.length} <span className="text-xs font-normal text-slate-500">نشط</span>
+            <span className="text-[11px] font-bold text-slate-600 block">مستحقات الموردين</span>
+            <span className="text-lg font-black text-rose-700 tabular-nums block leading-tight mt-0.5">
+              -{formatCurrency(totalSupplierDebt)}
             </span>
-            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold mt-0.5">
-              <span>{foundersSummary.foundersCount} شريك</span>
-              <span>•</span>
+            <span className="text-[10px] text-slate-500 block mt-0.5 font-medium leading-snug">
+              ديون للموردين تُخصم من قيمة الشركة
+            </span>
+          </div>
+          <div className="w-9 h-9 bg-rose-500/10 rounded-xl flex items-center justify-center text-rose-700 shrink-0">
+            <FileText size={16} />
+          </div>
+        </div>
+
+        {/* KPI 3: Net Free Capital */}
+        <div className="bg-gradient-to-br from-[#ecfdf5] via-[#f4fbf8] to-white rounded-xl px-4 py-3 border border-emerald-200/80 shadow-xs flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] font-bold text-emerald-900 block">صافي قيمة الشركة الفعلي</span>
+            <span className="text-lg font-black text-emerald-700 tabular-nums block leading-tight mt-0.5">
+              {formatCurrency(netFreeCapital)}
+            </span>
+            <span className="text-[10px] text-emerald-800/75 block mt-0.5 font-medium leading-snug">
+              الحقوق الصافية بعد خصم الموردين
+            </span>
+          </div>
+          <div className="w-9 h-9 bg-emerald-600/10 rounded-xl flex items-center justify-center text-emerald-700 shrink-0">
+            <DollarSign size={16} />
+          </div>
+        </div>
+
+        {/* KPI 4: Ownership & Active Partners */}
+        <div className="bg-gradient-to-br from-[#f1f5f9] via-[#f8fafc] to-white rounded-xl px-4 py-3 border border-slate-200/90 shadow-xs flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] font-bold text-slate-600 block">الشركاء والمساهمون</span>
+            <span className="text-lg font-black text-slate-900 tabular-nums block leading-tight mt-0.5">
+              {liveShareholders.length} <span className="text-xs font-semibold text-slate-500">نشط</span>
+            </span>
+            <div className="text-[10px] text-slate-500 mt-0.5 font-medium leading-snug flex flex-wrap items-center gap-x-1.5">
+              <span>{foundersSummary.foundersCount} شريك (%{foundersSummary.rawFoundersShare})</span>
+              <span className="text-slate-300">•</span>
               <span>{foundersSummary.partnersCount} مساهم</span>
             </div>
           </div>
-          <div className="w-7 h-7 bg-purple-50 rounded-lg flex items-center justify-center text-purple-600 shrink-0 border border-purple-100">
-            <Users size={15} />
+          <div className="w-9 h-9 bg-slate-500/10 rounded-xl flex items-center justify-center text-slate-700 shrink-0">
+            <Users size={16} />
           </div>
         </div>
       </section>
@@ -1130,70 +1346,81 @@ export default function Shareholders() {
             </div>
           )}
 
-          {/* Main Partners View: Cards Only */}
+          {/* Main Partners View: Simple, Role-Clarity Cards */}
           {visibleShareholders.length === 0 ? (
             <div className="py-16 text-center text-slate-400">
               <Users size={40} className="mx-auto mb-2 text-slate-300" />
               <p className="text-sm font-bold text-slate-600">لا يوجد مساهمون مطابقون للبحث</p>
             </div>
           ) : (
-            /* Streamlined Modern Cards View */
-            <div className="flex-1 min-h-0 overflow-y-auto p-3.5">
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
-                {visibleShareholders.map((shareholder: any, index: number) => {
-                  const propShare =
-                    chartData.find((c) => c.id === shareholder.id)?.proportionalShare ??
-                    shareholder.sharePercentage ??
-                    0;
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-[#eef2f6] space-y-3">
+              {/* Clear Owner Explanation if pre-join profits exist */}
+              {liveMetrics?.accountantReport &&
+                Math.abs(Number(liveMetrics.accountantReport.preCapitalProfit || 0)) > 0.01 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 text-xs text-amber-950 shadow-2xs">
+                    <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="leading-relaxed">
+                      <strong className="font-black">توضيح بخصوص الأرباح السابقة:</strong> يوجد أرباح بقيمة{' '}
+                      <strong className="font-mono">{formatCurrency(liveMetrics.accountantReport.preCapitalProfit)}</strong> تحققت قبل أقدم تاريخ انضمام مسجل للشركاء حالياً. لا تُحسب هذه الأرباح في الكروت إلا إذا عدّلت <strong>«تاريخ الانضمام»</strong> من زر التعديل (✏️) إلى التاريخ الفعلي لبداية الشراكة.
+                    </div>
+                  </div>
+                )}
+
+              {liveMetrics?.accountantReport &&
+                Number(liveMetrics.accountantReport.totalOverDistributedDelta || 0) > 0.05 && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 text-xs text-rose-900 shadow-2xs">
+                    <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                    <div className="leading-relaxed">
+                      <strong className="font-black">تنبيه تسوية:</strong> يوجد أرباح مثبّتة من تسوية سابقة تزيد بمقدار{' '}
+                      <strong className="font-mono">{formatCurrency(liveMetrics.accountantReport.totalOverDistributedDelta)}</strong> عن الأرباح الفعلية على الأساس المختار حالياً. يُرجى مراجعة تبويب «تقرير المحاسب والتسوية».
+                    </div>
+                  </div>
+                )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {visibleShareholders.map((shareholder: any) => {
+                  const isF = Boolean(shareholder.isFounder);
+                  const mgmtPct = Number(
+                    shareholder.managementFeePercentage ?? Math.max(0, 100 - Number(shareholder.sharePercentage || 0))
+                  );
                   return (
                     <div
                       key={shareholder.id}
-                      className="bg-white rounded-xl p-3.5 border border-slate-200/90 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between"
+                      className="bg-[#f8fafd] rounded-2xl border border-slate-200/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-between overflow-hidden"
                     >
                       <div>
-                        {/* Header */}
-                        <div className="flex justify-between items-start gap-2 mb-2.5">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div
-                              className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-black text-sm shrink-0 shadow-2xs"
-                              style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                            >
-                              {shareholder.name.charAt(0)}
+                        {/* Clean Brand Header Strip */}
+                        <div
+                          className={`px-4 py-3 flex justify-between items-center gap-2 ${
+                            isF
+                              ? 'bg-gradient-to-l from-[#0f1f4a] to-[#1e3a8a] text-white'
+                              : 'bg-gradient-to-l from-[#115e59] to-[#0f766e] text-white'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="font-black text-white text-sm truncate">{shareholder.name}</h4>
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/15 text-white/95 border border-white/20">
+                                {isF ? 'شريك مؤسس' : 'مساهم بالتمويل'}
+                              </span>
                             </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <h4 className="font-black text-slate-900 text-sm truncate">{shareholder.name}</h4>
-                                <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                                  shareholder.isFounder
-                                    ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
-                                }`}>
-                                  {shareholder.isFounder ? 'شريك' : 'مساهم'}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                انضم: {formatDateDisplay(shareholder.joinedDate || shareholder.createdAt)}
-                              </div>
+                            <div className="text-[10px] text-white/75 font-medium mt-0.5">
+                              يُحسب ربحه من: {formatDateDisplay(shareholder.joinedDate || shareholder.createdAt)}
                             </div>
                           </div>
 
                           <div className="flex items-center gap-1 shrink-0">
-                            <div className="flex flex-col items-end">
-                              <span className={`px-2 py-0.5 rounded-md font-black text-xs ${
-                                shareholder.isFounder
-                                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                  : 'bg-purple-50 text-purple-700 border border-purple-200'
-                              }`}>
+                            <div className="flex flex-col items-end ml-1">
+                              <span className="px-2 py-0.5 rounded-lg font-black text-xs bg-white/20 text-white border border-white/25">
                                 %{shareholder.sharePercentage}
                               </span>
-                              <span className="text-[9px] text-slate-400 font-bold mt-0.5 whitespace-nowrap">
-                                {shareholder.isFounder ? 'ملكية بالشركة' : 'عائد تمويل'}
+                              <span className="text-[9px] text-white/75 font-bold mt-0.5 whitespace-nowrap">
+                                {isF ? 'نسبة الملكية' : 'نسبته من ربح ماله'}
                               </span>
                             </div>
                             <button
                               type="button"
                               onClick={() => {
-                                const isF = Boolean(shareholder.isFounder);
                                 setEditingShareholder(shareholder);
                                 setShareholderForm({
                                   name: shareholder.name,
@@ -1208,86 +1435,132 @@ export default function Shareholders() {
                                 });
                                 setShowShareholderModal(true);
                               }}
-                              className="p-1 text-slate-400 hover:text-indigo-600 transition-colors"
-                              title="تعديل بيانات الشريك"
+                              className="p-1.5 text-white/70 hover:text-white hover:bg-white/15 rounded-lg transition-colors cursor-pointer"
+                              title="تعديل بيانات الشريك / تاريخ الانضمام"
                             >
                               <Edit size={13} />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteShareholder(shareholder.id, shareholder.name)}
-                              className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
-                              title="حذف الشريك"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                            {isUserAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteShareholder(shareholder.id, shareholder.name)}
+                                className="p-1.5 text-white/70 hover:text-rose-200 hover:bg-rose-500/25 rounded-lg transition-colors cursor-pointer"
+                                title="حذف الشريك"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
                           </div>
                         </div>
 
-                        {/* 3 Clear Metric Pillars */}
-                        <div className="grid grid-cols-3 gap-2 p-2 bg-slate-50/80 rounded-xl border border-slate-200/70 mb-2.5 text-center">
-                          <div className="bg-white p-2 rounded-lg border border-slate-200/60 shadow-2xs">
-                            <span className="text-[10px] font-bold text-slate-500 block leading-tight">
-                              {shareholder.isFounder ? 'رأس المال الأساسي' : 'مبلغ التمويل'}
-                            </span>
-                            <span className="text-xs font-black text-slate-800 block mt-1">{formatCurrency(shareholder.capital)}</span>
+                        {/* Card Body */}
+                        <div className="p-4 pb-2.5 space-y-2">
+                          {/* 3 Clean Metric Pillars */}
+                          <div className="grid grid-cols-3 divide-x divide-x-reverse divide-slate-200/80 bg-white rounded-xl border border-slate-200/80 shadow-2xs py-2.5 px-1 text-center">
+                            <div className="px-1.5">
+                              <span className="text-[10px] font-semibold text-slate-500 block leading-tight">
+                                {isF ? 'رأس المال المدفوع' : 'مبلغ التمويل'}
+                              </span>
+                              <span className="text-xs font-black text-slate-900 block mt-1">{formatCurrency(shareholder.capital)}</span>
+                            </div>
+                            <div className="px-1.5">
+                              <span className="text-[10px] font-semibold text-slate-500 block leading-tight">
+                                {isF ? 'أرباح متاحة للسحب' : 'أرباح جاهزة للصرف'}
+                              </span>
+                              <span className="text-xs font-black text-emerald-700 block mt-1">+{formatCurrency(shareholder.availableProfit)}</span>
+                            </div>
+                            <div className="px-1.5">
+                              <span className="text-[10px] font-semibold text-slate-500 block leading-tight">
+                                {isF ? 'إجمالي رصيده' : 'إجمالي مستحقاته'}
+                              </span>
+                              <span className="text-xs font-black text-[#0f1f4a] block mt-1">
+                                {formatCurrency(shareholder.totalNetValue)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="bg-emerald-50/70 p-2 rounded-lg border border-emerald-200/60 shadow-2xs">
-                            <span className="text-[10px] font-bold text-emerald-700 block leading-tight">
-                              {shareholder.isFounder ? 'أرباح مدورة بالنشاط' : 'أرباح جاهزة للسحب'}
-                            </span>
-                            <span className="text-xs font-black text-emerald-800 block mt-1">+{formatCurrency(shareholder.availableProfit)}</span>
-                          </div>
-                          <div className="bg-indigo-50/70 p-2 rounded-lg border border-indigo-200/60 shadow-2xs">
-                            <span className="text-[10px] font-bold text-indigo-700 block leading-tight">إجمالي الرصيد الفعلي</span>
-                            <span className="text-xs font-black text-indigo-900 block mt-1">{formatCurrency(shareholder.totalNetValue)}</span>
-                          </div>
-                        </div>
 
-                        {/* Compact Secondary Line */}
-                        <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-slate-100/70 border border-slate-200/60 text-slate-600 mb-2.5 font-semibold">
-                          <span>أرباح مكتسبة: <strong className="text-blue-700">+{formatCurrency(shareholder.netEntitlement)}</strong></span>
-                          <span>•</span>
-                          <span>مسحوبات نقدية سابقة: <strong className={Number(shareholder.totalWithdrawnProfits) > 0 ? 'text-amber-700' : 'text-slate-600'}>{formatWithdrawal(shareholder.totalWithdrawnProfits)}</strong></span>
+                          {/* Compact Secondary Lines */}
+                          <div className="flex items-center justify-between text-[11px] px-1 text-slate-500 font-medium">
+                            <span>إجمالي أرباحه: <strong className="text-slate-700">+{formatCurrency(shareholder.netEntitlement)}</strong></span>
+                            <span>ما تم صرفه: <strong className={Number(shareholder.totalWithdrawnProfits) > 0 ? 'text-amber-700' : 'text-slate-700'}>{formatWithdrawal(shareholder.totalWithdrawnProfits)}</strong></span>
+                          </div>
+
+                          <div className="text-[10px] px-2 py-1.5 rounded-lg bg-slate-100/80 text-slate-600 flex items-center justify-between gap-2">
+                            {isF ? (
+                              Number(shareholder.partnerShareOfDebt || 0) > 0 ? (
+                                <>
+                                  <span>حصته من التزامات الموردين: <strong className="text-rose-700">-{formatCurrency(shareholder.partnerShareOfDebt)}</strong></span>
+                                  <span>الصافي الحر: <strong className="text-[#0f1f4a]">{formatCurrency(shareholder.partnerNetFreeCapital ?? shareholder.totalNetValue)}</strong></span>
+                                </>
+                              ) : (
+                                <span>يقتسم صافي ربح الشركة + حصة إدارة المساهمين بنسبة %{shareholder.sharePercentage}</span>
+                              )
+                            ) : (
+                              <>
+                                <span>نسبة الشركة للإدارة (%{mgmtPct}): <strong className="text-slate-800">{formatCurrency(shareholder.mgmtFee || 0)}</strong></span>
+                                <span>عائد التمويل الإجمالي: <strong>{formatCurrency(shareholder.grossProfit || 0)}</strong></span>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
 
-                      {/* Clean Action Buttons */}
-                      <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 mt-auto">
-                        {!shareholder.isFounder ? (
+                      {/* Cohesive Action Buttons */}
+                      <div className="px-3.5 py-2.5 border-t border-slate-200/70 bg-white/80 flex flex-wrap items-center gap-1.5 mt-auto">
+                        {!isF ? (
                           <button
                             type="button"
                             onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
-                            className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 active:scale-95"
+                            className="flex-1 min-w-[115px] h-8 px-2.5 bg-[#0f766e] hover:bg-[#115e59] text-white rounded-lg text-xs font-bold shadow-2xs transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer"
                           >
                             <DollarSign size={13} />
-                            <span>صرف أرباح المساهم</span>
+                            <span>صرف أرباح</span>
                           </button>
                         ) : (
                           <button
                             type="button"
                             onClick={() => openTxModal(shareholder.id, 'profit_withdrawal')}
-                            className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1 active:scale-95"
-                            title="سحب أرباح نقداً للشريك من الخزينة عند الحاجة"
+                            className="flex-1 min-w-[105px] h-8 px-2.5 bg-[#1e3a8a] hover:bg-[#0f1f4a] text-white rounded-lg text-xs font-bold shadow-2xs transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer"
+                            title="سحب أرباح نقداً للشريك من الخزينة"
                           >
                             <DollarSign size={13} />
-                            <span>سحب نقدي</span>
+                            <span>سحب أرباح</span>
                           </button>
                         )}
                         <button
                           type="button"
                           onClick={() => openTxModal(shareholder.id, 'capital_deposit')}
-                          className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200 flex items-center justify-center gap-1 active:scale-95"
-                          title="إيداع وزيادة رأس المال"
+                          className="h-8 px-2.5 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-[11px] font-bold transition-all border border-slate-300/80 flex items-center justify-center gap-1 active:scale-95 cursor-pointer"
+                          title={isF ? 'زيادة رأس المال' : 'زيادة مبلغ التمويل'}
                         >
-                          <ArrowDownToLine size={13} />
+                          <ArrowDownToLine size={12} />
                           <span>إيداع</span>
                         </button>
                         <button
                           type="button"
+                          onClick={() => openTxModal(shareholder.id, 'capital_withdrawal')}
+                          className="h-8 px-2.5 bg-white hover:bg-rose-50 text-rose-700 rounded-lg text-[11px] font-bold transition-all border border-rose-200 flex items-center justify-center gap-1 active:scale-95 cursor-pointer"
+                          title={isF ? 'سحب من رأس المال' : 'رد جزء أو كل مبلغ التمويل'}
+                        >
+                          <ArrowUpFromLine size={12} />
+                          <span>{isF ? 'رأس مال' : 'سحب تمويل'}</span>
+                        </button>
+                        {isF && isApiMode() && Number(shareholder.availableProfit || 0) >= 1 && (
+                          <button
+                            type="button"
+                            disabled={isCapitalizing}
+                            onClick={() => handleCapitalizeProfits(shareholder.id)}
+                            className="h-8 px-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold transition-all border border-indigo-200 flex items-center justify-center gap-1 active:scale-95 cursor-pointer disabled:opacity-50"
+                            title="تحويل الأرباح المتاحة وإضافتها رسمياً إلى رأس المال دون سحب كاش"
+                          >
+                            <span>رسملة</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
                           onClick={() => setInspectingPartnerId(shareholder.id)}
-                          className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200 flex items-center justify-center gap-1 active:scale-95"
-                          title="كشف الحساب التفصيلي للشريك"
+                          className="h-8 px-2.5 bg-white hover:bg-slate-100 text-slate-600 rounded-lg text-xs font-bold transition-all border border-slate-300/80 flex items-center justify-center active:scale-95 cursor-pointer"
+                          title="كشف الحساب التفصيلي"
                         >
                           <FileText size={13} />
                         </button>
@@ -1313,11 +1586,11 @@ export default function Shareholders() {
               </span>
             </div>
             <div className="text-slate-500 text-[10px]">
-              الأرباح مرجحة تلقائياً بتاريخ انضمام كل شريك ومساهم
+              تُحسب الحصص تلقائياً حسب تاريخ انضمام كل شريك ومبلغ تمويله
             </div>
           </div>
         </section>
-      ) : (
+      ) : activeTab === 'ledger' ? (
         /* TAB 2: Comprehensive Shareholder Ledger & Transaction History */
         <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
           {/* Sub-toolbar for Ledger filtering */}
@@ -1430,7 +1703,7 @@ export default function Shareholders() {
 
                     <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[11px] text-slate-500">
                       <span>بواسطة: {tx.createdBy || 'المدير العام'}</span>
-                      {user?.role !== 'manager' && (
+                      {isUserAdmin && (
                         <button
                           type="button"
                           onClick={() => handleDeleteTransaction(tx.id)}
@@ -1447,19 +1720,19 @@ export default function Shareholders() {
             )}
           </div>
 
-          <div className="hidden md:block desktop-table-scroll">
-            <table className="w-full min-w-[950px] border-collapse">
+          <div className="hidden md:block flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+            <table className="w-full table-fixed border-collapse text-xs">
               <thead className="desktop-sticky-header">
                 <tr>
-                  <th className="py-2.5 px-4 text-right min-w-[110px]">التاريخ</th>
-                  <th className="py-2.5 px-4 text-right min-w-[170px]">الشريك / المساهم</th>
-                  <th className="py-2.5 px-4 text-right min-w-[140px]">نوع الحركة</th>
-                  <th className="py-2.5 px-4 text-right min-w-[140px]">المبلغ</th>
-                  <th className="py-2.5 px-4 text-right min-w-[150px]">رصيد رأس المال بعد الحركة</th>
-                  <th className="py-2.5 px-4 text-right min-w-[150px]">الأرباح المتاحة بعد الحركة</th>
-                  <th className="py-2.5 px-4 text-right min-w-[200px]">البيان / الملاحظات</th>
-                  <th className="py-2.5 px-4 text-right min-w-[110px]">بواسطة</th>
-                  <th className="py-2.5 px-4 text-center w-16">إجراء</th>
+                  <th className="py-2.5 px-2 text-right w-[9.5%]">التاريخ</th>
+                  <th className="py-2.5 px-2 text-right w-[15.5%]">الشريك / المساهم</th>
+                  <th className="py-2.5 px-2 text-right w-[11.5%]">نوع الحركة</th>
+                  <th className="py-2.5 px-2 text-right w-[11%]">المبلغ</th>
+                  <th className="py-2.5 px-2 text-right w-[11.5%]">رأس المال بعد الحركة</th>
+                  <th className="py-2.5 px-2 text-right w-[11%]">الأرباح بعد الحركة</th>
+                  <th className="py-2.5 px-2 text-right w-[16%]">البيان / الملاحظات</th>
+                  <th className="py-2.5 px-2 text-right w-[9%]">بواسطة</th>
+                  <th className="py-2.5 px-2 text-center w-[5%]">إجراء</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1479,58 +1752,59 @@ export default function Shareholders() {
 
                     return (
                       <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-2.5 px-4 text-xs font-mono text-slate-600 whitespace-nowrap">
+                        <td className="py-2.5 px-2 text-[11px] font-mono text-slate-600 whitespace-nowrap truncate">
                           {formatDateDisplay(tx.date)}
                         </td>
-                        <td className="py-2.5 px-4 text-xs md:text-sm font-bold text-slate-900 whitespace-nowrap">
+                        <td className="py-2.5 px-2 text-xs font-bold text-slate-900">
                           <button
                             type="button"
                             onClick={() => setInspectingPartnerId(tx.shareholderId)}
-                            className="hover:text-indigo-600 text-right inline-flex items-center gap-1.5 group cursor-pointer"
+                            className="hover:text-indigo-600 text-right inline-flex items-center gap-1.5 group cursor-pointer max-w-full min-w-0"
+                            title={`${partnerName} (${isFounder ? 'شريك أساسي' : 'مساهم تمويل'})`}
                           >
-                            <span className="font-black group-hover:underline text-slate-900 group-hover:text-indigo-600">
+                            <span className="font-black group-hover:underline text-slate-900 group-hover:text-indigo-600 truncate">
                               {partnerName}
                             </span>
                             {isFounder ? (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200">
-                                شريك أساسي
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
+                                شريك
                               </span>
                             ) : (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
-                                مساهم تمويل
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                                مساهم
                               </span>
                             )}
                           </button>
                         </td>
-                        <td className="py-2.5 px-4 whitespace-nowrap">
+                        <td className="py-2.5 px-2 whitespace-nowrap">
                           {tx.type === 'capital_deposit' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                              <ArrowDownToLine size={12} className="text-indigo-600" />
-                              <span>إيداع رأس مال</span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 max-w-full truncate">
+                              <ArrowDownToLine size={11} className="text-indigo-600 shrink-0" />
+                              <span className="truncate">إيداع رأس مال</span>
                             </span>
                           )}
                           {tx.type === 'capital_withdrawal' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                              <ArrowUpFromLine size={12} className="text-rose-600" />
-                              <span>سحب رأس مال</span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 max-w-full truncate">
+                              <ArrowUpFromLine size={11} className="text-rose-600 shrink-0" />
+                              <span className="truncate">سحب رأس مال</span>
                             </span>
                           )}
                           {tx.type === 'profit_distribution' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <DollarSign size={12} className="text-emerald-600" />
-                              <span>توزيع أرباح</span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 max-w-full truncate">
+                              <DollarSign size={11} className="text-emerald-600 shrink-0" />
+                              <span className="truncate">توزيع أرباح</span>
                             </span>
                           )}
                           {tx.type === 'profit_withdrawal' && (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                              <Wallet size={12} className="text-amber-600" />
-                              <span>صرف أرباح</span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200 max-w-full truncate">
+                              <Wallet size={11} className="text-amber-600 shrink-0" />
+                              <span className="truncate">صرف أرباح</span>
                             </span>
                           )}
                         </td>
-                        <td className="py-2.5 px-4 whitespace-nowrap">
+                        <td className="py-2.5 px-2 whitespace-nowrap">
                           <span
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs md:text-sm font-mono font-black tabular-nums border ${
+                            className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-lg text-xs font-mono font-black tabular-nums border max-w-full truncate ${
                               isPositive
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                 : 'bg-rose-50 text-rose-700 border-rose-200'
@@ -1541,22 +1815,25 @@ export default function Shareholders() {
                             <span>{formatCurrency(tx.amount)}</span>
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 text-xs font-bold text-slate-800 tabular-nums whitespace-nowrap font-mono">
+                        <td className="py-2.5 px-2 text-xs font-bold text-slate-800 tabular-nums whitespace-nowrap font-mono truncate">
                           {tx.runningCapital !== undefined ? formatCurrency(tx.runningCapital) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-xs font-bold text-emerald-700 tabular-nums whitespace-nowrap font-mono">
+                        <td className="py-2.5 px-2 text-xs font-bold text-emerald-700 tabular-nums whitespace-nowrap font-mono truncate">
                           {tx.runningAvailableProfit !== undefined ? formatCurrency(tx.runningAvailableProfit) : '-'}
                         </td>
-                        <td className="py-2.5 px-4 text-xs text-slate-600 max-w-xs truncate" title={tx.description}>
+                        <td className="py-2.5 px-2 text-xs text-slate-600 truncate" title={tx.description}>
                           {tx.description}
                         </td>
-                        <td className="py-2.5 px-4 text-xs text-slate-600 whitespace-nowrap">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                        <td className="py-2.5 px-2 text-[11px] text-slate-600 whitespace-nowrap">
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium max-w-full truncate"
+                            title={tx.createdBy || 'المدير العام'}
+                          >
                             {tx.createdBy || 'المدير العام'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 text-center whitespace-nowrap">
-                          {user?.role !== 'manager' ? (
+                        <td className="py-2.5 px-2 text-center whitespace-nowrap">
+                          {isUserAdmin ? (
                             <button
                               type="button"
                               onClick={() => handleDeleteTransaction(tx.id)}
@@ -1612,11 +1889,487 @@ export default function Shareholders() {
             </span>
           </div>
         </section>
+      ) : (
+        /* TAB 3: Detailed CPA Accountant Financial Audit & Distribution Statement */
+        <section className="flex-1 min-h-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+          {/* Control Strip: Realized Basis Indicator, Period Filter, Settle & Print */}
+          <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/80 px-3 text-xs font-bold text-emerald-900">
+                <ShieldCheck size={14} className="text-emerald-600 shrink-0" />
+                <span>الأساس المعتمد: الأرباح المحصلة كاش بالخزينة (الآمن)</span>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-white px-2.5 h-8 rounded-xl border border-slate-200 text-xs">
+                <Calendar size={13} className="text-slate-400" />
+                <span className="font-bold text-slate-500">من:</span>
+                <input
+                  type="date"
+                  value={reportPeriodFrom}
+                  onChange={(e) => setReportPeriodFrom(e.target.value)}
+                  className="bg-transparent font-bold text-slate-800 outline-none text-xs"
+                />
+                <span className="font-bold text-slate-400">| إلى:</span>
+                <input
+                  type="date"
+                  value={reportPeriodTo}
+                  onChange={(e) => setReportPeriodTo(e.target.value)}
+                  className="bg-transparent font-bold text-slate-800 outline-none text-xs"
+                />
+                {(reportPeriodFrom || reportPeriodTo) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportPeriodFrom('');
+                      setReportPeriodTo('');
+                    }}
+                    className="text-rose-600 hover:text-rose-700 font-bold text-[11px] px-1 cursor-pointer"
+                    title="عرض كل الفترات"
+                  >
+                    الكل
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {isUserAdmin && (
+                <button
+                  type="button"
+                  onClick={handleSettlePeriod}
+                  disabled={isSettlingPeriod}
+                  className="h-8 flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                  title="اعتماد وتثبيت أرباح الشركاء المستحقة حتى هذا التاريخ في قيود رسمية"
+                >
+                  <CheckCircle2 size={13} />
+                  <span>{isSettlingPeriod ? 'جاري التثبيت...' : 'اعتماد وتثبيت التسوية'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handlePrintAccountantReport}
+                className="h-8 flex items-center gap-1.5 bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-3.5 rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
+              >
+                <Printer size={13} />
+                <span>طباعة التقرير للمحاسب</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Scrollable CPA Audit Report Content */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+            {!liveMetrics?.accountantReport ? (
+              <div className="py-12 text-center text-slate-400 text-sm font-bold">
+                التقرير المحاسبي التفصيلي متاح عند الاتصال بالسيرفر الرئيسي.
+              </div>
+            ) : (
+              (() => {
+                const rpt = liveMetrics.accountantReport;
+                return (
+                  <>
+                    {/* Alert if pre-capital profits exist due to joined_date */}
+                    {Math.abs(Number(rpt.preCapitalProfit || 0)) > 0.01 && (
+                      <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-amber-900">
+                        <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                        <div className="leading-relaxed">
+                          <strong className="font-black">تنبيه بخصوص تاريخ الانضمام:</strong>{' '}
+                          يوجد صافي ربح بقيمة <strong className="font-mono">{formatCurrency(rpt.preCapitalProfit)}</strong> تحقق قبل أقدم تاريخ انضمام مسجل للشركاء الحاليين ({liveShareholders.map((s: any) => `${s.name}: ${formatDateDisplay(s.joinedDate)}`).join(' • ')}).
+                          لم يُوزع هذا المبلغ تلقائياً لأنه سابق لتاريخ دخولهم المسجل بالنظام؛ وإذا كانت الفواتير تخص الشركاء من تاريخ أقدم، عدّل <strong>«تاريخ الانضمام»</strong> للشريك من بطاقة التعديل ليُوزع فوراً.
+                        </div>
+                      </div>
+                    )}
+
+                    {Number(rpt.totalOverDistributedDelta || 0) > 0.05 && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-rose-900">
+                        <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                        <div className="leading-relaxed">
+                          <strong className="font-black">تنبيه: تسويات مثبّتة تتجاوز الربح الفعلي الحالي:</strong>{' '}
+                          توجد قيود توزيع أرباح معتمدة مسبقاً تزيد بمقدار <strong className="font-mono">{formatCurrency(rpt.totalOverDistributedDelta)}</strong> عن صافي الأرباح الفعلية وفق أساس الاحتساب المختار حالياً (غالباً بسبب تثبيت تسوية على أساس تعاقدي أو عكس دفعة/إضافة مصروف لاحقاً). يمكنك مراجعة سجل التسويات بالأسفل أو إلغاء التسوية غير المناسبة.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Section 1 + 2 Side-by-Side: Income Bridge & Zero-Variance Audit */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* Card A: Income & Realization Bridge */}
+                      <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-xs font-black text-[#0f1f4a] flex items-center gap-1.5">
+                            <BarChart3 size={14} className="text-[#1e40af]" />
+                            <span>1. ملخص أرباح الشركة (المحصّل مقابل المؤجل)</span>
+                          </h3>
+                          <span className="text-[10px] font-bold text-slate-500">
+                            تحصيل نقدي: {formatCurrency(rpt.periodCashCollections ?? rpt.totalCollectedOnSales)} | متبقي عند العملاء: {formatCurrency(rpt.totalDeferredReceivables)}
+                          </span>
+                        </div>
+                        <table className="w-full table-fixed text-xs">
+                          <tbody className="divide-y divide-slate-100">
+                            <tr>
+                              <td className="py-2 px-3 text-slate-600 font-semibold">إجمالي عقود المبيعات</td>
+                              <td className="py-2 px-3 w-[135px] text-left font-mono font-bold text-slate-900 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.totalContractGrossRevenue)}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 text-slate-500">(-) خصومات السداد المبكر الممنوحة</td>
+                              <td className="py-2 px-3 text-left font-mono font-bold text-rose-600 whitespace-nowrap" dir="ltr">-{formatCurrency(rpt.totalEarlySettlementDiscounts)}</td>
+                            </tr>
+                            <tr className="bg-slate-50/60">
+                              <td className="py-2 px-3 text-slate-800 font-bold">(=) صافي المبيعات الفعلية</td>
+                              <td className="py-2 px-3 text-left font-mono font-black text-slate-900 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.totalEffectiveRevenue)}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 text-slate-600">
+                                (-) تكلفة البضاعة المشتراة
+                                <span className="block text-[10px] text-slate-400">
+                                  بنود ({rpt.costedByItemsCount} فاتورة): {formatCurrency(rpt.totalCogsFromItems)} • عقود مستوردة ({rpt.costedBySubtotalFallbackCount} فاتورة): {formatCurrency(rpt.totalCogsFromSubtotalFallback)}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-left font-mono font-bold text-rose-600 whitespace-nowrap" dir="ltr">-{formatCurrency(rpt.totalCogs)}</td>
+                            </tr>
+                            <tr className="bg-blue-50/40">
+                              <td className="py-2 px-3 text-slate-800 font-bold">(=) مجمل ربح عقود الفترة (قبل التحصيل)</td>
+                              <td className="py-2 px-3 text-left font-mono font-black text-[#1e40af] whitespace-nowrap" dir="ltr">{formatCurrency(rpt.accrualGrossProfit)}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 text-amber-800 font-semibold">(-) أرباح مؤجلة بأقساط غير محصلة بعد</td>
+                              <td className="py-2 px-3 text-left font-mono font-bold text-amber-700 whitespace-nowrap" dir="ltr">-{formatCurrency(rpt.deferredProfits)}</td>
+                            </tr>
+                            {rpt.isFilteredPeriod && Number(rpt.realizedFromPriorSales || 0) !== 0 && (
+                              <tr>
+                                <td className="py-2 px-3 text-emerald-800 font-semibold">(+) أرباح محققة من تحصيل أقساط فواتير سابقة</td>
+                                <td className="py-2 px-3 text-left font-mono font-bold text-emerald-700 whitespace-nowrap" dir="ltr">+{formatCurrency(rpt.realizedFromPriorSales)}</td>
+                              </tr>
+                            )}
+                            <tr className="bg-emerald-50/40">
+                              <td className="py-2 px-3 text-emerald-900 font-bold">(=) إجمالي الأرباح المحققة نقداً (من تحصيل {formatCurrency(rpt.periodCashCollections ?? rpt.totalCollectedOnSales)})</td>
+                              <td className="py-2 px-3 text-left font-mono font-black text-emerald-700 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.realizedGrossProfit)}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-3 text-slate-600">(-) المصروفات التشغيلية</td>
+                              <td className="py-2 px-3 text-left font-mono font-bold text-rose-600 whitespace-nowrap" dir="ltr">-{formatCurrency(rpt.totalExpenses)}</td>
+                            </tr>
+                            <tr className="bg-[#0f1f4a]/[0.04]">
+                              <td className="py-2.5 px-3 text-[#0f1f4a] font-black">
+                                (=) صافي الربح للتوزيع ({profitBasis === 'realized' ? 'المحصّل كاش' : 'التعاقدي'})
+                                <span className="block text-[10px] font-medium text-slate-500">
+                                  للمقارنة — التعاقدي: {formatCurrency(rpt.accrualNetProfit)} | المحصّل كاش: {formatCurrency(rpt.realizedNetProfit)}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-left font-mono font-black text-sm text-[#0f1f4a] whitespace-nowrap" dir="ltr">{formatCurrency(rpt.selectedNetProfit)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Card B: Reconciliation Audit */}
+                      <div className="rounded-xl border border-slate-200 overflow-hidden bg-white flex flex-col justify-between">
+                        <div>
+                          <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="text-xs font-black text-[#0f1f4a] flex items-center gap-1.5">
+                              <ShieldCheck size={14} className="text-emerald-600" />
+                              <span>2. مطابقة توزيع الأرباح</span>
+                            </h3>
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border shrink-0 ${
+                              rpt.isReconciled
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                            }`}>
+                              {rpt.isReconciled ? 'متطابق 100%' : 'يوجد فارق'}
+                            </span>
+                          </div>
+                          <table className="w-full table-fixed text-xs">
+                            <tbody className="divide-y divide-slate-100">
+                              <tr>
+                                <td className="py-2.5 px-3 text-slate-700 font-semibold">نصيب المساهمين بالتمويل (المستحق لهم)</td>
+                                <td className="py-2.5 px-3 w-[135px] text-left font-mono font-bold text-[#1e40af] whitespace-nowrap" dir="ltr">{formatCurrency(rpt.totalInvestorsNet)}</td>
+                              </tr>
+                              <tr>
+                                <td className="py-2.5 px-3 text-slate-500">
+                                  حصة الإدارة المحصلة من عوائد المساهمين
+                                  <span className="block text-[10px] text-slate-400">تُضاف تلقائياً لحصة أصحاب الشركة أدناه</span>
+                                </td>
+                                <td className="py-2.5 px-3 text-left font-mono font-bold text-slate-700 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.totalMgmtFees)}</td>
+                              </tr>
+                              <tr>
+                                <td className="py-2.5 px-3 text-slate-700 font-semibold">نصيب أصحاب الشركة / الشركاء المؤسسين</td>
+                                <td className="py-2.5 px-3 text-left font-mono font-bold text-emerald-700 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.totalFoundersNet)}</td>
+                              </tr>
+                              <tr>
+                                <td className="py-2.5 px-3 text-amber-800">أرباح قبل تاريخ انضمام الشركاء المسجل</td>
+                                <td className="py-2.5 px-3 text-left font-mono font-bold text-amber-700 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.preCapitalProfit)}</td>
+                              </tr>
+                              <tr>
+                                <td className="py-2.5 px-3 text-slate-500">احتياطي غير مخصص (فترات بدون شريك مؤسس)</td>
+                                <td className="py-2.5 px-3 text-left font-mono font-bold text-slate-700 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.companyUnclaimedRetainedPool)}</td>
+                              </tr>
+                              <tr className="bg-blue-50/40">
+                                <td className="py-2.5 px-3 text-slate-900 font-black">(=) إجمالي الموزع والمطابق</td>
+                                <td className="py-2.5 px-3 text-left font-mono font-black text-slate-900 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.allocatedSum)}</td>
+                              </tr>
+                              <tr className="bg-emerald-50/40">
+                                <td className="py-2.5 px-3 text-emerald-900 font-black">فارق المطابقة</td>
+                                <td className="py-2.5 px-3 text-left font-mono font-black text-emerald-700 whitespace-nowrap" dir="ltr">{formatCurrency(rpt.reconciliationVariance)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 leading-relaxed">
+                          <strong>طريقة الحساب:</strong> كل مساهم يأخذ عائداً بنسبة أمواله مضروبة في نسبته المتفق عليها، والباقي مع رسوم الإدارة يُقسم بين أصحاب الشركة حسب نسب الملكية بعد خصم المصروفات.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 3: Partner-by-Partner CPA Distribution Statement */}
+                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-xs font-black text-[#0f1f4a]">
+                          3. نصيب كل شريك ومساهم والمركز المالي
+                        </h3>
+                        <span className="text-[11px] font-bold text-slate-500">
+                          عدد الشركاء: {liveShareholders.length}
+                        </span>
+                      </div>
+                      {/* Mobile Cards (< md) */}
+                      <div className="md:hidden divide-y divide-slate-100">
+                        {liveShareholders.map((s: any) => (
+                          <div key={`mob-rpt-${s.id}`} className="p-3 space-y-2 text-xs">
+                            <div className="flex items-center justify-between">
+                              <button
+                                type="button"
+                                onClick={() => setInspectingPartnerId(s.id)}
+                                className="font-black text-slate-900 hover:text-[#1e40af]"
+                              >
+                                {s.name}
+                              </button>
+                              <span className="text-[10px] font-mono text-slate-500">من: {formatDateDisplay(s.joinedDate)}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 bg-slate-50 rounded-lg p-2">
+                              <div><span className="text-[10px] text-slate-400 block">رأس المال (المرجح)</span><strong className="font-mono">{formatCurrency(s.capital)} ({formatCurrency(s.weightedAvgCapital ?? s.capital)})</strong></div>
+                              <div><span className="text-[10px] text-slate-400 block">نصيب الفترة</span><strong className="font-mono text-emerald-700">{formatCurrency(s.netEntitlement)} (%{s.sharePercentage})</strong></div>
+                              <div><span className="text-[10px] text-slate-400 block">المتاح للسحب</span><strong className="font-mono text-[#1e40af]">{formatCurrency(s.availableProfit)}</strong></div>
+                              <div><span className="text-[10px] text-slate-400 block">الصافي بعد الموردين</span><strong className="font-mono text-slate-900">{formatCurrency(s.partnerNetFreeCapital ?? s.totalNetValue)}</strong></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Desktop Fixed-Layout Table */}
+                      <div className="hidden md:block overflow-x-hidden">
+                        <table className="w-full table-fixed text-xs text-right border-collapse">
+                          <thead className="bg-slate-50/90 border-b border-slate-200 text-slate-600 font-bold">
+                            <tr>
+                              <th className="py-2.5 px-2 w-[15%]">الشريك / المساهم</th>
+                              <th className="py-2.5 px-2 w-[13%]">رأس المال (الحالي / المرجح)</th>
+                              <th className="py-2.5 px-2 w-[13%]">عائد أمواله والاتفاق</th>
+                              <th className="py-2.5 px-2 w-[12%]">نصيب الفترة</th>
+                              <th className="py-2.5 px-2 w-[11%]">حصة الإدارة</th>
+                              <th className="py-2.5 px-2 w-[11%]">المسحوبات</th>
+                              <th className="py-2.5 px-2 w-[12%]">المتاح للسحب</th>
+                              <th className="py-2.5 px-2 w-[13%]">الصافي بعد الموردين</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {liveShareholders.map((s: any) => (
+                              <tr key={`rpt-${s.id}`} className="hover:bg-slate-50/70">
+                                <td className="py-2.5 px-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setInspectingPartnerId(s.id)}
+                                    className="font-black text-slate-900 hover:text-[#1e40af] block text-right cursor-pointer truncate max-w-full"
+                                  >
+                                    {s.name}
+                                  </button>
+                                  <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                                    <span className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold border ${
+                                      s.isFounder
+                                        ? 'bg-[#0f1f4a]/[0.07] text-[#0f1f4a] border-[#0f1f4a]/15'
+                                        : 'bg-blue-50 text-[#1e40af] border-blue-200'
+                                    }`}>
+                                      {s.isFounder ? 'شريك مؤسس' : 'مساهم'}
+                                    </span>
+                                    <span className="text-[10px] font-mono text-slate-400">
+                                      {formatDateDisplay(s.joinedDate)}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-2 font-mono">
+                                  <span className="block font-bold text-slate-900">{formatCurrency(s.capital)}</span>
+                                  <span className="block text-[10px] text-slate-400">مرجح: {formatCurrency(s.weightedAvgCapital ?? s.capital)}</span>
+                                </td>
+                                <td className="py-2.5 px-2 font-mono">
+                                  <span className="block font-bold text-slate-800">{formatCurrency(s.grossProfit)}</span>
+                                  <span className="inline-block text-[10px] font-black text-[#1e40af]">الاتفاق: %{s.sharePercentage}</span>
+                                </td>
+                                <td className="py-2.5 px-2 font-mono font-black text-emerald-700">{formatCurrency(s.netEntitlement)}</td>
+                                <td className="py-2.5 px-2 font-mono text-slate-600 text-[11px]">
+                                  {s.isFounder ? '—' : (
+                                    <>
+                                      <span className="block font-bold">{formatCurrency(s.mgmtFee)}</span>
+                                      <span className="block text-[10px] text-slate-400">(%{s.managementFeePercentage})</span>
+                                    </>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-2 font-mono text-amber-700">{formatWithdrawal(s.totalWithdrawnProfits)}</td>
+                                <td className="py-2.5 px-2 font-mono font-black text-[#1e40af]">{formatCurrency(s.availableProfit)}</td>
+                                <td className="py-2.5 px-2 font-mono">
+                                  <span className="block font-black text-slate-900">{formatCurrency(s.partnerNetFreeCapital ?? s.totalNetValue)}</span>
+                                  {Number(s.partnerShareOfDebt || 0) > 0 && (
+                                    <span className="block text-[10px] text-rose-600">موردين: -{formatCurrency(s.partnerShareOfDebt)}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Section 4: Approved Settlements Log */}
+                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-xs font-black text-[#0f1f4a] flex items-center gap-1.5">
+                          <CheckCircle2 size={14} className="text-emerald-600" />
+                          <span>4. سجل التسويات المعتمدة والمغلقة سابقاً ({(rpt.settledPeriods || []).length})</span>
+                        </h3>
+                        <span className="text-[11px] text-slate-500">
+                          زر «اعتماد وتثبيت التسوية» يثبت الأرباح المستحقة حتى تاريخ الإغلاق في السجل الرسمي
+                        </span>
+                      </div>
+                      {(rpt.settledPeriods || []).length === 0 ? (
+                        <div className="py-5 px-4 text-center text-xs text-slate-400 font-bold">
+                          لم يتم تثبيت تسويات مقفلة حتى الآن — الأرباح الحالية تُحسب بشكل لحظي ومباشر.
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-100">
+                          {(rpt.settledPeriods || []).map((cp: any) => (
+                            <div key={cp.id} className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs hover:bg-slate-50/70">
+                              <div className="min-w-0">
+                                <span className="font-black text-slate-900">تسوية حتى {formatDateDisplay(cp.periodDate)}</span>
+                                <span className="mx-2 text-slate-300">•</span>
+                                <span className="text-slate-600 font-medium">{cp.notes || 'تسوية دورية'}</span>
+                                <div className="text-[10px] text-slate-400 mt-0.5">
+                                  اعتمدها: {cp.closedBy || 'المدير العام'} — {formatDateDisplay(cp.closedAt)}
+                                </div>
+                              </div>
+                              {isUserAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteSettlement(cp)}
+                                  className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+                                >
+                                  فك وإلغاء التسوية
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Section 5: Collapsible Technical Tranches Audit */}
+                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setShowTranchesDetails((v) => !v)}
+                        className="w-full px-4 py-2.5 bg-slate-50 hover:bg-slate-100/80 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-right cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-xs font-black text-[#0f1f4a]">
+                            5. تفاصيل الشرائح الزمنية وعائد الجنيه (للمحاسب) ({(rpt.tranches || []).length})
+                          </h3>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#1e40af]">
+                          <span>{showTranchesDetails ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}</span>
+                          {showTranchesDetails ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </span>
+                      </button>
+
+                      {showTranchesDetails && (
+                        <>
+                          {/* Mobile Cards (< md) */}
+                          <div className="md:hidden divide-y divide-slate-100">
+                            {(rpt.tranches || []).length === 0 ? (
+                              <div className="py-6 text-center text-xs text-slate-400 font-bold">
+                                لا توجد شرائح زمنية برأس مال نشط خلال الفترة المحددة
+                              </div>
+                            ) : (
+                              (rpt.tranches || []).map((tr: any, idx: number) => (
+                                <div key={`mob-tr-${tr.fromDate}-${tr.toDate}-${idx}`} className="p-3 space-y-2 text-xs">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-black text-[#0f1f4a]">#{idx + 1} • {formatDateDisplay(tr.fromDate)} ← {formatDateDisplay(tr.toDate)}</span>
+                                    <span className="text-[11px] font-mono text-slate-500">{tr.days} يوم</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2 bg-slate-50 rounded-lg p-2">
+                                    <div><span className="text-[10px] text-slate-400 block">رأس المال العامل</span><strong className="font-mono">{formatCurrency(tr.totalActiveCapital)}</strong></div>
+                                    <div><span className="text-[10px] text-slate-400 block">عائد الجنيه</span><strong className="font-mono text-[#1e40af]" dir="ltr">{Number(tr.roiPerEgp || 0).toFixed(4)} ({(Number(tr.roiPerEgp || 0) * 100).toFixed(2)}%)</strong></div>
+                                    <div><span className="text-[10px] text-slate-400 block">صافي الشريحة</span><strong className="font-mono text-slate-900">{formatCurrency(tr.netProfit)}</strong></div>
+                                    <div><span className="text-[10px] text-slate-400 block">المساهمين / المؤسسين</span><strong className="font-mono text-emerald-700">{formatCurrency(tr.investorsShare)} / {formatCurrency(tr.foundersShare)}</strong></div>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          {/* Desktop Fixed-Layout Table */}
+                          <div className="hidden md:block overflow-x-hidden">
+                            <table className="w-full table-fixed text-xs text-right border-collapse">
+                              <thead className="bg-slate-50/90 border-b border-slate-200 text-slate-600 font-bold">
+                                <tr>
+                                  <th className="py-2 px-2 w-[4%]">#</th>
+                                  <th className="py-2 px-2 w-[12%]">الفترة الزمنية</th>
+                                  <th className="py-2 px-2 w-[6%]">الأيام</th>
+                                  <th className="py-2 px-2 w-[12%]">رأس المال العامل</th>
+                                  <th className="py-2 px-2 w-[11%]">ربح المبيعات</th>
+                                  <th className="py-2 px-2 w-[10%]">المصروفات</th>
+                                  <th className="py-2 px-2 w-[11%]">صافي الشريحة</th>
+                                  <th className="py-2 px-2 w-[12%]">عائد الجنيه (ROI)</th>
+                                  <th className="py-2 px-2 w-[11%]">حصة المساهمين</th>
+                                  <th className="py-2 px-2 w-[11%]">حصة المؤسسين</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {(rpt.tranches || []).length === 0 ? (
+                                  <tr>
+                                    <td colSpan={10} className="py-6 text-center text-slate-400 font-bold">
+                                      لا توجد شرائح زمنية برأس مال نشط خلال الفترة المحددة
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  (rpt.tranches || []).map((tr: any, idx: number) => (
+                                    <tr key={`${tr.fromDate}-${tr.toDate}-${idx}`} className="hover:bg-slate-50/70">
+                                      <td className="py-2 px-2 font-mono text-slate-500">{idx + 1}</td>
+                                      <td className="py-2 px-2 font-bold text-slate-800 text-[11px] leading-tight">
+                                        <span className="block">{formatDateDisplay(tr.fromDate)}</span>
+                                        <span className="block text-slate-400">← {formatDateDisplay(tr.toDate)}</span>
+                                      </td>
+                                      <td className="py-2 px-2 font-mono text-[11px]">{tr.days} يوم</td>
+                                      <td className="py-2 px-2 font-mono font-bold text-slate-900 text-[11px]">{formatCurrency(tr.totalActiveCapital)}</td>
+                                      <td className="py-2 px-2 font-mono text-emerald-700 text-[11px]">{formatCurrency(tr.grossProfit)}</td>
+                                      <td className="py-2 px-2 font-mono text-rose-600 text-[11px]">-{formatCurrency(tr.expenses)}</td>
+                                      <td className="py-2 px-2 font-mono font-black text-[#0f1f4a] text-[11px]">{formatCurrency(tr.netProfit)}</td>
+                                      <td className="py-2 px-2 font-mono font-black text-[#1e40af] text-[11px] leading-tight" dir="ltr">
+                                        <span className="block">{Number(tr.roiPerEgp || 0).toFixed(4)}</span>
+                                        <span className="block text-[10px] text-slate-500 font-bold">({(Number(tr.roiPerEgp || 0) * 100).toFixed(2)}%)</span>
+                                      </td>
+                                      <td className="py-2 px-2 font-mono font-bold text-blue-700 text-[11px]">{formatCurrency(tr.investorsShare)}</td>
+                                      <td className="py-2 px-2 font-mono font-bold text-emerald-700 text-[11px]">{formatCurrency(tr.foundersShare)}</td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                );
+              })()
+            )}
+          </div>
+        </section>
       )}
 
       {/* Detailed Partner Chronological Ledger Modal */}
       {inspectingPartner && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[88vh] shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
               <div className="min-w-0">
@@ -1873,7 +2626,7 @@ export default function Shareholders() {
 
       {/* Shareholder Create/Edit Modal */}
       {showShareholderModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-200">
             <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
               <h3 className="text-base font-black text-slate-900">
@@ -1915,7 +2668,7 @@ export default function Shareholders() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">تاريخ الانضمام</label>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">تاريخ الانضمام (بداية الحساب)</label>
                   <input
                     type="date"
                     required
@@ -1923,6 +2676,9 @@ export default function Shareholders() {
                     onChange={(e) => setShareholderForm({ ...shareholderForm, joinedDate: e.target.value })}
                     className="input-ui h-9 w-full text-xs px-3 font-bold"
                   />
+                  <span className="block text-[10px] text-slate-400 mt-1">
+                    تُحسب أرباح الشريك من الفواتير والتحصيلات اعتباراً من هذا التاريخ.
+                  </span>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">
@@ -2111,7 +2867,7 @@ export default function Shareholders() {
 
       {/* Financial Transaction Modal */}
       {showTransactionModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-slate-200">
             <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
               <div>

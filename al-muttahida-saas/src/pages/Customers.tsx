@@ -6,10 +6,10 @@ import {
   Grid, List, TrendingUp, UserCheck, Coins, Eye
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
-import { getCustomers, createCustomer, updateCustomer, toggleCustomerSued, deleteCustomer, getSales } from '../lib/storage';
+import { getCustomers, createCustomer, updateCustomer, toggleCustomerSued, deleteCustomer, getSales, syncSales } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
-import { isAdmin } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
@@ -61,7 +61,7 @@ const calculateAgeFromDate = (dateOfBirth: string): number => {
   const [year, month, day] = dateOfBirth.split('-').map(Number);
   const birthDate = new Date(year, month - 1, day);
   const today = new Date();
-  let age = today.getFullYear() - birthDate.getFullYear();
+  const age = today.getFullYear() - birthDate.getFullYear();
   const hasHadBirthday =
     today.getMonth() > birthDate.getMonth() ||
     (today.getMonth() === birthDate.getMonth() && today.getDate() >= birthDate.getDate());
@@ -126,7 +126,7 @@ export default function Customers() {
     age: '',
     pensionDate: '',
     balance: '',
-    balanceType: 'debtor' as 'debtor',
+    balanceType: 'debtor' as const,
     notes: '',
     guarantors: [null, null, null] as [Guarantor | null, Guarantor | null, Guarantor | null],
     isSued: false,
@@ -138,7 +138,7 @@ export default function Customers() {
   const [formData, setFormData] = useState(emptyForm);
   const { settings, user } = useAuth();
   const canDelete = isAdmin(user);
-  const canModify = user?.role !== 'manager';
+  const canModify = hasPermission(user, 'sales:write');
 
   const frontFileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
@@ -190,7 +190,10 @@ export default function Customers() {
     console.time('Customers.totalLoad');
     try {
       console.time('Customers.networkApiCall');
-      const data = isApiMode() ? await api.listCustomers() : getCustomers();
+      const [data] = await Promise.all([
+        isApiMode() ? api.listCustomers() : Promise.resolve(getCustomers()),
+        isApiMode() ? syncSales() : Promise.resolve(),
+      ]);
       console.timeEnd('Customers.networkApiCall');
       const payloadBytes = new Blob([JSON.stringify(data)]).size;
       console.info(`Customers payload: ${payloadBytes} bytes for ${data.length} rows`);
@@ -237,9 +240,8 @@ export default function Customers() {
       dateOfBirth: formData.dateOfBirth,
       nationalId: formData.nationalId,
       age: parseInt(formData.age) || 0,
-      pensionDate: '',
-      balance: isEditing && selectedCustomer ? selectedCustomer.balance : 0,
-      balanceType: 'debtor' as 'debtor',
+      pensionDate: formData.pensionDate || selectedCustomer?.pensionDate || '',
+      ...(!isEditing ? { balance: 0, balanceType: 'debtor' as const } : {}),
       notes: formData.notes || undefined,
       idCardFront: formData.idCardFront || undefined,
       idCardBack: formData.idCardBack || undefined,
@@ -287,7 +289,7 @@ export default function Customers() {
       age: fullCustomer.age?.toString() || '',
       pensionDate: fullCustomer.pensionDate || '',
       balance: fullCustomer.balance?.toString() || '',
-      balanceType: 'debtor' as 'debtor',
+      balanceType: 'debtor' as const,
       notes: fullCustomer.notes || '',
       guarantors: fullCustomer.guarantors || [null, null, null],
       isSued: fullCustomer.isSued || false,
@@ -354,6 +356,9 @@ export default function Customers() {
 
   const handleDelete = async (id: string) => {
     const customer = customers.find(c => c.id === id);
+    if (isApiMode()) {
+      await syncSales();
+    }
     const allSales = getSales();
     const linkedSales = allSales.filter(
       (s) =>
@@ -565,7 +570,13 @@ export default function Customers() {
         !term ||
         customer.name.toLowerCase().includes(term) ||
         customer.phone.includes(term) ||
-        (customer.customerNumber || '').toLowerCase().includes(term);
+        (customer.nationalId || '').includes(term) ||
+        (customer.customerNumber || '').toLowerCase().includes(term) ||
+        (customer.guarantors || []).some((g) => g && (
+          (g.name || '').toLowerCase().includes(term) ||
+          (g.phone || '').includes(term) ||
+          (g.nationalId || '').includes(term)
+        ));
 
       if (!matchesSearch) return false;
       if (filterTab === 'debtor') return Math.round(Number(customer.balance)) > 0;
@@ -1737,7 +1748,7 @@ export default function Customers() {
 
       {/* Live Webcam Modal */}
       {webcamSide && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col text-white">
             <div className="p-4 bg-slate-800 flex items-center justify-between border-b border-slate-700">
               <div className="flex items-center gap-2">

@@ -36,7 +36,8 @@ export function getSavedConfig(): any {
   try {
     const primaryPath = getConfigFilePath();
     if (fs.existsSync(primaryPath)) {
-      const data = JSON.parse(fs.readFileSync(primaryPath, 'utf8'));
+      const raw = fs.readFileSync(primaryPath, 'utf8').replace(/^\uFEFF/, '');
+      const data = JSON.parse(raw);
       return data;
     }
 
@@ -44,7 +45,8 @@ export function getSavedConfig(): any {
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
     const legacyPath = path.join(appData, 'Al-Muttahida ERP', 'config.json');
     if (fs.existsSync(legacyPath)) {
-      const data = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+      const raw = fs.readFileSync(legacyPath, 'utf8').replace(/^\uFEFF/, '');
+      const data = JSON.parse(raw);
       return data;
     }
   } catch (err) {
@@ -90,7 +92,12 @@ export const config = {
   jwtSecret: resolveJwtSecret(),
   sql: {
     server: saved?.lastSuccessfulServer || (saved?.mode === 'client' ? (saved?.host || saved?.db?.host || '127.0.0.1') : (process.env.DB_HOST || '127.0.0.1')),
-    port: Number(saved?.port || saved?.db?.port || process.env.DB_PORT || 1433),
+    port: Number(
+      (saved?.dbPort && Number(saved.dbPort) !== 4000 ? saved.dbPort : null) ||
+        saved?.db?.port ||
+        process.env.DB_PORT ||
+        1433
+    ),
     user: process.env.DB_USER || saved?.dbUser || 'alm_app',
     password: process.env.DB_PASSWORD || saved?.dbPassword || 'Alm@2026#App',
     database: saved?.database || saved?.db?.database || process.env.DB_NAME || 'AlMuttahida_New',

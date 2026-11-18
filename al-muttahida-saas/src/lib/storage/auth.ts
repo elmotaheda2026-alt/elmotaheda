@@ -9,7 +9,11 @@ export function login(username: string, password: string): User | null {
     user.lastLogin = new Date().toISOString();
     setStorage(DB_KEYS.USERS, users);
     sessionStorage.setItem(DB_KEYS.AUTH, JSON.stringify(user));
-    try { localStorage.removeItem(DB_KEYS.AUTH); } catch (_) {}
+    try {
+      localStorage.removeItem(DB_KEYS.AUTH);
+    } catch {
+      // Ignore storage access errors
+    }
     return user;
   }
   return null;
@@ -17,7 +21,11 @@ export function login(username: string, password: string): User | null {
 
 export function logout(): void {
   sessionStorage.removeItem(DB_KEYS.AUTH);
-  try { localStorage.removeItem(DB_KEYS.AUTH); } catch (_) {}
+  try {
+    localStorage.removeItem(DB_KEYS.AUTH);
+  } catch {
+    // Ignore storage access errors
+  }
 }
 
 export function getCurrentUser(): User | null {
@@ -84,6 +92,18 @@ export async function updateUser(id: string, updates: Partial<User>): Promise<Us
     return users[index];
   }
   return null;
+}
+
+export async function toggleUserStatus(id: string, isActive: boolean): Promise<void> {
+  if (isApiMode()) {
+    await api.toggleUserStatus(id, isActive);
+  }
+  const users = getStorage<User>(DB_KEYS.USERS);
+  const index = users.findIndex((u) => u.id === id);
+  if (index !== -1) {
+    users[index] = { ...users[index], isActive };
+    setStorage(DB_KEYS.USERS, users);
+  }
 }
 
 export async function deleteUser(id: string): Promise<boolean> {

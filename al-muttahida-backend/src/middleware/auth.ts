@@ -81,6 +81,20 @@ export function requirePermission(permission: Permission) {
   };
 }
 
+export function requireAnyPermission(...permissions: Permission[]) {
+  return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    if (!permissions.some((permission) => hasPermission(req.user!.role, permission, req.user!.permissions))) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    return next();
+  };
+}
+
 export function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction) {
   if (!req.user) {
     return res.status(401).json({ message: 'Unauthorized' });

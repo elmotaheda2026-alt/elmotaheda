@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid, formatDate, parseDateInput } from '../utils.js';
+import { uid, formatDate, parseDateInput, isPeriodClosed } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -39,14 +39,18 @@ const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
 
 function validatePurchaseTotals(data: PurchaseInput): string | null {
   const subtotal = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0));
+  const itemsDiscount = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.discount, 0));
+  const discount = roundMoney(data.discount || itemsDiscount);
   const tax = roundMoney(data.items.reduce((sum, item) => sum + item.quantity * item.tax, 0));
-  const total = roundMoney(subtotal + tax);
-  const itemsMismatch = data.items.some((item) => roundMoney(item.total) !== roundMoney(item.quantity * item.unitPrice + item.quantity * item.tax));
+  const total = roundMoney(subtotal - discount + tax);
+  const itemsMismatch = data.items.some(
+    (item) => roundMoney(item.total) !== roundMoney(item.quantity * item.unitPrice - item.quantity * item.discount + item.quantity * item.tax),
+  );
 
-  if (itemsMismatch) return 'Purchase item totals do not match quantity, unit price, and tax.';
+  if (itemsMismatch) return 'Purchase item totals do not match quantity, unit price, discount, and tax.';
   if (roundMoney(data.subtotal) !== subtotal) return 'Purchase subtotal does not match item subtotal.';
   if (roundMoney(data.tax) !== tax) return 'Purchase tax does not match item taxes.';
-  if (roundMoney(data.total) !== total) return 'Purchase total does not match subtotal + tax.';
+  if (roundMoney(data.total) !== total) return 'Purchase total does not match subtotal - discount + tax.';
   if (roundMoney(data.paid) > total) return 'Paid amount cannot exceed purchase total.';
   return null;
 }
@@ -131,8 +135,6 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
   }
 
   const data = parsed.data;
-  data.discount = 0;
-  data.items = data.items.map((item) => ({ ...item, discount: 0 }));
   const totalsError = validatePurchaseTotals(data);
   if (totalsError) {
     return res.status(400).json({ message: totalsError });
@@ -150,6 +152,9 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
 
   try {
     const db = await dbPromise;
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, data.date)) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن تسجيل فواتير شراء فيها إلا بواسطة المدير.' });
+    }
 
     await db.withTransaction(async (txDb) => {
       // Verify supplier exists
@@ -226,12 +231,34 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
         now,
         data.supplierId,
       );
+
+      // Record cash outflow in treasury when upfront cash is paid on the purchase invoice
+      if (Number(data.paid || 0) > 0) {
+        await txDb.run(
+          `INSERT INTO payments (
+            id, type, amount, description, date, receipt_number, status, channel,
+            reference_id, reference_type, supplier_id, invoice_number, affects_customer_balance,
+            created_by, created_at
+          ) VALUES (?, 'out', ?, ?, ?, ?, 'posted', 'cash', ?, 'purchase_downpayment', ?, ?, 0, ?, ?)`,
+          uid(),
+          Number(data.paid),
+          `سداد نقدي مع فاتورة شراء رقم ${data.invoiceNumber} - ${data.supplierName}`,
+          data.date,
+          `PUR-${id.slice(-6).toUpperCase()}`,
+          id,
+          data.supplierId,
+          data.invoiceNumber,
+          req.user?.name || 'system',
+          now,
+        );
+      }
     });
 
     await audit('purchase.create', 'purchase', id, req.user?.name || 'system', {
       id,
       invoiceNumber: data.invoiceNumber,
       total: data.total,
+      paid: data.paid,
       remaining,
     });
 
@@ -243,6 +270,68 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
     if (error.message?.includes('UNIQUE') || error.message?.includes('violates UNIQUE constraint')) {
       return res.status(409).json({ message: 'رقم فاتورة الشراء مسجل بالفعل' });
     }
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// DELETE /purchases/:id — Cancel/return purchase invoice cleanly
+router.delete('/:id', requirePermission('purchases:manage'), requireAdmin, async (req: AuthedRequest, res) => {
+  const now = new Date().toISOString();
+  try {
+    const db = await dbPromise;
+    const purchase = await db.get<any>('SELECT * FROM purchases WHERE id = ?', req.params.id);
+    if (!purchase) {
+      return res.status(404).json({ message: 'فاتورة الشراء غير موجودة' });
+    }
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, String(purchase.date || '').slice(0, 10))) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن إلغاء الفاتورة.' });
+    }
+
+    await db.withTransaction(async (txDb) => {
+      const items = (await txDb.all(
+        'SELECT product_id, quantity FROM purchase_items WHERE purchase_id = ?',
+        req.params.id,
+      )) as Array<{ product_id: string; quantity: number }>;
+
+      for (const item of items) {
+        await txDb.run(
+          `UPDATE products
+           SET quantity = CASE WHEN fulfillment_type = 'stocked' THEN CASE WHEN quantity - ? < 0 THEN 0 ELSE quantity - ? END ELSE quantity END,
+               updated_at = ?
+           WHERE id = ?`,
+          item.quantity,
+          item.quantity,
+          now,
+          item.product_id,
+        );
+      }
+
+      if (Number(purchase.remaining || 0) !== 0) {
+        await txDb.run(
+          'UPDATE suppliers SET balance = balance - ?, updated_at = ? WHERE id = ?',
+          Number(purchase.remaining || 0),
+          now,
+          purchase.supplier_id,
+        );
+      }
+
+      await txDb.run(
+        `UPDATE payments SET status = 'voided', approved_by = ? WHERE reference_type = 'purchase_downpayment' AND reference_id = ?`,
+        req.user?.name || 'system',
+        req.params.id,
+      );
+
+      await txDb.run('DELETE FROM purchase_items WHERE purchase_id = ?', req.params.id);
+      await txDb.run('DELETE FROM purchases WHERE id = ?', req.params.id);
+    });
+
+    await audit('purchase.delete', 'purchase', req.params.id, req.user?.name || 'system', {
+      invoiceNumber: purchase.invoice_number,
+      supplierId: purchase.supplier_id,
+      total: purchase.total,
+    });
+    return res.json({ message: 'تم إلغاء فاتورة الشراء ورد كمياتها للمخزون وتعديل حساب المورد بنجاح.' });
+  } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
 });

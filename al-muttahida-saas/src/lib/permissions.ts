@@ -52,27 +52,45 @@ const rolePermissions: Record<User['role'], Permission[]> = {
   manager: [
     'dashboard:view',
     'sales:read',
+    'sales:write',
+    'sales:reschedule',
     'payments:read',
+    'payments:write',
     'reports:read',
-    'notifications:read',
     'inventory:manage',
     'purchases:manage',
-    'shareholders:manage',
-    'users:manage',
-    'settings:manage',
+    'notifications:read',
   ],
   accountant: [
     'dashboard:view',
     'sales:read',
+    'sales:write',
     'payments:read',
     'payments:write',
+    'payments:reverse',
+    'closing:write',
+    'reports:read',
     'inventory:manage',
+    'purchases:manage',
     'notifications:read',
   ],
   user: ['dashboard:view', 'sales:read', 'payments:read', 'notifications:read'],
   collector: ['dashboard:view', 'payments:read', 'payments:write', 'notifications:read'],
   reviewer: ['dashboard:view', 'sales:read', 'payments:read', 'reports:read', 'sales:reschedule', 'notifications:read'],
-  finance_manager: ['dashboard:view', 'sales:read', 'payments:read', 'payments:reverse', 'reports:read', 'closing:write', 'notifications:read'],
+  finance_manager: [
+    'dashboard:view',
+    'sales:read',
+    'sales:write',
+    'payments:read',
+    'payments:write',
+    'payments:reverse',
+    'reports:read',
+    'closing:write',
+    'inventory:manage',
+    'purchases:manage',
+    'shareholders:manage',
+    'notifications:read',
+  ],
 };
 
 const MOBILE_BLOCKED_WRITE_PERMISSIONS: ReadonlySet<Permission> = new Set([
@@ -108,4 +126,30 @@ export const hasPermission = (user: User | null, permission: Permission): boolea
 
   // Fallback to role defaults
   return rolePermissions[user.role]?.includes(permission) ?? false;
+};
+
+export const canViewNotification = (
+  user: User | null,
+  notification: { title?: string | null; message?: string | null },
+): boolean => {
+  if (!user) return false;
+  if (isAdmin(user)) return true;
+
+  const text = `${notification.title || ''} ${notification.message || ''}`;
+  if (text.includes('حركة شريك') || text.includes('مساهم') || text.includes('تسوية أرباح')) {
+    return hasPermission(user, 'shareholders:manage');
+  }
+  if (text.includes('شراء تلقائي') || text.includes('فاتورة شراء') || text.includes('مديونية المورد')) {
+    return hasPermission(user, 'purchases:manage') || hasPermission(user, 'sales:read');
+  }
+  if (text.includes('سند صرف') || text.includes('حركة خزينة') || text.includes('تكييش') || text.includes('عكس حركة مالية')) {
+    return hasPermission(user, 'payments:read') || hasPermission(user, 'payments:write');
+  }
+  if (text.includes('فاتورة جديدة') || text.includes('تعديل تعاقد') || text.includes('مرتجع') || text.includes('ترحيل قسط')) {
+    return hasPermission(user, 'sales:read') || hasPermission(user, 'sales:write');
+  }
+  if (text.includes('نسخة احتياطية') || text.includes('إعدادات')) {
+    return hasPermission(user, 'settings:manage');
+  }
+  return hasPermission(user, 'payments:read') || hasPermission(user, 'sales:read') || hasPermission(user, 'notifications:read');
 };

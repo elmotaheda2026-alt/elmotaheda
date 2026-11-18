@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
 
@@ -102,7 +102,7 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
 });
 
 // PUT /collection-tasks/:id
-router.put('/:id', async (req: AuthedRequest, res) => {
+router.put('/:id', requireAnyPermission('sales:write', 'payments:write'), async (req: AuthedRequest, res) => {
   const parsed = collectionTaskSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid collection task payload', errors: parsed.error.format() });

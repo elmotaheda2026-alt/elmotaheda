@@ -1,15 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-react';
 import { User, UserPermissions } from '../types';
-import { getUsers, createUser, updateUser, deleteUser, syncUsers } from '../lib/storage';
+import { getUsers, createUser, updateUser, toggleUserStatus as toggleUserStatusApi, deleteUser, syncUsers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
 
+const ROLE_META: Record<User['role'], { label: string; badgeClass: string }> = {
+  admin: { label: 'مدير نظام', badgeClass: 'bg-purple-50 text-purple-700 border border-purple-200' },
+  manager: { label: 'مشرف عام', badgeClass: 'bg-blue-50 text-blue-700 border border-blue-200' },
+  finance_manager: { label: 'مدير مالي', badgeClass: 'bg-indigo-50 text-indigo-700 border border-indigo-200' },
+  accountant: { label: 'محاسب', badgeClass: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
+  reviewer: { label: 'مراجع', badgeClass: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  collector: { label: 'محصل', badgeClass: 'bg-sky-50 text-sky-700 border border-sky-200' },
+  user: { label: 'مستخدم', badgeClass: 'bg-slate-100 text-slate-700' },
+};
+
 export default function Users() {
   const { user: currentUser } = useAuth();
   const { confirmDialog, showToast } = useDialog();
-  const canDelete = isAdmin(currentUser) && currentUser?.role !== 'manager';
+  const canManageUsers = hasPermission(currentUser, 'users:manage');
+  const canDelete = isAdmin(currentUser);
   const [users, setUsers] = useState<User[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -30,7 +41,7 @@ export default function Users() {
     'purchases:manage': false,
     'settings:manage': false,
     'shareholders:manage': false,
-    'notifications:read': false,
+    'notifications:read': true,
   };
 
   const [formData, setFormData] = useState({
@@ -100,15 +111,25 @@ export default function Users() {
       type: 'danger',
     });
     if (isConfirmed) {
-      await deleteUser(id);
-      await loadUsers();
-      showToast('تم حذف المستخدم بنجاح', 'success');
+      try {
+        await deleteUser(id);
+        await loadUsers();
+        showToast('تم حذف المستخدم بنجاح', 'success');
+      } catch (err: any) {
+        showToast(err?.message || 'تعذر حذف المستخدم.', 'error');
+      }
     }
   };
 
   const toggleUserStatus = async (user: User) => {
-    await updateUser(user.id, { isActive: !user.isActive });
-    await loadUsers();
+    try {
+      const nextActive = !user.isActive;
+      await toggleUserStatusApi(user.id, nextActive);
+      await loadUsers();
+      showToast(nextActive ? 'تم تفعيل حساب المستخدم بنجاح' : 'تم تعطيل حساب المستخدم بنجاح', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'تعذر تحديث حالة المستخدم.', 'error');
+    }
   };
 
   const resetForm = () => {
@@ -134,7 +155,7 @@ export default function Users() {
       {/* Header */}
       <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
         <h2 className="text-xl font-black text-slate-900">المستخدمين</h2>
-        {currentUser?.role !== 'manager' && (
+        {canManageUsers && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
             className="flex items-center gap-1.5 bg-[#1e40af] text-white px-4 py-2 rounded-lg hover:bg-[#1d4ed8] transition-colors text-sm font-bold shadow-2xs cursor-pointer"
@@ -175,17 +196,13 @@ export default function Users() {
                     <p className="text-xs text-slate-500 font-mono">@{user.username} • {user.phone || 'بدون هاتف'}</p>
                   </div>
                 </div>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-bold shrink-0 ${user.role === 'admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
-                    user.role === 'manager' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-                      user.role === 'accountant' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                        'bg-slate-100 text-slate-700'
-                  }`}>
-                  {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : user.role === 'accountant' ? 'محاسب' : 'مستخدم'}
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold shrink-0 ${(ROLE_META[user.role] || ROLE_META.user).badgeClass}`}>
+                  {(ROLE_META[user.role] || ROLE_META.user).label}
                 </span>
               </div>
 
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
-                {currentUser?.role !== 'manager' ? (
+                {canManageUsers && isAdmin(currentUser) ? (
                   <button
                     onClick={() => toggleUserStatus(user)}
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold cursor-pointer ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}
@@ -201,7 +218,7 @@ export default function Users() {
                 )}
 
                 <div className="flex items-center gap-1.5">
-                  {hasPermission(currentUser, 'users:manage') && currentUser?.role !== 'manager' && (
+                  {canManageUsers && (
                     <button onClick={() => handleEdit(user)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
                       <Edit size={14} />
                     </button>
@@ -244,16 +261,12 @@ export default function Users() {
                   </td>
                   <td className="px-5 py-3 text-sm text-slate-700 font-mono">{user.username}</td>
                   <td className="px-5 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${user.role === 'admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
-                        user.role === 'manager' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-                          user.role === 'accountant' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                            'bg-slate-100 text-slate-700'
-                      }`}>
-                      {user.role === 'admin' ? 'مدير' : user.role === 'manager' ? 'مشرف' : user.role === 'accountant' ? 'محاسب' : 'مستخدم'}
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${(ROLE_META[user.role] || ROLE_META.user).badgeClass}`}>
+                      {(ROLE_META[user.role] || ROLE_META.user).label}
                     </span>
                   </td>
                   <td className="px-5 py-3">
-                    {currentUser?.role !== 'manager' ? (
+                    {canManageUsers && isAdmin(currentUser) ? (
                       <button
                         onClick={() => toggleUserStatus(user)}
                         className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold cursor-pointer ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
@@ -274,7 +287,7 @@ export default function Users() {
                   </td>
                   <td className="px-5 py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
-                      {hasPermission(currentUser, 'users:manage') && currentUser?.role !== 'manager' && (
+                      {canManageUsers && (
                         <button
                           onClick={() => handleEdit(user)}
                           className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
@@ -292,7 +305,7 @@ export default function Users() {
                           <Trash2 size={15} />
                         </button>
                       )}
-                      {currentUser?.role === 'manager' && (
+                      {!canManageUsers && !canDelete && (
                         <span className="text-xs text-slate-400 font-bold">—</span>
                       )}
                     </div>
@@ -366,10 +379,9 @@ export default function Users() {
                     onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   >
-                    <option value="user">مستخدم</option>
-                    <option value="accountant">محاسب</option>
-                    <option value="manager">مشرف</option>
-                    <option value="admin">مدير</option>
+                    {(Object.entries(ROLE_META) as [User['role'], { label: string }][]).map(([roleKey, meta]) => (
+                      <option key={roleKey} value={roleKey}>{meta.label}</option>
+                    ))}
                   </select>
                 </div>
 

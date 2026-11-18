@@ -111,3 +111,20 @@ export async function closePeriodApi(periodType: 'daily' | 'monthly', periodDate
   }
   return closePeriod(periodType, periodDate, closedBy, notes, totals);
 }
+
+export async function reopenPeriodApi(periodType: 'daily' | 'monthly', periodDate: string, reopenedBy: string): Promise<void> {
+  if (isApiMode()) {
+    await api.reopenPeriod({ periodType, periodDate });
+    await syncClosingPeriods();
+    return;
+  }
+
+  const periods = getClosingPeriods();
+  const nextPeriods = periods.map((p) =>
+    p.periodType === periodType && p.periodDate === periodDate
+      ? { ...p, status: 'reopened' as const }
+      : p
+  );
+  setStorage(DB_KEYS.CLOSING_PERIODS, nextPeriods);
+  createAuditLog({ action: 'period.reopen', entityType: 'closing_period', entityId: periodDate, payload: { periodType, periodDate }, createdBy: reopenedBy });
+}

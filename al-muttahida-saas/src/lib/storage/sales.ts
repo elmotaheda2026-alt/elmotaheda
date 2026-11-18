@@ -248,7 +248,10 @@ export async function updateSale(saleId: string, updatedSaleData: SaleDraft): Pr
   const syncedSale = syncSalePaymentStatus(newSale);
 
   if (isApiMode()) {
-    await api.updateSale(saleId, buildSaleApiPayload(updatedSaleData, oldSale.invoiceNumber, financing));
+    await api.updateSale(saleId, {
+      ...buildSaleApiPayload(updatedSaleData, oldSale.invoiceNumber, financing),
+      replaceAutoPurchases: Boolean((updatedSaleData as any).replaceAutoPurchases),
+    });
   }
 
   sales[saleIndex] = syncedSale;
@@ -492,4 +495,98 @@ export async function deferInstallment(saleId: string, payload: {
   setStorage(DB_KEYS.SALES, sales);
 
   return { message: 'تم ترحيل القسط بنجاح', schedules, sale };
+}
+
+export async function returnSale(
+  saleId: string,
+  payload: { reason?: string; returnDate?: string; refundAmount?: number } = {},
+): Promise<{ message: string; refundAmount: number; refundReceipt?: string | null }> {
+  if (isApiMode()) {
+    const res = await api.returnSale(saleId, payload);
+    const [freshSales, freshCustomers, freshProducts] = await Promise.all([
+      api.listSales(),
+      api.listCustomers(),
+      api.listProducts(),
+    ]);
+    setStorage(DB_KEYS.SALES, freshSales);
+    setStorage(DB_KEYS.CUSTOMERS, freshCustomers);
+    setStorage(DB_KEYS.PRODUCTS, freshProducts);
+    return res;
+  }
+
+  const sales = getStorage<Sale>(DB_KEYS.SALES);
+  const saleIndex = sales.findIndex((s) => s.id === saleId);
+  if (saleIndex === -1) throw new Error('الفاتورة غير موجودة');
+
+  const sale = sales[saleIndex];
+  if (sale.status === 'cancelled') throw new Error('الفاتورة ملغاة بالفعل');
+
+  const refundAmount = Math.min(
+    Math.max(Number(payload.refundAmount ?? sale.paid ?? 0), 0),
+    Number(sale.paid || 0),
+  );
+
+  sale.items.forEach((item) => {
+    updateProductQuantity(item.productId, item.quantity);
+  });
+
+  const customers = getStorage<Customer>(DB_KEYS.CUSTOMERS);
+  const cIdx = customers.findIndex((c) => c.id === sale.customerId);
+  if (cIdx !== -1 && sale.remaining > 0) {
+    customers[cIdx].balance = Number(Math.max(Number(customers[cIdx].balance || 0) - sale.remaining, 0).toFixed(2));
+    setStorage(DB_KEYS.CUSTOMERS, customers);
+  }
+
+  if (refundAmount > 0) {
+    const payments = getStorage<Payment>(DB_KEYS.PAYMENTS);
+    const returnDate = payload.returnDate || new Date().toISOString().split('T')[0];
+    payments.push({
+      id: generateId(),
+      type: 'out',
+      amount: refundAmount,
+      referenceId: sale.id,
+      referenceType: 'sale_return' as any,
+      description: `مرتجع / استرداد نقدية فاتورة ${sale.invoiceNumber}${payload.reason ? ` (${payload.reason})` : ''}`,
+      date: returnDate,
+      receiptNumber: `RET-${sale.id.slice(-6).toUpperCase()}`,
+      status: 'posted',
+      channel: 'cash',
+      customerId: sale.customerId,
+      saleId: sale.id,
+      invoiceNumber: sale.invoiceNumber,
+      affectsCustomerBalance: false,
+      createdBy: 'system',
+      createdAt: new Date().toISOString(),
+    });
+    setStorage(DB_KEYS.PAYMENTS, payments);
+  }
+
+  sales[saleIndex] = {
+    ...sale,
+    status: 'cancelled',
+    remaining: 0,
+    paid: Number((Number(sale.paid || 0) - refundAmount).toFixed(2)),
+    locked: true,
+    financing: sale.financing
+      ? {
+          ...sale.financing,
+          schedules: (sale.financing.schedules || []).map((sch) =>
+            sch.status === 'paid' || sch.status === 'settled_early'
+              ? sch
+              : { ...sch, amount: sch.paidAmount, status: 'settled_early', notes: 'ملغى بمرتجع فاتورة' }
+          ),
+        }
+      : sale.financing,
+  };
+  setStorage(DB_KEYS.SALES, sales);
+
+  createAuditLog({
+    action: 'sale.return',
+    entityType: 'sale',
+    entityId: sale.id,
+    payload: { invoiceNumber: sale.invoiceNumber, refundAmount, reason: payload.reason || '' },
+    createdBy: 'system',
+  });
+
+  return { message: `تم تسجيل مرتجع الفاتورة ${sale.invoiceNumber} بنجاح`, refundAmount };
 }

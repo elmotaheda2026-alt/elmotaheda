@@ -5,6 +5,12 @@ import { getCustomers } from '../lib/storage';
 import { tafqeet } from '../lib/tafqeet';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { printHtmlDocument } from '../lib/printHelper';
+import {
+  BUILTIN_TEMPLATE_DEFAULTS,
+  DocumentTemplate,
+  loadDocumentTemplates,
+  renderTemplateHtml,
+} from '../lib/documentTemplates';
 
 interface LegalDocumentsPrintModalProps {
   isOpen: boolean;
@@ -47,7 +53,11 @@ export default function LegalDocumentsPrintModal({
   // Target signatory (customer or guarantors) for individual documents
   const [selectedSignatory, setSelectedSignatory] = useState<'customer' | 'guarantor1' | 'guarantor2' | 'guarantor3'>('customer');
 
-  // Tab/Document Selection
+  // Dynamic Document Templates
+  const [templates, setTemplates] = useState<DocumentTemplate[]>(BUILTIN_TEMPLATE_DEFAULTS);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<Record<string, boolean>>({});
+
+  // Tab/Document Selection (legacy flags kept in sync for built-in generators)
   const [selectedDocs, setSelectedDocs] = useState({
     creditApplication: true, // طلب شراء بالآجل
     installmentStatement: true, // NEW: كشف حساب الأقساط
@@ -58,8 +68,51 @@ export default function LegalDocumentsPrintModal({
     lawyerAck: true,
   });
 
-  // Active Preview Tab
-  const [activePreviewTab, setActivePreviewTab] = useState<'creditApplication' | 'installmentStatement' | 'customerFile' | 'trustReceipt' | 'receiptAck' | 'lawyerAck'>('creditApplication');
+  // Active Preview Tab (templateKey for built-ins or template.id for custom)
+  const [activePreviewTab, setActivePreviewTab] = useState<string>('creditApplication');
+
+  // Load templates when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    let mounted = true;
+    loadDocumentTemplates().then((loaded) => {
+      if (!mounted) return;
+      const activeList = loaded.filter((t) => t.isActive);
+      const listToUse = activeList.length > 0 ? activeList : BUILTIN_TEMPLATE_DEFAULTS;
+      setTemplates(listToUse);
+
+      const initialChecked: Record<string, boolean> = {};
+      const nextLegacy = {
+        creditApplication: false,
+        installmentStatement: false,
+        customerFile: false,
+        saleStatement: false,
+        trustReceipt: false,
+        receiptAck: false,
+        lawyerAck: false,
+      };
+      for (const t of listToUse) {
+        initialChecked[t.id] = t.defaultChecked;
+        if (t.templateKey === 'creditApplication') nextLegacy.creditApplication = t.defaultChecked;
+        if (t.templateKey === 'installmentStatement') nextLegacy.installmentStatement = t.defaultChecked;
+        if (t.templateKey === 'customerFile') {
+          nextLegacy.customerFile = t.defaultChecked;
+          nextLegacy.saleStatement = t.defaultChecked;
+        }
+        if (t.templateKey === 'trustReceipt') nextLegacy.trustReceipt = t.defaultChecked;
+        if (t.templateKey === 'receiptAck') nextLegacy.receiptAck = t.defaultChecked;
+        if (t.templateKey === 'lawyerAck') nextLegacy.lawyerAck = t.defaultChecked;
+      }
+      setSelectedTemplateIds(initialChecked);
+      setSelectedDocs(nextLegacy);
+
+      const firstTab = listToUse[0]?.templateKey || listToUse[0]?.id || 'creditApplication';
+      setActivePreviewTab(firstTab);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [isOpen]);
 
   // Load defaults and customer details
   useEffect(() => {
@@ -100,6 +153,9 @@ export default function LegalDocumentsPrintModal({
   };
 
   if (!isOpen || !sale) return null;
+
+  const isBuiltinOverridden = (key: string) =>
+    templates.some((t) => t.templateKey === key && t.htmlContent.trim().length > 0);
 
   // Active guarantors list helper
   const activeGuarantors = [
@@ -179,7 +235,7 @@ export default function LegalDocumentsPrintModal({
     let html = '';
 
     // 1. Page 1: File & Sale Statement (Combined on exactly ONE single A4 page)
-    if (selectedDocs.customerFile || selectedDocs.saleStatement) {
+    if ((selectedDocs.customerFile || selectedDocs.saleStatement) && !isBuiltinOverridden('customerFile')) {
       html += `
         <div class="a4-container page-break">
           <!-- ملف العميل/الضامن الموحد -->
@@ -249,7 +305,7 @@ export default function LegalDocumentsPrintModal({
     }
 
     // 2. Page 2: Trust Receipt
-    if (selectedDocs.trustReceipt) {
+    if (selectedDocs.trustReceipt && !isBuiltinOverridden('trustReceipt')) {
       html += `
         <div class="a4-container page-break">
           <div class="title-box">
@@ -277,7 +333,7 @@ export default function LegalDocumentsPrintModal({
     }
 
     // 3. Page 3: Receipt Acknowledgment
-    if (selectedDocs.receiptAck) {
+    if (selectedDocs.receiptAck && !isBuiltinOverridden('receiptAck')) {
       html += `
         <div class="a4-container page-break">
           <div class="title-box">
@@ -299,7 +355,7 @@ export default function LegalDocumentsPrintModal({
     }
 
     // 4. Page 4: Lawyer Representation Acknowledgment (3 boxes)
-    if (selectedDocs.lawyerAck) {
+    if (selectedDocs.lawyerAck && !isBuiltinOverridden('lawyerAck')) {
       html += `
         <div class="a4-container page-break">
           <!-- Box 1 -->
@@ -976,19 +1032,61 @@ export default function LegalDocumentsPrintModal({
       <body>
     `;
 
-    // Print credit application first if selected
-    if (selectedDocs.creditApplication) {
+    const getSignatoryInfo = (partyKey: 'customer' | 'guarantor1' | 'guarantor2' | 'guarantor3') => {
+      if (partyKey === 'guarantor1' && customer?.guarantors?.[0]) {
+        const g = customer.guarantors[0];
+        return { roleLabel: 'الضامن الأول', name: g.name, nationalId: g.nationalId || '---', phone: g.phone || '---', address: g.address || '---' };
+      }
+      if (partyKey === 'guarantor2' && customer?.guarantors?.[1]) {
+        const g = customer.guarantors[1];
+        return { roleLabel: 'الضامن الثاني', name: g.name, nationalId: g.nationalId || '---', phone: g.phone || '---', address: g.address || '---' };
+      }
+      if (partyKey === 'guarantor3' && customer?.guarantors?.[2]) {
+        const g = customer.guarantors[2];
+        return { roleLabel: 'الضامن الثالث', name: g.name, nationalId: g.nationalId || '---', phone: g.phone || '---', address: g.address || '---' };
+      }
+      return {
+        roleLabel: 'العميل المشتري',
+        name: sale.customerName,
+        nationalId: customer?.nationalId || '---',
+        phone: customer?.phone || '---',
+        address: customer?.address || '---',
+      };
+    };
+
+    const customOrOverriddenTemplates = templates.filter(
+      (t) => selectedTemplateIds[t.id] && (!t.isBuiltin || t.htmlContent.trim().length > 0)
+    );
+    const hasOverriddenKey = (key: string) =>
+      templates.some((t) => t.templateKey === key && t.htmlContent.trim().length > 0);
+
+    // Print credit application first if selected and not overridden
+    if (selectedDocs.creditApplication && !hasOverriddenKey('creditApplication')) {
       printHtml += generateCreditApplicationHtml(todayDate);
     }
 
-    // Print installment statement next if selected
-    if (selectedDocs.installmentStatement) {
+    // Print installment statement next if selected and not overridden
+    if (selectedDocs.installmentStatement && !hasOverriddenKey('installmentStatement')) {
       printHtml += generateInstallmentStatementHtml(todayDate);
     }
 
     if (mode === 'active') {
       // Print active party's documents
       printHtml += generateSignatoryHtml(selectedSignatory, todayDate, formattedInvoiceDate);
+      for (const tpl of customOrOverriddenTemplates) {
+        printHtml += renderTemplateHtml(tpl.htmlContent, {
+          sale,
+          customer,
+          signatory: getSignatoryInfo(selectedSignatory),
+          firstPartyName,
+          thirdPartyName,
+          lawyerName,
+          itemType,
+          amount,
+          amountInWords,
+          todayDate,
+        });
+      }
     } else {
       // Print Customer AND all active Guarantors documents sequentially
       printHtml += generateSignatoryHtml('customer', todayDate, formattedInvoiceDate);
@@ -996,6 +1094,26 @@ export default function LegalDocumentsPrintModal({
       activeGuarantors.forEach((guarantor) => {
         printHtml += generateSignatoryHtml(guarantor.key as any, todayDate, formattedInvoiceDate);
       });
+
+      for (const tpl of customOrOverriddenTemplates) {
+        const partiesToPrint: Array<'customer' | 'guarantor1' | 'guarantor2' | 'guarantor3'> = tpl.repeatForSignatories
+          ? ['customer', ...activeGuarantors.map((g) => g.key as any)]
+          : ['customer'];
+        for (const pKey of partiesToPrint) {
+          printHtml += renderTemplateHtml(tpl.htmlContent, {
+            sale,
+            customer,
+            signatory: getSignatoryInfo(pKey),
+            firstPartyName,
+            thirdPartyName,
+            lawyerName,
+            itemType,
+            amount,
+            amountInWords,
+            todayDate,
+          });
+        }
+      }
     }
 
     printHtml += `
@@ -1005,6 +1123,7 @@ export default function LegalDocumentsPrintModal({
 
     const opened = await printHtmlDocument(printHtml, {
       title: `طباعة الأوراق القانونية - ${sale.customerName}`,
+      paperSize: 'a4',
     });
     if (!opened) {
       alert('تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.');
@@ -1077,75 +1196,54 @@ export default function LegalDocumentsPrintModal({
             )}
 
             {/* Document Selection checkboxes */}
-            <div className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 space-y-3">
-              <h4 className="font-bold text-sm text-sky-400 flex items-center gap-2 mb-2">
-                <CheckSquare size={16} />
-                تحديد المستندات للطباعة
-              </h4>
+            <div className="bg-slate-950/50 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <h4 className="font-bold text-sm text-sky-400 flex items-center gap-2">
+                  <CheckSquare size={16} />
+                  تحديد المستندات للطباعة
+                </h4>
+                <span className="text-[10px] text-slate-400">الإعدادات ← قوالب المستندات</span>
+              </div>
 
-              <label className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={selectedDocs.creditApplication}
-                  onChange={(e) => setSelectedDocs({ ...selectedDocs, creditApplication: e.target.checked })}
-                  className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
-                />
-                طلب شراء بالآجل (شامل التمويل والضامنين)
-              </label>
-
-              <label className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={selectedDocs.installmentStatement}
-                  onChange={(e) => setSelectedDocs({ ...selectedDocs, installmentStatement: e.target.checked })}
-                  className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
-                />
-                كشف حساب الأقساط وجدول السداد
-              </label>
-              
-              <label className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={selectedDocs.customerFile && selectedDocs.saleStatement}
-                  onChange={(e) => setSelectedDocs({ 
-                    ...selectedDocs, 
-                    customerFile: e.target.checked,
-                    saleStatement: e.target.checked
-                  })}
-                  className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
-                />
-                {selectedSignatory === 'customer' ? 'ملف العميل وبيان بيع السلعة' : `ملف ${selectedSignatory === 'guarantor1' ? 'الضامن الأول' : selectedSignatory === 'guarantor2' ? 'الضامن الثاني' : 'الضامن الثالث'} وبيان بيع السلعة`}
-              </label>
-
-              <label className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={selectedDocs.trustReceipt}
-                  onChange={(e) => setSelectedDocs({ ...selectedDocs, trustReceipt: e.target.checked })}
-                  className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
-                />
-                إيصال أمانة
-              </label>
-
-              <label className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={selectedDocs.receiptAck}
-                  onChange={(e) => setSelectedDocs({ ...selectedDocs, receiptAck: e.target.checked })}
-                  className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
-                />
-                إقرار إستلام الأمانة نقداً
-              </label>
-
-              <label className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={selectedDocs.lawyerAck}
-                  onChange={(e) => setSelectedDocs({ ...selectedDocs, lawyerAck: e.target.checked })}
-                  className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
-                />
-                إقرارات توكيل قضايا (3 إقرارات)
-              </label>
+              {templates.map((tpl) => {
+                const isChecked = !!selectedTemplateIds[tpl.id];
+                const labelText =
+                  tpl.templateKey === 'customerFile' && selectedSignatory !== 'customer'
+                    ? `ملف ${selectedSignatory === 'guarantor1' ? 'الضامن الأول' : selectedSignatory === 'guarantor2' ? 'الضامن الثاني' : 'الضامن الثالث'} وبيان بيع السلعة`
+                    : tpl.name;
+                return (
+                  <label key={tpl.id} className="flex items-center gap-3 cursor-pointer group py-1 text-sm text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setSelectedTemplateIds((prev) => ({ ...prev, [tpl.id]: checked }));
+                        if (tpl.templateKey === 'creditApplication') {
+                          setSelectedDocs((prev) => ({ ...prev, creditApplication: checked }));
+                        } else if (tpl.templateKey === 'installmentStatement') {
+                          setSelectedDocs((prev) => ({ ...prev, installmentStatement: checked }));
+                        } else if (tpl.templateKey === 'customerFile') {
+                          setSelectedDocs((prev) => ({ ...prev, customerFile: checked, saleStatement: checked }));
+                        } else if (tpl.templateKey === 'trustReceipt') {
+                          setSelectedDocs((prev) => ({ ...prev, trustReceipt: checked }));
+                        } else if (tpl.templateKey === 'receiptAck') {
+                          setSelectedDocs((prev) => ({ ...prev, receiptAck: checked }));
+                        } else if (tpl.templateKey === 'lawyerAck') {
+                          setSelectedDocs((prev) => ({ ...prev, lawyerAck: checked }));
+                        }
+                      }}
+                      className="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 w-4 h-4"
+                    />
+                    <span className="truncate">{labelText}</span>
+                    {!tpl.isBuiltin && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
+                        مخصص
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
             </div>
 
             {/* Custom Variables forms */}
@@ -1233,51 +1331,71 @@ export default function LegalDocumentsPrintModal({
             
             {/* Preview Navigation Tabs */}
             <div className="flex border-b border-slate-800 bg-slate-950 p-2 gap-2 shrink-0 overflow-x-auto">
-              <button
-                onClick={() => setActivePreviewTab('creditApplication')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors flex items-center gap-1.5 ${activePreviewTab === 'creditApplication' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
-              >
-                <FileText size={13} />
-                طلب شراء بالآجل
-              </button>
-              <button
-                onClick={() => setActivePreviewTab('installmentStatement')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors flex items-center gap-1.5 ${activePreviewTab === 'installmentStatement' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
-              >
-                <Calendar size={13} />
-                كشف حساب الأقساط
-              </button>
-              <button
-                onClick={() => setActivePreviewTab('customerFile')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors ${activePreviewTab === 'customerFile' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
-              >
-                {selectedSignatory === 'customer' ? 'ملف العميل وبيان البيع' : 'ملف الضامن وبيان البيع'}
-              </button>
-              <button
-                onClick={() => setActivePreviewTab('trustReceipt')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors ${activePreviewTab === 'trustReceipt' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
-              >
-                إيصال الأمانة
-              </button>
-              <button
-                onClick={() => setActivePreviewTab('receiptAck')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors ${activePreviewTab === 'receiptAck' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
-              >
-                إقرار الإستلام
-              </button>
-              <button
-                onClick={() => setActivePreviewTab('lawyerAck')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors ${activePreviewTab === 'lawyerAck' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
-              >
-                توكيل القضايا (3 إقرارات)
-              </button>
+              {templates.map((tpl) => {
+                const tabId = tpl.templateKey || tpl.id;
+                const isActive = activePreviewTab === tabId;
+                const tabTitle =
+                  tpl.templateKey === 'customerFile' && selectedSignatory !== 'customer'
+                    ? 'ملف الضامن وبيان البيع'
+                    : tpl.name;
+                return (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => setActivePreviewTab(tabId)}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+                      isActive ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                    }`}
+                  >
+                    {tpl.templateKey === 'creditApplication' && <FileText size={13} />}
+                    {tpl.templateKey === 'installmentStatement' && <Calendar size={13} />}
+                    <span>{tabTitle}</span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Simulated Printed Page Wrapper */}
             <div className="flex-1 overflow-auto p-4 sm:p-6 bg-slate-900/60">
+              {(() => {
+                const activeTpl = templates.find((t) => (t.templateKey || t.id) === activePreviewTab);
+                if (activeTpl && (!activeTpl.isBuiltin || activeTpl.htmlContent.trim().length > 0)) {
+                  const previewHtml = renderTemplateHtml(activeTpl.htmlContent, {
+                    sale,
+                    customer,
+                    signatory: {
+                      roleLabel:
+                        selectedSignatory === 'customer'
+                          ? 'العميل المشتري'
+                          : selectedSignatory === 'guarantor1'
+                            ? 'الضامن الأول'
+                            : selectedSignatory === 'guarantor2'
+                              ? 'الضامن الثاني'
+                              : 'الضامن الثالث',
+                      name: signatoryName,
+                      nationalId: signatoryNationalId,
+                      phone: signatoryPhone,
+                      address: signatoryAddress,
+                    },
+                    firstPartyName,
+                    thirdPartyName,
+                    lawyerName,
+                    itemType,
+                    amount,
+                    amountInWords,
+                  });
+                  return (
+                    <div
+                      className="bg-white text-black shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto rounded overflow-hidden"
+                      dangerouslySetInnerHTML={{ __html: previewHtml }}
+                    />
+                  );
+                }
+                return null;
+              })()}
               
               {/* Credit Application Preview */}
-              {activePreviewTab === 'creditApplication' && (
+              {!isBuiltinOverridden('creditApplication') && activePreviewTab === 'creditApplication' && (
                 <div className="bg-white text-black p-5 sm:p-6 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '9.5px', lineHeight: '1.4' }}>
                   
                   {/* Header Row */}
@@ -1437,7 +1555,7 @@ export default function LegalDocumentsPrintModal({
               )}
 
               {/* NEW: Installment Statement Preview */}
-              {activePreviewTab === 'installmentStatement' && (
+              {!isBuiltinOverridden('installmentStatement') && activePreviewTab === 'installmentStatement' && (
                 <div className="bg-white text-black p-6 sm:p-8 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-6 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '12px' }}>
                   
                   {/* Header Row */}
@@ -1539,7 +1657,7 @@ export default function LegalDocumentsPrintModal({
               )}
 
               {/* Customer/Guarantor File Preview */}
-              {activePreviewTab === 'customerFile' && (
+              {!isBuiltinOverridden('customerFile') && activePreviewTab === 'customerFile' && (
                 <div className="bg-white text-black p-5 sm:p-6 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-4 rounded animate-in fade-in duration-200 font-bold" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl', fontSize: '12px' }}>
                   
                   {/* Combined Header */}
@@ -1604,7 +1722,7 @@ export default function LegalDocumentsPrintModal({
               )}
 
               {/* Trust Receipt Preview */}
-              {activePreviewTab === 'trustReceipt' && (
+              {!isBuiltinOverridden('trustReceipt') && activePreviewTab === 'trustReceipt' && (
                 <div className="bg-white text-black p-6 sm:p-8 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-8 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
                   <div className="text-center">
                     <span className="border-2 border-black px-6 py-1.5 font-bold text-lg inline-block shadow-[3px_3px_0_black]">ايصال استلام نقدية على سبيل الامانه</span>
@@ -1630,7 +1748,7 @@ export default function LegalDocumentsPrintModal({
               )}
 
               {/* Receipt Acknowledgment Preview */}
-              {activePreviewTab === 'receiptAck' && (
+              {!isBuiltinOverridden('receiptAck') && activePreviewTab === 'receiptAck' && (
                 <div className="bg-white text-black p-6 sm:p-8 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-8 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
                   <div className="text-center">
                     <span className="border-2 border-black px-6 py-1.5 font-bold text-lg inline-block shadow-[3px_3px_0_black]">إقـــــــرار إستلام</span>
@@ -1650,7 +1768,7 @@ export default function LegalDocumentsPrintModal({
               )}
 
               {/* Lawyer Representation Preview */}
-              {activePreviewTab === 'lawyerAck' && (
+              {!isBuiltinOverridden('lawyerAck') && activePreviewTab === 'lawyerAck' && (
                 <div className="bg-white text-black p-5 sm:p-6 shadow-xl border border-slate-300 w-full max-w-[780px] mx-auto space-y-4 rounded animate-in fade-in duration-200" style={{ fontFamily: 'Tahoma, sans-serif', direction: 'rtl' }}>
                   
                   {/* Repeated 3 times */}

@@ -10,7 +10,7 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   settings: Setting;
-  updateSettings: (settings: Setting) => void;
+  updateSettings: (settings: Setting) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -33,13 +33,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem('api_token');
         localStorage.removeItem('api_user');
         localStorage.removeItem('almuttahida_auth');
-      } catch (_) {}
+      } catch {
+        // Ignore storage access errors when cleaning legacy tokens
+      }
 
       if (isApiMode()) {
-        setUser(getApiUser<User>());
+        const currentApiUser = getApiUser<User>();
+        setUser(currentApiUser);
+        if (currentApiUser) {
+          void db.syncSettings().then(setSettings).catch(() => {});
+        }
       } else {
         db.initializeDatabase();
         setUser(db.getCurrentUser());
+        setSettings(db.getSettings());
       }
     } catch (e) {
       console.error('Failed to initialize auth/database:', e);
@@ -69,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
       setApiSession(token, mappedUser);
       setUser(mappedUser);
+      void db.syncSettings().then(setSettings).catch(() => {});
       return true;
     } catch (e) {
       if (isApiMode()) {
@@ -94,8 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const updateSettings = (newSettings: Setting) => {
-    db.updateSettings(newSettings);
+  const updateSettings = async (newSettings: Setting) => {
+    await db.updateSettings(newSettings);
     setSettings(newSettings);
   };
 

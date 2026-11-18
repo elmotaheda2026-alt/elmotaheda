@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid, formatDate, parseDateInput, comparePassword } from '../utils.js';
+import { uid, formatDate, parseDateInput, comparePassword, isPeriodClosed } from '../utils.js';
 import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
 
 const router = Router();
@@ -23,19 +23,6 @@ async function nextReceiptNumber() {
 }
 
 const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
-
-async function isPeriodClosed(db: any, dateStr: string): Promise<boolean> {
-  const day = dateStr.slice(0, 10);
-  const month = dateStr.slice(0, 7);
-  const closed = await db.get(
-    `SELECT 1 FROM closing_periods 
-     WHERE status = \'closed\' 
-       AND ((period_type = \'daily\' AND period_date = ?) OR (period_type = \'monthly\' AND period_date = ?))`,
-    day,
-    month
-  );
-  return !!closed;
-}
 
 const paymentSchema = z.object({
   type: z.enum(['in', 'out']),
@@ -192,6 +179,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     // Validate sale exists and amount before transaction
     let finalCustomerId = data.customerId || null;
     let finalSupplierId = data.supplierId || null;
+    let resolvedInvoiceNumber = data.invoiceNumber || null;
     let saleRemainingBeforeSettlement = 0;
     const isDownPayment = data.type === 'in' && Boolean(data.saleId) && data.affectsCustomerBalance === false;
 
@@ -202,6 +190,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       );
       if (!sale) return res.status(404).json({ message: 'Sale invoice not found' });
       saleRemainingBeforeSettlement = Number(sale.remaining || 0);
+      if (!resolvedInvoiceNumber) resolvedInvoiceNumber = sale.invoice_number || null;
 
       if (!isDownPayment) {
         if (data.isEarlySettlement) {
@@ -382,9 +371,9 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
         const customerDeduction = data.isEarlySettlement ? saleRemainingBeforeSettlement : data.amount;
         await tx.run(
           `UPDATE customers
-           SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ?
+           SET balance = ROUND(balance - ?, 2), updated_at = ?
            WHERE id = ?`,
-          customerDeduction, customerDeduction, now, finalCustomerId,
+          customerDeduction, now, finalCustomerId,
         );
 
         // If customer has no active remaining debt left across all sales, clear legal lawsuit flag
@@ -403,13 +392,13 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
         }
       }
 
-      // 3. Update Supplier Balance
+      // 3. Update Supplier Balance (allow negative balance = advance credit with supplier)
       if (data.type === 'out' && finalSupplierId) {
         await tx.run(
           `UPDATE suppliers
-           SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ?
+           SET balance = ROUND(balance - ?, 2), updated_at = ?
            WHERE id = ?`,
-          data.amount, data.amount, now, finalSupplierId,
+          data.amount, now, finalSupplierId,
         );
       }
 
@@ -433,7 +422,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
         data.referenceType,
         finalCustomerId,
         finalSupplierId,
-        data.invoiceNumber || null,
+        resolvedInvoiceNumber,
         data.affectsCustomerBalance ? 1 : 0,
         req.user?.name || 'system',
         now,
@@ -593,11 +582,12 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
           // Revert schedules
           if (original.installment_id) {
             const schedule = (await tx.get(
-              'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE id = ?',
+              'SELECT id, paid_amount, month_index, sale_id FROM installment_schedules WHERE id = ?',
               original.installment_id,
-            )) as { id: string; paid_amount: number; sale_id: string } | undefined;
+            )) as { id: string; paid_amount: number; month_index: number; sale_id: string } | undefined;
             if (schedule) {
-              const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - original.amount).toFixed(2)));
+              const targetRevert = Math.min(Number(schedule.paid_amount || 0), Number(original.amount || 0));
+              const nextPaidAmount = Math.max(0, Number((schedule.paid_amount - targetRevert).toFixed(2)));
               const scheduleStatus = nextPaidAmount <= 0 ? 'unpaid' : 'partial';
               const latestPayment = nextPaidAmount > 0 ? ((await tx.get(
                 'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
@@ -615,6 +605,38 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
                 latestPayment ? latestPayment.date : null,
                 original.installment_id,
               );
+
+              // Also revert any cascaded surplus on subsequent installments
+              let surplusRevert = Number((Number(original.amount || 0) - targetRevert).toFixed(2));
+              if (surplusRevert > 0.005) {
+                const subsequentPaid = (await tx.all(
+                  'SELECT id, paid_amount, sale_id FROM installment_schedules WHERE sale_id = ? AND month_index > ? AND paid_amount > 0 ORDER BY month_index DESC',
+                  schedule.sale_id,
+                  schedule.month_index,
+                )) as { id: string; paid_amount: number; sale_id: string }[];
+                for (const nextSch of subsequentPaid) {
+                  if (surplusRevert <= 0) break;
+                  const applied = Math.min(Number(nextSch.paid_amount || 0), surplusRevert);
+                  const nextSubPaid = Math.max(0, Number((nextSch.paid_amount - applied).toFixed(2)));
+                  surplusRevert = Number((surplusRevert - applied).toFixed(2));
+                  const latestSubPay = nextSubPaid > 0 ? ((await tx.get(
+                    'SELECT date FROM payments WHERE sale_id = ? AND status = \'posted\' AND id <> ? ORDER BY date DESC',
+                    nextSch.sale_id,
+                    original.id,
+                  )) as { date: string } | undefined) : null;
+                  await tx.run(
+                    `UPDATE installment_schedules
+                     SET paid_amount = ?,
+                         status = ?,
+                         paid_at = ?
+                     WHERE id = ?`,
+                    nextSubPaid,
+                    nextSubPaid <= 0 ? 'unpaid' : 'partial',
+                    latestSubPay ? latestSubPay.date : null,
+                    nextSch.id,
+                  );
+                }
+              }
             }
           } else {
             // Auto-revert schedules in reverse order (month_index DESC)
@@ -681,13 +703,13 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
         );
       }
 
-      // 4. Create void payment transaction
+      // 4. Create voided contra-entry audit log (status='voided' prevents 2x subtraction in treasury totals since original is also marked voided)
       await tx.run(
         `INSERT INTO payments (
           id, type, amount, sale_id, installment_id, description, date, receipt_number, status, void_ref, approved_by, channel,
           reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
           created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'voided', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         reverseId,
         reverseType,
         original.amount,
@@ -780,7 +802,7 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
 
         const nextPaid = roundMoney(Math.max(0, Number(sale.paid || 0) + delta));
         const nextRemaining = roundMoney(Math.max(0, Number(sale.remaining || 0) - delta));
-        const nextStatus = nextRemaining <= 0.01 ? 'paid' : nextPaid > 0.01 ? 'partial' : 'pending';
+        const nextStatus = sale.status === 'settled_early' ? 'settled_early' : nextRemaining <= 0.01 ? 'completed' : 'pending';
 
         await tx.run(
           'UPDATE sales SET paid = ?, remaining = ?, status = ? WHERE id = ?',
@@ -792,8 +814,7 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
 
         if (original.customer_id) {
           await tx.run(
-            'UPDATE customers SET balance = CASE WHEN balance - ? < 0 THEN 0 ELSE balance - ? END, updated_at = ? WHERE id = ?',
-            delta,
+            'UPDATE customers SET balance = ROUND(balance - ?, 2), updated_at = ? WHERE id = ?',
             delta,
             now,
             original.customer_id
@@ -815,7 +836,7 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
                 ? 'paid'
                 : nextSchedPaid > 0.01
                   ? 'partial'
-                  : 'pending';
+                  : 'unpaid';
             await tx.run(
               'UPDATE installment_schedules SET paid_amount = ?, status = ?, paid_at = ? WHERE id = ?',
               nextSchedPaid,

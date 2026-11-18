@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { uid, formatDate, parseDateInput } from '../utils.js';
+import { uid, formatDate, parseDateInput, isPeriodClosed } from '../utils.js';
 import { createSystemNotification, formatMoney } from '../financialNotifications.js';
 
 const router = Router();
@@ -57,6 +57,9 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
   try {
     const db = await dbPromise;
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, data.date)) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن تسجيل مصروفات فيها إلا بواسطة المدير.' });
+    }
     await db.withTransaction(async (tx) => {
       await tx.run(
         `INSERT INTO expenses (
@@ -118,9 +121,12 @@ router.put('/:id', requirePermission('payments:write'), async (req: AuthedReques
 
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM expenses WHERE id = ?', req.params.id);
+    const existing = await db.get<{ id: string; date: string }>('SELECT id, date FROM expenses WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Expense not found' });
+    }
+    if (req.user?.role !== 'admin' && (await isPeriodClosed(db, existing.date) || await isPeriodClosed(db, data.date))) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن تعديل مصروفاتها إلا بواسطة المدير.' });
     }
 
     await db.withTransaction(async (tx) => {
@@ -158,11 +164,13 @@ router.put('/:id', requirePermission('payments:write'), async (req: AuthedReques
 router.delete('/:id', requirePermission('payments:write'), requireAdmin, async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
-    const existing = await db.get('SELECT id FROM expenses WHERE id = ?', req.params.id);
+    const existing = await db.get<{ id: string; date: string }>('SELECT id, date FROM expenses WHERE id = ?', req.params.id);
     if (!existing) {
       return res.status(404).json({ message: 'Expense not found' });
     }
-
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, existing.date)) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن حذف مصروفاتها إلا بواسطة المدير.' });
+    }
     await db.withTransaction(async (tx) => {
       await tx.run('DELETE FROM expenses WHERE id = ?', req.params.id);
       await tx.run("DELETE FROM payments WHERE reference_type = 'expense' AND reference_id = ?", req.params.id);

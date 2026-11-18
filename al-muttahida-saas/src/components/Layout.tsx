@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import { useAuth } from '../context/AuthContext';
 
 export default function Layout() {
+  const { settings } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 1024) {
       return false;
@@ -11,6 +13,14 @@ export default function Layout() {
     const saved = localStorage.getItem('sidebar_open');
     return saved !== null ? saved === 'true' : true;
   });
+
+  useEffect(() => {
+    const companyTitle =
+      settings.companyName && settings.companyName !== 'شركة المتحدة'
+        ? settings.companyName
+        : 'شركة المتحدة للتجارة والتوريدات';
+    document.title = companyTitle;
+  }, [settings.companyName]);
 
   const toggleSidebar = () => {
     setSidebarOpen((prev) => {
@@ -29,7 +39,7 @@ export default function Layout() {
       </div>
 
       <div className={`h-[100dvh] max-h-[100dvh] flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-60' : 'lg:mr-16'} print:m-0 overflow-hidden relative`}>
-        <div className="print:hidden shrink-0 z-30 sticky top-0">
+        <div className="print:hidden shrink-0 z-20 sticky top-0">
           <Header onMenuClick={toggleSidebar} />
         </div>
 

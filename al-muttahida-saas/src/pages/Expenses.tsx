@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Trash2, Search, AlertCircle, RefreshCw, Printer } from 'lucide-react';
+import { Plus, Trash2, Search, AlertCircle, RefreshCw, Printer, Pencil } from 'lucide-react';
 import { Expense } from '../types';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
+import { hasPermission, isAdmin } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
-import { getExpenses } from '../lib/storage';
+import { getExpenses, createExpense, updateExpense, deleteExpense } from '../lib/storage';
+import { printHtmlDocument } from '../lib/printHelper';
 import LoadingState from '../components/LoadingState';
 
 type PresetKey = 'all' | 'year' | 'quarter' | 'month' | 'today' | 'custom';
@@ -74,6 +76,7 @@ export default function Expenses() {
   const initialMonthRange = useMemo(() => getPresetRange('month'), []);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [dateFrom, setDateFrom] = useState(initialMonthRange.from);
@@ -124,15 +127,15 @@ export default function Expenses() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F2') {
+      if (event.key === 'F2' && hasPermission(user, 'payments:write')) {
         event.preventDefault();
-        setShowModal(true);
+        openAddModal();
       }
       if (event.key === 'F5') {
         event.preventDefault();
         void loadData();
       }
-      if (event.key === 'Escape' && showModal) setShowModal(false);
+      if (event.key === 'Escape' && showModal) closeExpenseModal();
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -160,35 +163,120 @@ export default function Expenses() {
     setSearchTerm('');
   };
 
+  const openAddModal = () => {
+    setEditingExpense(null);
+    setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+    setShowModal(true);
+  };
+
+  const openEditModal = (expense: Expense) => {
+    setEditingExpense(expense);
+    setFormData({
+      category: expense.category || '',
+      description: expense.description || '',
+      amount: Number(expense.amount || 0),
+      date: toYMD(expense.date) || new Date().toISOString().split('T')[0],
+    });
+    setShowModal(true);
+  };
+
+  const closeExpenseModal = () => {
+    setShowModal(false);
+    setEditingExpense(null);
+    setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+  };
+
+  const handlePrintVoucher = async (expense: Expense) => {
+    const voucherNo = `EXP-${String(expense.id).slice(-6).toUpperCase()}`;
+    const html = `
+      <!DOCTYPE html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="UTF-8" />
+        <title>سند صرف نقدية ${voucherNo}</title>
+        <style>
+          body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; padding: 28px; color: #0f172a; }
+          .voucher { max-width: 680px; margin: 0 auto; border: 2px solid #1e293b; border-radius: 12px; padding: 24px; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 14px; margin-bottom: 18px; }
+          .title { font-size: 20px; font-weight: 800; color: #b91c1c; }
+          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+          .box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 14px; }
+          .label { font-size: 12px; color: #64748b; margin-bottom: 4px; }
+          .val { font-size: 15px; font-weight: 700; }
+          .signs { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 12px; font-size: 13px; color: #475569; }
+        </style>
+      </head>
+      <body>
+        <div class="voucher">
+          <div class="header">
+            <div>
+              <div style="font-weight:800;font-size:18px;">${settings.companyName || 'شركة المتحدة'}</div>
+              <div style="font-size:12px;color:#64748b;">سند صرف مصروفات تشغيلية</div>
+            </div>
+            <div class="title">سند صرف رقم #${voucherNo}</div>
+          </div>
+          <div class="grid">
+            <div class="box"><div class="label">التاريخ</div><div class="val">${formatDateDisplay(expense.date)}</div></div>
+            <div class="box"><div class="label">التصنيف</div><div class="val">${expense.category}</div></div>
+            <div class="box"><div class="label">المبلغ المصروف</div><div class="val" style="color:#b91c1c;">${formatCurrency(expense.amount)}</div></div>
+            <div class="box"><div class="label">سُجل بواسطة</div><div class="val">${expense.createdBy || user?.name || '-'}</div></div>
+          </div>
+          <div class="box" style="margin-bottom:18px;">
+            <div class="label">البيان / الوصف</div>
+            <div class="val">${expense.description}</div>
+          </div>
+          <div class="signs">
+            <div>توقيع المستلم: ___________________</div>
+            <div>اعتماد الحسابات / الإدارة: ___________________</div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+    const opened = await printHtmlDocument(html, { title: `سند صرف ${voucherNo}`, width: 800, height: 600 });
+    if (!opened) showToast('يرجى السماح بالنوافذ المنبثقة للطباعة', 'warning');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.category || !formData.description || formData.amount <= 0) {
-      alert('يرجى ملء جميع الحقول المطلوبة بمبلغ صحيح');
+      showToast('يرجى ملء جميع الحقول المطلوبة بمبلغ صحيح', 'warning');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      if (isApiMode()) {
-        await api.createExpense({
-          category: formData.category,
-          description: formData.description,
-          amount: formData.amount,
-          date: formData.date,
+      const payload = {
+        category: formData.category,
+        description: formData.description,
+        amount: formData.amount,
+        date: formData.date,
+      };
+      if (editingExpense) {
+        await updateExpense(editingExpense.id, payload);
+        showToast('تم تحديث سند الصرف بنجاح', 'success');
+      } else {
+        await createExpense({
+          ...payload,
+          createdBy: user?.name || 'مدير النظام',
         });
-        await loadData();
+        showToast('تم حفظ سند الصرف بنجاح', 'success');
       }
-      setShowModal(false);
-      setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+      await loadData();
+      closeExpenseModal();
     } catch (err: any) {
       console.error('Failed to save expense:', err);
-      alert(err.message || 'فشل حفظ سند الصرف في قاعدة البيانات');
+      showToast(err?.message || 'فشل حفظ سند الصرف في قاعدة البيانات', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDelete = async (id: string, description: string) => {
+    if (!isAdmin(user)) {
+      showToast('حذف سندات الصرف متاح لمدير النظام فقط', 'warning');
+      return;
+    }
     const isConfirmed = await confirmDialog({
       title: 'تأكيد حذف سند الصرف',
       message: `هل أنت متأكد من حذف سند الصرف: "${description}" نهائياً من قاعدة البيانات؟`,
@@ -199,14 +287,12 @@ export default function Expenses() {
     if (!isConfirmed) return;
 
     try {
-      if (isApiMode()) {
-        await api.deleteExpense(id);
-        await loadData();
-        showToast('تم حذف سند الصرف بنجاح', 'success');
-      }
+      await deleteExpense(id);
+      await loadData();
+      showToast('تم حذف سند الصرف بنجاح', 'success');
     } catch (err: any) {
       console.error('Failed to delete expense:', err);
-      showToast(err.message || 'فشل حذف سند الصرف من قاعدة البيانات', 'error');
+      showToast(err?.message || 'فشل حذف سند الصرف من قاعدة البيانات', 'error');
     }
   };
 
@@ -309,10 +395,10 @@ export default function Expenses() {
               <span>طباعة</span>
             </button>
 
-            {user?.role !== 'manager' && (
+            {hasPermission(user, 'payments:write') && (
               <button
                 type="button"
-                onClick={() => setShowModal(true)}
+                onClick={openAddModal}
                 className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs whitespace-nowrap cursor-pointer"
               >
                 <Plus size={15} />
@@ -417,7 +503,7 @@ export default function Expenses() {
       </div>
 
       {/* Tier 2: Fixed Height KPI Metrics Bar */}
-      <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-3 shrink-0 print:grid-cols-3 print:gap-2.5 print:mb-3 no-print">
+      <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-2 shrink-0 print:grid-cols-2 print:gap-2.5 print:mb-3 no-print">
         <ExpensesMetric
           label="إجمالي مصروفات الفترة"
           value={formatCurrency(totalFilteredAmount)}
@@ -427,11 +513,6 @@ export default function Expenses() {
           label="عدد سندات الصرف"
           value={`${filteredExpenses.length} سند`}
           tone="slate"
-        />
-        <ExpensesMetric
-          label="متوسط قيمة السند"
-          value={formatCurrency(filteredExpenses.length > 0 ? Math.round(totalFilteredAmount / filteredExpenses.length) : 0)}
-          tone="amber"
         />
       </div>
 
@@ -475,15 +556,36 @@ export default function Expenses() {
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
                   <span className="text-slate-500 font-mono font-semibold">{formatDateDisplay(expense.date)}</span>
-                  {user?.role !== 'manager' && (
+                  <div className="flex items-center gap-1.5">
                     <button
-                      onClick={() => handleDelete(expense.id, expense.description)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors"
+                      type="button"
+                      onClick={() => handlePrintVoucher(expense)}
+                      className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold transition-colors"
                     >
-                      <Trash2 size={13} />
-                      حذف
+                      <Printer size={13} />
+                      طباعة
                     </button>
-                  )}
+                    {hasPermission(user, 'payments:write') && (
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(expense)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors"
+                      >
+                        <Pencil size={13} />
+                        تعديل
+                      </button>
+                    )}
+                    {isAdmin(user) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(expense.id, expense.description)}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors"
+                      >
+                        <Trash2 size={13} />
+                        حذف
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))
@@ -520,15 +622,36 @@ export default function Expenses() {
                     <td className="py-2.5 px-4 text-xs md:text-sm text-slate-800 font-bold">{expense.description}</td>
                     <td className="py-2.5 px-4 text-xs md:text-sm font-bold text-rose-700 font-mono">{formatCurrency(expense.amount)}</td>
                     <td className="py-2.5 px-4 text-center no-print print:hidden">
-                      {user?.role !== 'manager' && (
+                      <div className="inline-flex items-center justify-center gap-1">
                         <button
-                          onClick={() => handleDelete(expense.id, expense.description)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                          title="حذف سند الصرف"
+                          type="button"
+                          onClick={() => handlePrintVoucher(expense)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          title="طباعة سند الصرف"
                         >
-                          <Trash2 size={15} />
+                          <Printer size={15} />
                         </button>
-                      )}
+                        {hasPermission(user, 'payments:write') && (
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(expense)}
+                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                            title="تعديل سند الصرف"
+                          >
+                            <Pencil size={15} />
+                          </button>
+                        )}
+                        {isAdmin(user) && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(expense.id, expense.description)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                            title="حذف سند الصرف"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -556,13 +679,13 @@ export default function Expenses() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md shadow-2xl overflow-hidden animate-fadeIn">
             <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <h3 className="text-base font-black text-slate-800">إضافة سند صرف جديد</h3>
+              <h3 className="text-base font-black text-slate-800">{editingExpense ? 'تعديل سند الصرف' : 'إضافة سند صرف جديد'}</h3>
               <button
                 type="button"
-                onClick={() => setShowModal(false)}
+                onClick={closeExpenseModal}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-200/60 transition-colors"
                 title="إغلاق"
               >
@@ -620,7 +743,7 @@ export default function Expenses() {
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
+                  onClick={closeExpenseModal}
                   disabled={isSubmitting}
                   className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 text-xs font-bold transition-colors"
                 >
@@ -631,7 +754,7 @@ export default function Expenses() {
                   disabled={isSubmitting}
                   className="flex-1 px-4 py-2.5 bg-[#1e40af] text-white rounded-xl hover:bg-[#1d4ed8] text-xs font-bold shadow-2xs disabled:opacity-50 transition-colors"
                 >
-                  {isSubmitting ? 'جاري الحفظ...' : 'حفظ سند الصرف'}
+                  {isSubmitting ? 'جاري الحفظ...' : editingExpense ? 'حفظ التعديلات' : 'حفظ سند الصرف'}
                 </button>
               </div>
             </form>

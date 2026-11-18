@@ -301,7 +301,9 @@ export function initializeDatabase(): void {
       if (changed) {
         localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(parsed));
       }
-    } catch (e) {}
+    } catch {
+      // Ignore malformed settings JSON
+    }
   }
 
   // Initialize invoice counter

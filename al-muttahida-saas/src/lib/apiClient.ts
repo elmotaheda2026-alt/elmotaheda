@@ -80,28 +80,43 @@ export async function testServerUrl(url: string, timeoutMs = 3000): Promise<{ ok
   try {
     const res = await fetch(`${cleanUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
     if (res.ok) return { ok: true };
-  } catch (_) {}
+  } catch {
+    // Try /api/health fallback
+  }
 
   try {
     const res2 = await fetch(`${cleanUrl}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
     if (res2.ok) return { ok: true };
-  } catch (_) {}
+  } catch {
+    // Unreachable
+  }
 
   return { ok: false, message: 'تعذر الوصول إلى الخادم على هذا العنوان' };
+}
+
+export function emitApiHealth(connected: boolean) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('api-health-change', { detail: connected }));
 }
 
 export async function checkBackendHealth(targetUrl?: string): Promise<boolean> {
   const base = targetUrl || resolveApiBaseUrl();
   try {
-    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
-    return res.ok;
-  } catch {
-    try {
-      const res2 = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
-      return res2.ok;
-    } catch {
-      return false;
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      emitApiHealth(true);
+      return true;
     }
+    if (res.status === 404) {
+      const res2 = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1500) });
+      emitApiHealth(res2.ok);
+      return res2.ok;
+    }
+    emitApiHealth(false);
+    return false;
+  } catch {
+    emitApiHealth(false);
+    return false;
   }
 }
 
@@ -117,6 +132,10 @@ function getToken() {
   return sessionStorage.getItem('api_token');
 }
 
+export function getApiToken() {
+  return getToken();
+}
+
 export function hasApiToken() {
   return !!getToken();
 }
@@ -127,7 +146,9 @@ export function clearApiToken() {
   try {
     localStorage.removeItem('api_token');
     localStorage.removeItem(API_USER_KEY);
-  } catch (_) {}
+  } catch {
+    // Ignore storage removal errors
+  }
 }
 
 export function setApiSession(token: string, user: unknown) {
@@ -136,7 +157,9 @@ export function setApiSession(token: string, user: unknown) {
   try {
     localStorage.removeItem('api_token');
     localStorage.removeItem(API_USER_KEY);
-  } catch (_) {}
+  } catch {
+    // Ignore storage removal errors
+  }
 }
 
 export function getApiUser<T>() {
@@ -195,11 +218,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${base}${path}`, {
-    ...options,
-    headers,
-    signal: options.signal || (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(12000) : undefined),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      ...options,
+      headers,
+      signal: options.signal || (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(12000) : undefined),
+    });
+  } catch (networkErr) {
+    emitApiHealth(false);
+    throw networkErr;
+  }
+  emitApiHealth(response.status < 500);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     if (response.status === 401) {
@@ -279,6 +309,16 @@ export const api = {
   updateSale: (id: string, payload: any) =>
     request<{ message: string }>(`/sales/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSale: (id: string) => request<{ message: string }>(`/sales/${id}`, { method: 'DELETE' }),
+  returnSale: (id: string, payload: { reason?: string; returnDate?: string; refundAmount?: number }) =>
+    request<{ message: string; refundAmount: number; refundReceipt?: string | null }>(`/sales/${id}/return`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  undoDeferInstallment: (saleId: string, installmentId: string) =>
+    request<{ message: string; schedules: any[]; sale?: any }>(`/sales/${saleId}/undo-defer-installment`, {
+      method: 'POST',
+      body: JSON.stringify({ installmentId }),
+    }),
   getSale: (id: string) => request<any>(`/sales/${id}`),
   updateInstallmentNote: (installmentId: string, notes: string) =>
     request<{ ok: boolean; id: string; notes: string | null }>(`/installments/${installmentId}/note`, {
@@ -307,6 +347,15 @@ export const api = {
     penaltyFee?: number;
     penaltyPaymentType?: 'add_to_debt' | 'collect_cash';
   }) => request<{ message: string; schedules: any[]; sale?: any }>(`/sales/${saleId}/postpone`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  rescheduleSale: (saleId: string, payload: {
+    newInstallmentCount: number;
+    extraInterestPercent?: number;
+    firstNewDueDate: string;
+    reason?: string;
+  }) => request<{ message: string; schedules: any[]; sale?: any }>(`/sales/${saleId}/reschedule`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
@@ -347,6 +396,8 @@ export const api = {
   listAdmins: () => requestArray<{ id: string; name: string; username: string }>('/users/admins', 'admins'),
   createUser: (payload: any) => request<{ id: string }>('/users', { method: 'POST', body: JSON.stringify(payload) }),
   updateUser: (id: string, payload: any) => request<{ message: string }>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  toggleUserStatus: (id: string, isActive: boolean) =>
+    request<{ message: string; isActive: boolean }>(`/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ isActive }) }),
   deleteUser: (id: string) => request<{ message: string }>(`/users/${id}`, { method: 'DELETE' }),
 
   // Products
@@ -360,6 +411,7 @@ export const api = {
   listPurchases: () => requestArray<any>('/purchases', 'purchases'),
   getPurchase: (id: string) => request<any>(`/purchases/${id}`),
   createPurchase: (payload: any) => request<{ id: string }>('/purchases', { method: 'POST', body: JSON.stringify(payload) }),
+  deletePurchase: (id: string) => request<{ message: string }>(`/purchases/${id}`, { method: 'DELETE' }),
 
   // Expenses
   listExpenses: () => requestArray<any>('/expenses', 'expenses'),
@@ -386,13 +438,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ shareholderId }),
     }),
-  getShareholdersLiveTrading: (filters: { periodFrom?: string; periodTo?: string } = {}) => {
+  getShareholdersLiveTrading: (filters: { periodFrom?: string; periodTo?: string; profitBasis?: 'realized' | 'accrual' } = {}) => {
     const params = new URLSearchParams();
     if (filters.periodFrom) params.set('periodFrom', filters.periodFrom);
     if (filters.periodTo) params.set('periodTo', filters.periodTo);
+    if (filters.profitBasis) params.set('profitBasis', filters.profitBasis);
     const q = params.toString();
     return request<any>(`/shareholders/live-trading${q ? `?${q}` : ''}`);
   },
+  settleShareholdersPeriod: (payload: { periodFrom?: string | null; periodTo: string; profitBasis?: 'realized' | 'accrual'; notes?: string }) =>
+    request<{ success: boolean; settledCount: number; totalSettledAmount: number; message: string }>('/shareholders/settle-period', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteShareholderSettlement: (id: string) =>
+    request<{ success: boolean; reversedTxCount: number; message: string }>(`/shareholders/settlements/${id}`, {
+      method: 'DELETE',
+    }),
 
   // Settings
   getSettings: () => request<any>('/settings'),
@@ -423,6 +485,8 @@ export const api = {
   listClosingPeriods: () => requestArray<any>('/closing', 'closing periods'),
   closePeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string; notes?: string }) =>
     request<{ message: string }>('/closing/close', { method: 'POST', body: JSON.stringify(payload) }),
+  reopenPeriod: (payload: { periodType: 'daily' | 'monthly'; periodDate: string }) =>
+    request<{ message: string }>('/closing/reopen', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Dashboard Metrics
   getDashboardMetrics: (filters: { startDate?: string; endDate?: string } = {}) => {
@@ -434,6 +498,17 @@ export const api = {
   },
   getDashboardMetricsCached: () => request<any>('/reports/dashboard/metrics-cached'),
   refreshDashboardCache: () => request<{ message: string; lastRefreshedAt: string }>('/reports/dashboard/refresh-cache', { method: 'POST' }),
+
+  // Document Templates
+  listDocumentTemplates: () => requestArray<any>('/document-templates', 'document templates'),
+  createDocumentTemplate: (payload: any) =>
+    request<any>('/document-templates', { method: 'POST', body: JSON.stringify(payload) }),
+  updateDocumentTemplate: (id: string, payload: any) =>
+    request<any>(`/document-templates/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  resetDocumentTemplate: (id: string) =>
+    request<any>(`/document-templates/${id}/reset`, { method: 'POST' }),
+  deleteDocumentTemplate: (id: string) =>
+    request<{ message: string }>(`/document-templates/${id}`, { method: 'DELETE' }),
 };
 
 

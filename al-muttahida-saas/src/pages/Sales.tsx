@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Printer } from 'lucide-react';
-import { Product, Sale } from '../types';
-import { getProducts, getSales } from '../lib/storage';
+import { Printer, Search } from 'lucide-react';
+import { Product, Sale, SalesRep } from '../types';
+import { getProducts, getSales, getSalesReps } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
@@ -43,8 +43,11 @@ export default function Sales() {
   const currentYearRange = useMemo(() => getCurrentYearRange(), []);
   const [sales, setSales] = useState<Sale[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [salesReps, setSalesReps] = useState<SalesRep[]>([]);
   const [dateFrom, setDateFrom] = useState(currentMonthRange.from);
   const [dateTo, setDateTo] = useState(currentMonthRange.to);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedRepId, setSelectedRepId] = useState('all');
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -77,15 +80,18 @@ export default function Sales() {
     setLoadError(null);
     try {
       if (isApiMode()) {
-        const [apiSales, apiProducts] = await Promise.all([
+        const [apiSales, apiProducts, apiReps] = await Promise.all([
           api.listSales(),
           api.listProducts(),
+          api.listSalesReps(),
         ]);
         setSales(apiSales.map(mapApiSale).reverse());
         setProducts(apiProducts);
+        setSalesReps(apiReps);
       } else {
         setSales(getSales().slice().reverse());
         setProducts(getProducts());
+        setSalesReps(getSalesReps());
       }
     } catch (err: any) {
       console.error('Failed to load sales / products from API:', err);
@@ -109,6 +115,17 @@ export default function Sales() {
   const filteredSales = useMemo(
     () =>
       sales.filter((sale) => {
+        if (sale.status === 'cancelled') return false;
+        if (selectedRepId !== 'all' && sale.financing?.salesRepId !== selectedRepId) return false;
+        const q = searchQuery.trim().toLowerCase();
+        if (q) {
+          const matchesSearch =
+            (sale.customerName || '').toLowerCase().includes(q) ||
+            (sale.invoiceNumber || '').toLowerCase().includes(q) ||
+            (sale.financing?.salesRepName || '').toLowerCase().includes(q) ||
+            (sale.items || []).some((it) => (it.productName || '').toLowerCase().includes(q));
+          if (!matchesSearch) return false;
+        }
         if (!dateFrom && !dateTo) return true;
         const parsedDate = new Date(sale.date);
         const saleDate = !isNaN(parsedDate.getTime())
@@ -119,7 +136,7 @@ export default function Sales() {
 
         return matchesFrom && matchesTo;
       }),
-    [sales, dateFrom, dateTo],
+    [sales, dateFrom, dateTo, searchQuery, selectedRepId],
   );
 
   const [saleForPrinting, setSaleForPrinting] = useState<Sale | null>(null);
@@ -127,6 +144,7 @@ export default function Sales() {
   const saleLineRows = useMemo(
     () =>
       filteredSales.flatMap((sale) => {
+        const isSettledEarly = sale.status === 'settled_early';
         const items = sale.items && sale.items.length > 0 ? sale.items : [
           {
             productId: `fallback-${sale.id}`,
@@ -141,41 +159,39 @@ export default function Sales() {
           }
         ];
 
+        const saleContractTotal = Number(sale.total || 0);
+        const saleEffectiveTotal = isSettledEarly ? Number(sale.paid || 0) : saleContractTotal;
+        const earlyFactor = saleContractTotal > 0 ? saleEffectiveTotal / saleContractTotal : 1;
+
         return items.map((item) => {
           const product = productById.get(item.productId);
-          const saleAmount = Number(item.total || 0);
-          const purchaseUnitPrice = Number(product?.purchasePrice || (item as any).unitCost || item.unitPrice || 0);
-          const quantity = Number(item.quantity || 1);
-          const purchaseCost = purchaseUnitPrice * quantity;
-          const saleUnitPrice = Number(product?.salePrice || item.unitPrice || 0);
-          const lineBaseAmount = saleUnitPrice * quantity;
-          const invoiceBaseAmount = items.reduce(
-            (sum, saleItem) => {
-              const saleItemProduct = productById.get(saleItem.productId);
-              const saleItemUnitPrice = Number(saleItemProduct?.salePrice || saleItem.unitPrice || 0);
-              return sum + saleItemUnitPrice * Number(saleItem.quantity || 1);
-            },
-            0,
+          const contractAmount = Number(item.total || 0);
+          const effectiveSaleAmount = isSettledEarly
+            ? Number((items.length === 1 ? saleEffectiveTotal : contractAmount * earlyFactor).toFixed(2))
+            : contractAmount;
+          const purchaseUnitPrice = Number(
+            (item as any).unitCost ||
+              product?.purchasePrice ||
+              (items.length === 1 && sale.subtotal > 0 ? sale.subtotal : item.unitPrice) ||
+              0,
           );
-          const upfrontAmount = Number(sale.financing?.upfrontAmount ?? sale.paid ?? 0);
-          const paidShare = invoiceBaseAmount > 0 ? (lineBaseAmount / invoiceBaseAmount) * upfrontAmount : 0;
-          const amountAfterUpfront = Math.max(lineBaseAmount - paidShare, 0);
-          const contractLineBase =
-            Number(item.unitPrice || 0) * quantity -
-            (Number(item.unitPrice || 0) * quantity * Number(item.discount || 0)) / 100;
-          const profit = Number(Math.max(saleAmount - contractLineBase, 0).toFixed(2));
+          const quantity = Number(item.quantity || 1);
+          const purchaseCost = Number((purchaseUnitPrice * quantity).toFixed(2));
+          const profit = Number((effectiveSaleAmount - purchaseCost).toFixed(2));
 
           return {
             id: `${sale.id}-${item.productId}`,
             sale,
+            isSettledEarly,
             invoiceNumber: sale.invoiceNumber,
             customerName: sale.customerName,
             date: sale.date,
             productName: item.productName || 'بضاعة',
             quantity,
             purchaseUnitPrice,
-            saleAmount,
-            amountAfterUpfront,
+            contractAmount,
+            saleAmount: effectiveSaleAmount,
+            purchaseCost,
             profit,
           };
         });
@@ -184,18 +200,29 @@ export default function Sales() {
   );
 
   const salesSummary = useMemo(
-    () => ({
-      revenue: saleLineRows.reduce((sum, row) => sum + row.saleAmount, 0),
-      cost: saleLineRows.reduce((sum, row) => sum + row.amountAfterUpfront, 0),
-      profit: saleLineRows.reduce((sum, row) => sum + row.profit, 0),
-      quantity: saleLineRows.reduce((sum, row) => sum + row.quantity, 0),
-    }),
+    () => {
+      const revenue = saleLineRows.reduce((sum, row) => sum + row.saleAmount, 0);
+      const grossRevenue = saleLineRows.reduce((sum, row) => sum + row.contractAmount, 0);
+      const cost = saleLineRows.reduce((sum, row) => sum + row.purchaseCost, 0);
+      const profit = saleLineRows.reduce((sum, row) => sum + row.profit, 0);
+      const quantity = saleLineRows.reduce((sum, row) => sum + row.quantity, 0);
+      return {
+        revenue: Number(revenue.toFixed(2)),
+        grossRevenue: Number(grossRevenue.toFixed(2)),
+        earlyDiscounts: Number(Math.max(0, grossRevenue - revenue).toFixed(2)),
+        cost: Number(cost.toFixed(2)),
+        profit: Number(profit.toFixed(2)),
+        quantity,
+      };
+    },
     [saleLineRows],
   );
 
   const resetFilters = () => {
     setDateFrom('');
     setDateTo('');
+    setSearchQuery('');
+    setSelectedRepId('all');
   };
 
   return (
@@ -225,6 +252,28 @@ export default function Sales() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[200px]">
+            <Search size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="بحث بالعميل / الفاتورة / الصنف..."
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white pr-9 pl-3 text-xs font-medium text-slate-700 outline-none focus:border-blue-500"
+            />
+          </div>
+          {salesReps.length > 0 && (
+            <select
+              value={selectedRepId}
+              onChange={(e) => setSelectedRepId(e.target.value)}
+              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 outline-none focus:border-blue-500"
+            >
+              <option value="all">كل المناديب</option>
+              {salesReps.map((rep) => (
+                <option key={rep.id} value={rep.id}>{rep.name}</option>
+              ))}
+            </select>
+          )}
           {/* Quick presets */}
           <div className="flex items-center rounded-xl bg-slate-100 p-0.5 border border-slate-200">
             <button
@@ -277,10 +326,19 @@ export default function Sales() {
 
       {/* Tier 2: Fixed Height KPI Metrics Bar */}
       <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-3 shrink-0 print:grid-cols-3 print:gap-2.5 print:mb-3">
-        <SalesMetric label="إجمالي المبيعات" value={formatCurrency(salesSummary.revenue)} tone="emerald" />
+        <SalesMetric
+          label="صافي المبيعات"
+          value={formatCurrency(salesSummary.revenue)}
+          subtitle={
+            salesSummary.earlyDiscounts > 0
+              ? `التعاقدي ${formatCurrency(salesSummary.grossRevenue)} − خصم سداد مبكر ${formatCurrency(salesSummary.earlyDiscounts)}`
+              : undefined
+          }
+          tone="emerald"
+        />
         <SalesMetric label="إجمالي التكلفة" value={formatCurrency(salesSummary.cost)} tone="slate" />
         <SalesMetric
-          label={`صافي الربح - ${salesSummary.quantity.toLocaleString('ar-EG')} قطعة`}
+          label={`إجمالي ربح المبيعات - ${salesSummary.quantity.toLocaleString('ar-EG')} قطعة`}
           value={formatCurrency(salesSummary.profit)}
           tone={salesSummary.profit >= 0 ? 'sky' : 'rose'}
         />
@@ -301,19 +359,32 @@ export default function Sales() {
               <div key={`mob-sale-${row.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="font-black text-slate-900 text-sm break-words">{row.customerName}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-[11px] font-black text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">{row.invoiceNumber}</span>
+                      <p className="font-black text-slate-900 text-sm break-words">{row.customerName}</p>
+                    </div>
                     <p className="text-xs font-bold text-slate-700 mt-0.5">{row.productName} (الكمية: {row.quantity})</p>
                   </div>
-                  <span className="text-[11px] font-mono text-slate-500 shrink-0">{formatDateDisplay(row.date)}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[11px] font-mono text-slate-500">{formatDateDisplay(row.date)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSaleForPrinting(row.sale)}
+                      className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"
+                      title="طباعة العقد"
+                    >
+                      <Printer size={13} />
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-3 gap-1.5 bg-slate-50 rounded-xl p-2 text-center text-xs border border-slate-100">
                   <div>
-                    <span className="text-[10px] text-slate-400 block font-bold">سعر الشراء</span>
-                    <span className="font-bold text-slate-700">{formatCurrency(row.purchaseUnitPrice)}</span>
+                    <span className="text-[10px] text-slate-400 block font-bold">صافي البيع</span>
+                    <span className="font-bold text-slate-700">{formatCurrency(row.saleAmount)}</span>
                   </div>
                   <div className="border-x border-slate-200">
                     <span className="text-[10px] text-slate-400 block font-bold">التكلفة</span>
-                    <span className="font-bold text-slate-600">{formatCurrency(row.amountAfterUpfront)}</span>
+                    <span className="font-bold text-slate-600">{formatCurrency(row.purchaseCost)}</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 block font-bold">الربح</span>
@@ -329,35 +400,58 @@ export default function Sales() {
           <table className="w-full min-w-[860px] border-collapse print:min-w-0 print:w-full">
             <thead className="desktop-sticky-header print:static">
               <tr>
+                <TableHead>رقم الفاتورة</TableHead>
                 <TableHead>التاريخ</TableHead>
                 <TableHead>العميل</TableHead>
                 <TableHead>الصنف</TableHead>
-                <TableHead>سعر الشراء</TableHead>
+                <TableHead>صافي البيع</TableHead>
                 <TableHead>التكلفة</TableHead>
                 <TableHead>الربح</TableHead>
+                <th className="px-3 py-2.5 text-center text-xs font-black text-slate-700 no-print print:hidden">إجراء</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-200">
               {saleLineRows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50 print:hover:bg-transparent print:break-inside-avoid">
+                  <td className="px-3.5 py-2.5 text-xs font-mono font-black text-blue-700 print:px-2 print:py-1.5 print:text-[10px]">{row.invoiceNumber || '-'}</td>
                   <td className="px-3.5 py-2.5 text-xs text-slate-600 font-mono print:px-2 print:py-1.5 print:text-[10px]">{formatDateDisplay(row.date)}</td>
-                  <td className="px-3.5 py-2.5 text-xs md:text-sm font-bold text-slate-800 print:px-2 print:py-1.5 print:text-[10px]">{row.customerName}</td>
+                  <td className="px-3.5 py-2.5 text-xs md:text-sm font-bold text-slate-800 print:px-2 print:py-1.5 print:text-[10px]">
+                    <div>{row.customerName}</div>
+                    {row.sale.financing?.salesRepName && (
+                      <div className="text-[10px] text-slate-400 font-semibold">{row.sale.financing.salesRepName}</div>
+                    )}
+                  </td>
                   <td className="px-3.5 py-2.5 text-xs md:text-sm text-slate-800 print:px-2 print:py-1.5 print:text-[10px]">
                     <div className="font-bold">{row.productName}</div>
                     <div className="text-[11px] text-slate-500 print:text-[9px]">الكمية: {row.quantity}</div>
                   </td>
-                  <td className="px-3.5 py-2.5 text-xs text-slate-700 font-mono print:px-2 print:py-1.5 print:text-[10px]">{formatCurrency(row.purchaseUnitPrice)}</td>
-                  <td className="px-3.5 py-2.5 text-xs font-bold text-slate-600 font-mono print:px-2 print:py-1.5 print:text-[10px]">{formatCurrency(row.amountAfterUpfront)}</td>
+                  <td className="px-3.5 py-2.5 text-xs text-slate-700 font-mono print:px-2 print:py-1.5 print:text-[10px]">
+                    <div className="font-bold">{formatCurrency(row.saleAmount)}</div>
+                    {row.isSettledEarly && row.contractAmount > row.saleAmount && (
+                      <div className="text-[10px] text-amber-700 font-semibold">سداد مبكر (بدلاً من {formatCurrency(row.contractAmount)})</div>
+                    )}
+                  </td>
+                  <td className="px-3.5 py-2.5 text-xs font-bold text-slate-600 font-mono print:px-2 print:py-1.5 print:text-[10px]">{formatCurrency(row.purchaseCost)}</td>
                   <td className={`px-3.5 py-2.5 text-xs md:text-sm font-black font-mono print:px-2 print:py-1.5 print:text-[10px] ${row.profit >= 0 ? 'text-sky-700' : 'text-rose-700'}`}>
                     {formatCurrency(row.profit)}
+                  </td>
+                  <td className="px-3 py-2.5 text-center no-print print:hidden">
+                    <button
+                      type="button"
+                      onClick={() => setSaleForPrinting(row.sale)}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
+                      title="طباعة العقد والمستندات"
+                    >
+                      <Printer size={14} />
+                    </button>
                   </td>
                 </tr>
               ))}
               {isLoading ? (
-                <LoadingState variant="table" colSpan={6} />
+                <LoadingState variant="table" colSpan={8} />
               ) : loadError ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-16 text-center text-xs font-bold text-rose-600">
+                  <td colSpan={8} className="px-4 py-16 text-center text-xs font-bold text-rose-600">
                     <div className="flex flex-col items-center justify-center min-h-[200px] gap-2">
                       <p className="text-sm font-bold text-rose-700">{loadError}</p>
                       <button
@@ -371,15 +465,15 @@ export default function Sales() {
                 </tr>
               ) : saleLineRows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-16 text-center text-xs font-bold text-slate-400">
+                  <td colSpan={8} className="px-4 py-16 text-center text-xs font-bold text-slate-400">
                     <div className="flex flex-col items-center justify-center min-h-[220px] gap-2">
                       <p className="text-sm font-bold text-slate-700">لا توجد مبيعات مطابقة للفترة المحددة</p>
-                      {(dateFrom || dateTo) && (
+                      {(dateFrom || dateTo || searchQuery || selectedRepId !== 'all') && (
                         <p className="text-xs text-slate-500">
                           الفترة الحالية: {dateFrom ? formatDateDisplay(dateFrom) : 'البداية'} إلى {dateTo ? formatDateDisplay(dateTo) : 'الآن'}
                         </p>
                       )}
-                      {(dateFrom || dateTo) && (
+                      {(dateFrom || dateTo || searchQuery || selectedRepId !== 'all') && (
                         <button
                           type="button"
                           onClick={resetFilters}
@@ -400,16 +494,15 @@ export default function Sales() {
           <span className="font-bold text-slate-700">صافي الربح الإجمالي: <span className={salesSummary.profit >= 0 ? 'text-sky-700 font-extrabold' : 'text-rose-700 font-extrabold'}>{formatCurrency(salesSummary.profit)}</span></span>
         </div>
       </div>
-    </div>
-  );
-}
 
-function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block flex-1 min-w-[155px]">
-      <span className="mb-1 block text-xs font-bold text-slate-500">{label}</span>
-      <DatePicker value={value} onChange={onChange} className="w-full rounded-2xl border-slate-300 px-4 py-2 text-sm font-bold shadow-sm" />
-    </label>
+      {saleForPrinting && (
+        <LegalDocumentsPrintModal
+          isOpen={!!saleForPrinting}
+          onClose={() => setSaleForPrinting(null)}
+          sale={saleForPrinting}
+        />
+      )}
+    </div>
   );
 }
 
@@ -420,10 +513,12 @@ function TableHead({ children }: { children: React.ReactNode }) {
 function SalesMetric({
   label,
   value,
+  subtitle,
   tone,
 }: {
   label: string;
   value: string;
+  subtitle?: string;
   tone: 'emerald' | 'slate' | 'sky' | 'rose';
 }) {
   const toneClass = {
@@ -437,6 +532,7 @@ function SalesMetric({
     <div className={`rounded-xl border p-3.5 shadow-2xs print:p-2.5 print:rounded-lg ${toneClass}`}>
       <p className="text-xs font-bold opacity-75 print:text-[10px]">{label}</p>
       <p className="mt-1 text-xl font-black print:text-sm print:mt-0.5 tabular-nums">{value}</p>
+      {subtitle && <p className="mt-0.5 text-[10px] font-semibold opacity-80">{subtitle}</p>}
     </div>
   );
 }

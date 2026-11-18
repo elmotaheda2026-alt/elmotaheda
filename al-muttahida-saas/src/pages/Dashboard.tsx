@@ -14,30 +14,41 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { formatDateDisplay } from '../lib/dateUtils';
-import { isAdmin } from '../lib/permissions';
+import { hasPermission } from '../lib/permissions';
 import CompanyLogo from '../components/CompanyLogo';
+import { Permission } from '../types';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user, settings } = useAuth();
   const todayStr = new Date().toISOString().split('T')[0];
 
-  const roleLabel =
-    user?.role === 'admin'
-      ? 'مدير النظام'
-      : user?.role === 'manager'
-        ? 'مشرف'
-        : user?.role === 'accountant'
-          ? 'محاسب'
-          : 'مستخدم';
+  const roleLabels: Record<string, string> = {
+    admin: 'مدير النظام',
+    manager: 'مشرف عام',
+    finance_manager: 'مدير مالي',
+    accountant: 'محاسب',
+    reviewer: 'مراجع',
+    collector: 'محصل',
+    user: 'مستخدم',
+  };
+  const roleLabel = roleLabels[user?.role || 'user'] || 'مستخدم';
 
-  const quickCards = [
+  const allQuickCards: {
+    title: string;
+    description: string;
+    path: string;
+    icon: any;
+    iconBg: string;
+    permission?: Permission;
+  }[] = [
     {
       title: 'إصدار فاتورة بيع',
       description: 'إنشاء وعرض فواتير البيع للعملاء',
       path: '/invoices',
       icon: Receipt,
       iconBg: 'bg-blue-50 text-blue-600 border-blue-100',
+      permission: 'sales:read',
     },
     {
       title: 'دليل العملاء',
@@ -45,6 +56,7 @@ export default function Dashboard() {
       path: '/customers',
       icon: UserCircle,
       iconBg: 'bg-emerald-50 text-emerald-600 border-emerald-100',
+      permission: 'sales:read',
     },
     {
       title: 'سجل الموردين',
@@ -52,6 +64,7 @@ export default function Dashboard() {
       path: '/suppliers',
       icon: Truck,
       iconBg: 'bg-amber-50 text-amber-600 border-amber-100',
+      permission: 'sales:read',
     },
     {
       title: 'حركة الخزينة',
@@ -59,6 +72,7 @@ export default function Dashboard() {
       path: '/payments',
       icon: Banknote,
       iconBg: 'bg-purple-50 text-purple-600 border-purple-100',
+      permission: 'payments:read',
     },
     {
       title: 'سجل المصروفات',
@@ -66,6 +80,7 @@ export default function Dashboard() {
       path: '/expenses',
       icon: ClipboardList,
       iconBg: 'bg-rose-50 text-rose-600 border-rose-100',
+      permission: 'payments:write',
     },
     {
       title: 'التقارير والقيود المالية',
@@ -73,9 +88,10 @@ export default function Dashboard() {
       path: '/accounts',
       icon: Calculator,
       iconBg: 'bg-indigo-50 text-indigo-600 border-indigo-100',
-      adminOnly: true,
+      permission: 'reports:read',
     },
-  ].filter((card) => !card.adminOnly || isAdmin(user) || user?.role === 'manager');
+  ];
+  const quickCards = allQuickCards.filter((card) => !card.permission || hasPermission(user, card.permission));
 
   return (
     <div className="space-y-6 pb-6 animate-fadeIn">
@@ -99,7 +115,9 @@ export default function Dashboard() {
               <span>{formatDateDisplay(todayStr)}</span>
             </div>
             <h1 className="text-2xl font-black tracking-tight sm:text-3xl text-white">
-              {settings.companyName || 'شركة المتحدة'} لإدارة المبيعات والحسابات
+              {settings.companyName && settings.companyName !== 'شركة المتحدة'
+                ? settings.companyName
+                : 'شركة المتحدة للتجارة والتوريدات'}
             </h1>
             <p className="text-sm font-medium text-slate-300 leading-relaxed">
               مرحباً بك، {user?.name || roleLabel} 👋 — بيئة عمل مخصصة لإدارة العمليات والمبيعات اليومية بسرعة وسهولة.

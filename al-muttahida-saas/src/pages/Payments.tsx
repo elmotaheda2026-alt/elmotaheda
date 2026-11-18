@@ -17,9 +17,10 @@ import {
   X,
   Save,
   Trash2,
+  AlertCircle,
 } from 'lucide-react';
 import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
-import { createPayment, reversePayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, getOpeningBalances } from '../lib/storage';
+import { createPayment, reversePayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, reopenPeriodApi, getOpeningBalances } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
@@ -109,12 +110,17 @@ export default function Payments() {
   const [paymentType, setPaymentType] = useState<PaymentType>('in');
   const [closedPeriodDateFilter, setClosedPeriodDateFilter] = useState(today());
   const [incomingSubmitMode, setIncomingSubmitMode] = useState<IncomingSubmitMode>('save');
+  const [outgoingSubmitMode, setOutgoingSubmitMode] = useState<IncomingSubmitMode>('save');
   const [paymentMode, setPaymentMode] = useState<'normal' | 'early_settlement'>('normal');
   const [settlementDiscountType, setSettlementDiscountType] = useState<'fixed' | 'percent'>('fixed');
   const [settlementDiscountValue, setSettlementDiscountValue] = useState<number>(0);
   const [reversingScheduleId, setReversingScheduleId] = useState<string | null>(null);
   const [reversingPaymentId, setReversingPaymentId] = useState<string | null>(null);
   const [autoSuggestedSaleId, setAutoSuggestedSaleId] = useState<string | null>(null);
+  const [historyDateFilter, setHistoryDateFilter] = useState<string>(today());
+  const [historySearch, setHistorySearch] = useState('');
+  const [showVoidedPayments, setShowVoidedPayments] = useState(false);
+  const [reopeningPeriodKey, setReopeningPeriodKey] = useState<string | null>(null);
 
   // Admin approval states for Early Settlement
   const [settlementAdminList, setSettlementAdminList] = useState<{ id: string; name: string; username: string }[]>([]);
@@ -213,6 +219,7 @@ export default function Payments() {
           syncCustomers(),
           syncSuppliers(),
           syncSales(),
+          syncExpenses(),
           syncClosingPeriods(),
         ]);
 
@@ -224,18 +231,17 @@ export default function Payments() {
         setSales(getSales().slice().reverse());
         setCustomers(getCustomers());
         setSuppliers(getSuppliers());
+        setExpenses(getExpenses());
         setClosedPeriods(getClosingPeriods());
       } catch (err: any) {
         console.error('[Payments] Sync FAILED:', err);
         setMessage({ type: 'error', text: `فشل تحميل البيانات: ${err?.message || 'خطأ في الاتصال بالخادم'}` });
       }
     } else {
-      // Local mode: load from localStorage
+      // Local mode: load full history from localStorage (date filtering handled cleanly in view)
       const localPayments = getPayments().slice().reverse();
-      const todayYYYYMMDD = today();
-      const localDailyPayments = localPayments.filter((payment) => toYYYYMMDD(payment.date) === todayYYYYMMDD);
-      setPayments(localDailyPayments);
-      setDailyPayments(localDailyPayments);
+      setPayments(localPayments);
+      setDailyPayments(localPayments);
     }
     setLoading(false);
   };
@@ -267,7 +273,7 @@ export default function Payments() {
   };
 
   const closingDateYYYYMMDD = toYYYYMMDD(closingDate);
-  const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD);
+  const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD && p.status !== 'voided');
   const closingTotalIn = closingDatePayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
   const closingTotalOut = closingDatePayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
   const closingNet = closingTotalIn - closingTotalOut;
@@ -321,33 +327,85 @@ export default function Payments() {
     }
   };
 
-    // Automatic daily closing (at 23:59 / midnight, and check for unclosed previous day on startup)
+  const handleReopenPeriod = async (period: ClosingPeriod) => {
+    const label = period.periodType === 'monthly' ? `شهر ${period.periodDate}` : `يوم ${formatDateDisplay(period.periodDate)}`;
+    if (!window.confirm(`هل أنت متأكد من إعادة فتح ${label}؟ سيسمح ذلك بإضافة أو تعديل الحركات المالية في هذا التاريخ.`)) {
+      return;
+    }
+    const key = `${period.periodType}:${period.periodDate}`;
+    setReopeningPeriodKey(key);
+    try {
+      await reopenPeriodApi(period.periodType, period.periodDate, user?.name || 'مدير النظام');
+      await loadData();
+      setMessage({ type: 'success', text: `تم إعادة فتح ${label} بنجاح.` });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'حدث خطأ أثناء إعادة فتح الفترة.' });
+    } finally {
+      setReopeningPeriodKey(null);
+    }
+  };
+
+    // Automatic daily closing (at 23:59 / midnight, and catch up all unclosed days since the last closed day)
   useEffect(() => {
+    if (loading || !isAdmin(user)) return;
+
     const checkAndAutoClose = async () => {
       try {
-        const todayStr = today();
-        // Check if yesterday or previous days had unclosed transactions
         const existingPeriods = getClosingPeriods();
+        const closedDailyDates = existingPeriods
+          .filter((p) => p.periodType === 'daily' && p.status === 'closed')
+          .map((p) => toYYYYMMDD(p.periodDate))
+          .filter(Boolean)
+          .sort();
+
         const yDate = new Date();
         yDate.setDate(yDate.getDate() - 1);
         const yesterdayStr = toYYYYMMDD(yDate.toISOString());
+        if (!yesterdayStr) return;
 
-        // Check if yesterday is not closed yet
-        const isYesterdayClosed = existingPeriods.some(p => p.periodType === 'daily' && p.periodDate === yesterdayStr && p.status === 'closed');
-        if (!isYesterdayClosed && yesterdayStr) {
-          // Check if there were any payments on yesterday
-          const yesterdayPayments = payments.filter(p => toYYYYMMDD(p.date) === yesterdayStr);
-          if (yesterdayPayments.length > 0) {
-            const yIn = yesterdayPayments.filter(p => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
-            const yOut = yesterdayPayments.filter(p => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
-            await closePeriodApi('daily', yesterdayStr, 'النظام التلقائي', 'إغلاق تلقائي عند بدء اليوم الجديد', {
+        // Start from the day after the latest closed daily period (capped at 31 days back), or just yesterday
+        const minStart = new Date(yDate);
+        minStart.setDate(minStart.getDate() - 30);
+        const minStartStr = toYYYYMMDD(minStart.toISOString());
+
+        let startDateStr = yesterdayStr;
+        if (closedDailyDates.length > 0) {
+          const latestClosed = closedDailyDates[closedDailyDates.length - 1];
+          const nextDay = new Date(`${latestClosed}T00:00:00`);
+          nextDay.setDate(nextDay.getDate() + 1);
+          const nextDayStr = toYYYYMMDD(nextDay.toISOString());
+          if (nextDayStr && nextDayStr <= yesterdayStr) {
+            startDateStr = nextDayStr < minStartStr ? minStartStr : nextDayStr;
+          } else {
+            return; // Already caught up through yesterday
+          }
+        }
+
+        const closedSet = new Set(closedDailyDates);
+        const cursor = new Date(`${startDateStr}T00:00:00`);
+        const end = new Date(`${yesterdayStr}T00:00:00`);
+        let didCloseAny = false;
+
+        while (cursor <= end) {
+          const dayStr = toYYYYMMDD(cursor.toISOString());
+          if (dayStr && !closedSet.has(dayStr)) {
+            const dayPayments = payments.filter((p) => toYYYYMMDD(p.date) === dayStr && p.status !== 'voided');
+            const yIn = dayPayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+            const yOut = dayPayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+            const note = dayStr === yesterdayStr ? 'إغلاق تلقائي عند بدء اليوم الجديد' : 'إغلاق تلقائي للأيام الفائتة';
+            await closePeriodApi('daily', dayStr, 'النظام التلقائي', note, {
               totalIn: yIn,
               totalOut: yOut,
               netMovement: yIn - yOut,
-              closingBalance: calculateAccumulatedCashUpToDate(yesterdayStr),
+              closingBalance: calculateAccumulatedCashUpToDate(dayStr),
             });
-            await loadData();
+            didCloseAny = true;
           }
+          cursor.setDate(cursor.getDate() + 1);
+        }
+
+        if (didCloseAny) {
+          await loadData();
         }
       } catch (e) {
         console.warn('Startup auto-close check skipped:', e);
@@ -536,6 +594,7 @@ export default function Payments() {
 
 
   const filteredClosedPeriods = closedPeriods.filter((period) => {
+    if (period.status !== 'closed') return false;
     // Date filter: strictly match against the selected single date
     if (closedPeriodDateFilter) {
       const filterDate = toYYYYMMDD(closedPeriodDateFilter);
@@ -573,6 +632,26 @@ export default function Payments() {
   const todayOutflow = todayPaymentOutflow + todayExpenseOutflow;
   const todayNetMovement = todayInflow - todayOutflow;
   const todayPayments = todayPaymentsList;
+
+  const filteredPayments = useMemo(() => {
+    const normSearch = normalizeArabic(historySearch.trim());
+    const targetDate = toYYYYMMDD(historyDateFilter);
+
+    return payments.filter((payment) => {
+      if (!showVoidedPayments && payment.status === 'voided') return false;
+      if (targetDate && toYYYYMMDD(payment.date) !== targetDate) return false;
+      if (!normSearch) return true;
+
+      const customerName =
+        customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '';
+      const supplierName =
+        suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '';
+      const haystack = normalizeArabic(
+        `${customerName} ${supplierName} ${payment.invoiceNumber || ''} ${payment.receiptNumber || ''} ${payment.description || ''} ${payment.amount || ''}`
+      );
+      return haystack.includes(normSearch);
+    });
+  }, [payments, historySearch, historyDateFilter, showVoidedPayments, customers, suppliers]);
 
   const openModal = (type: PaymentType) => {
     setPaymentType(type);
@@ -613,24 +692,27 @@ export default function Payments() {
         <meta charset="utf-8" />
         <title>إيصال سداد قسط</title>
         <style>
-          @page { size: 80mm auto; margin: 0; }
+          @page { size: 80mm 125mm; margin: 0; }
           * { box-sizing: border-box; }
-          body {
+          html, body {
             margin: 0;
             padding: 0;
-            width: 80mm;
+            width: 100%;
+            max-width: 80mm;
             background: #fff;
             color: #000;
             font-family: Tahoma, Arial, sans-serif;
             font-size: 12px;
             line-height: 1.35;
+            overflow-x: hidden;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
           }
           .receipt {
-            width: 72mm;
+            width: 100%;
+            max-width: 74mm;
             margin: 0 auto;
-            padding: 3mm 0 4mm;
+            padding: 2mm 3mm 3mm;
           }
           .head {
             text-align: center;
@@ -644,9 +726,9 @@ export default function Payments() {
           .box { border: 1px solid #000; padding: 0; }
           .row {
             display: grid;
-            grid-template-columns: 26mm 1fr;
+            grid-template-columns: 24mm 1fr;
             align-items: center;
-            min-height: 8.6mm;
+            min-height: 8mm;
             border-bottom: 1px solid #000;
           }
           .row:last-child { border-bottom: 0; }
@@ -685,8 +767,8 @@ export default function Payments() {
             min-height: 9mm;
           }
           @media print {
-            html, body { width: 80mm; }
-            .receipt { width: 72mm; margin: 0 auto; }
+            html, body { width: 100%; max-width: 80mm; }
+            .receipt { width: 100%; max-width: 74mm; margin: 0 auto; }
           }
         </style>
       </head>
@@ -727,6 +809,7 @@ export default function Payments() {
       title: 'إيصال سداد قسط',
       width: 420,
       height: 760,
+      paperSize: 'thermal-80mm',
     }).then((opened) => {
       if (!opened) {
         setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
@@ -778,7 +861,7 @@ export default function Payments() {
         <style>
           @page {
             size: A4 portrait;
-            margin: 15mm 18mm;
+            margin: 0;
           }
           * { box-sizing: border-box; }
           html, body {
@@ -797,7 +880,7 @@ export default function Payments() {
             width: 100%;
             max-width: 100%;
             margin: 0 auto;
-            padding: 10px 0;
+            padding: 15mm 18mm;
           }
           .head {
             border: 2px solid #0f172a;
@@ -904,7 +987,7 @@ export default function Payments() {
           @media print {
             @page {
               size: A4 portrait;
-              margin: 15mm 18mm;
+              margin: 0;
             }
             html, body {
               width: 100% !important;
@@ -917,7 +1000,7 @@ export default function Payments() {
               width: 100% !important;
               max-width: 100% !important;
               margin: 0 !important;
-              padding: 0 !important;
+              padding: 15mm 18mm !important;
             }
           }
         </style>
@@ -963,6 +1046,7 @@ export default function Payments() {
       title: 'شهادة تسوية وتكييش حساب عميل',
       width: 900,
       height: 1000,
+      paperSize: 'a4',
     }).then((opened) => {
       if (!opened) {
         setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
@@ -1187,21 +1271,23 @@ export default function Payments() {
         <meta charset="utf-8" />
         <title>${docTitle}</title>
         <style>
-          @page { size: 80mm auto; margin: 0; }
+          @page { size: 80mm 125mm; margin: 0; }
           * { box-sizing: border-box; }
-          body {
+          html, body {
             margin: 0;
             padding: 0;
-            width: 80mm;
+            width: 100%;
+            max-width: 80mm;
             background: #fff;
             color: #000;
             font-family: Tahoma, Arial, sans-serif;
             font-size: 12px;
             line-height: 1.4;
+            overflow-x: hidden;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
           }
-          .receipt { width: 72mm; margin: 0 auto; padding: 3mm 0 4mm; }
+          .receipt { width: 100%; max-width: 74mm; margin: 0 auto; padding: 2mm 3mm 3mm; }
           .head { text-align: center; border: 1.5px solid #000; padding: 2.5mm 2mm 2mm; margin-bottom: 2.5mm; }
           .company { font-size: 14px; font-weight: 700; margin-bottom: 1mm; }
           .title { font-size: 13px; font-weight: 700; border-top: 1px dashed #000; padding-top: 1.5mm; margin-top: 1mm; }
@@ -1230,7 +1316,7 @@ export default function Payments() {
             <div class="row"><div class="label">${isSupplier ? 'اسم المورد' : 'الطرف المستفيد'}</div><div class="value">${partyName}</div></div>
             <div class="row"><div class="label">تاريخ الحركة</div><div class="value">${formatDate(payment.date)}</div></div>
             <div class="row amount-row"><div class="label">المبلغ ${isOutflow ? 'المنصرف' : 'المستلم'}</div><div class="value">${formatCurrency(payment.amount)}</div></div>
-            ${isSupplier && typeof supplierBalanceAfter === 'number' ? `<div class="row"><div class="label">الرصيد المتبقي للمورد</div><div class="value">${formatCurrency(supplierBalanceAfter)}</div></div>` : ''}
+            ${isSupplier && typeof supplierBalanceAfter === 'number' ? `<div class="row"><div class="label">${supplierBalanceAfter < 0 ? 'رصيد دائن لنا عند المورد' : 'الرصيد المتبقي للمورد'}</div><div class="value">${formatCurrency(Math.abs(supplierBalanceAfter))}</div></div>` : ''}
             <div class="row"><div class="label">البيان</div><div class="value">${payment.description || '-'}</div></div>
             <div class="row"><div class="label">المسؤول</div><div class="value">${payment.createdBy || '-'}</div></div>
           </section>
@@ -1250,6 +1336,7 @@ export default function Payments() {
       title: docTitle,
       width: 420,
       height: 680,
+      paperSize: 'thermal-80mm',
     }).then((opened) => {
       if (!opened) {
         setMessage({ type: 'error', text: 'تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.' });
@@ -1457,30 +1544,71 @@ export default function Payments() {
     }
 
     if (isApiMode()) {
-      const created = await api.createPayment({
-        type: 'in',
-        amount: incomingForm.amount,
-        saleId: selectedSale.id,
-        installmentId: selectedInstallment.id,
-        description:
-          incomingForm.description.trim() ||
-          `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
-        date: incomingForm.date,
-        channel: 'cash',
-      });
+      try {
+        const created = await api.createPayment({
+          type: 'in',
+          amount: incomingForm.amount,
+          saleId: selectedSale.id,
+          installmentId: selectedInstallment.id,
+          invoiceNumber: selectedSale.invoiceNumber,
+          description:
+            incomingForm.description.trim() ||
+            `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
+          date: incomingForm.date,
+          channel: 'cash',
+        });
 
-      await loadData();
-      closeModal();
-      setIncomingForm((current) => ({
-        customerId: current.customerId,
-        saleId: '',
-        installmentId: '',
-        amount: 0,
-        date: today(),
-        description: '',
-      }));
-      setIncomingSubmitMode('save');
-      setMessage({ type: 'success', text: `تم تسجيل السداد برقم إيصال ${created.receiptNumber}.` });
+        const willFullyPayInstallment = incomingForm.amount >= selectedInstallmentRemaining - 0.01;
+        const currentUnpaidCount =
+          selectedSale.financing?.schedules?.filter((schedule) => schedule.status !== 'paid').length || 0;
+        const remainingInstallments = Math.max(0, currentUnpaidCount - (willFullyPayInstallment ? 1 : 0));
+
+        await loadData();
+        closeModal();
+
+        if (incomingSubmitMode === 'save_print') {
+          printInstallmentReceipt({
+            payment: {
+              id: created.id,
+              receiptNumber: created.receiptNumber,
+              type: 'in',
+              amount: incomingForm.amount,
+              referenceId: selectedSale.id,
+              referenceType: 'sale',
+              description:
+                incomingForm.description.trim() ||
+                `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
+              date: incomingForm.date,
+              createdBy: user?.name || 'مدير النظام',
+              customerId: incomingForm.customerId,
+              saleId: selectedSale.id,
+              installmentId: selectedInstallment.id,
+              invoiceNumber: selectedSale.invoiceNumber,
+              createdAt: new Date().toISOString(),
+            },
+            sale: selectedSale,
+            installment: selectedInstallment,
+            customerName: selectedCustomer?.name || selectedSale.customerName,
+            remainingInstallments,
+          });
+        }
+
+        setIncomingForm((current) => ({
+          customerId: current.customerId,
+          saleId: '',
+          installmentId: '',
+          amount: 0,
+          date: today(),
+          description: '',
+        }));
+        setIncomingSubmitMode('save');
+        setMessage({ type: 'success', text: `تم تسجيل السداد برقم إيصال ${created.receiptNumber}.` });
+      } catch (err: any) {
+        setMessage({
+          type: 'error',
+          text: err?.message || 'تعذر تسجيل السداد. يرجى التحقق من البيانات والمحاولة مرة أخرى.',
+        });
+      }
       return;
     }
 
@@ -1550,29 +1678,70 @@ export default function Payments() {
       return;
     }
 
-    if (isApiMode()) {
-      await api.createPayment({
-        type: 'out',
-        supplierId: outgoingForm.supplierId,
-        amount: outgoingForm.amount,
-        description: outgoingForm.description.trim() || 'دفعة للمورد',
-        date: outgoingForm.date,
-        channel: 'cash',
-      });
+    const targetSupplier = suppliers.find((s) => s.id === outgoingForm.supplierId);
+    const expectedBalanceAfter = targetSupplier
+      ? Number((Number(targetSupplier.balance || 0) - outgoingForm.amount).toFixed(2))
+      : undefined;
 
-      await loadData();
-      closeModal();
-      setOutgoingForm((current) => ({
-        supplierId: current.supplierId,
-        amount: 0,
-        date: today(),
-        description: '',
-      }));
-      setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
+    if (isApiMode()) {
+      try {
+        const created = await api.createPayment({
+          type: 'out',
+          supplierId: outgoingForm.supplierId,
+          amount: outgoingForm.amount,
+          description: outgoingForm.description.trim() || 'دفعة للمورد',
+          date: outgoingForm.date,
+          channel: 'cash',
+        });
+
+        await loadData();
+        closeModal();
+
+        if (outgoingSubmitMode === 'save_print') {
+          printCashVoucherReceipt({
+            payment: {
+              id: created.id,
+              receiptNumber: created.receiptNumber,
+              type: 'out',
+              amount: outgoingForm.amount,
+              referenceId: outgoingForm.supplierId,
+              referenceType: 'supplier',
+              description: outgoingForm.description.trim() || 'دفعة للمورد',
+              date: outgoingForm.date,
+              createdBy: user?.name || 'مدير النظام',
+              supplierId: outgoingForm.supplierId,
+              createdAt: new Date().toISOString(),
+            },
+            partyName: targetSupplier?.name || 'مورد',
+            isSupplier: true,
+            supplierBalanceAfter: expectedBalanceAfter,
+          });
+        }
+
+        setOutgoingForm((current) => ({
+          supplierId: current.supplierId,
+          amount: 0,
+          date: today(),
+          description: '',
+        }));
+        setOutgoingSubmitMode('save');
+        setMessage({
+          type: 'success',
+          text:
+            expectedBalanceAfter !== undefined && expectedBalanceAfter < 0
+              ? `تم حفظ دفعة المورد بنجاح وإضافة الزيادة (${formatCurrency(Math.abs(expectedBalanceAfter))}) كرصيد دائن لصالح الشركة في حساب المورد.`
+              : 'تم حفظ دفعة المورد بنجاح.',
+        });
+      } catch (err: any) {
+        setMessage({
+          type: 'error',
+          text: err?.message || 'تعذر حفظ دفعة المورد. يرجى التحقق من البيانات والمحاولة مرة أخرى.',
+        });
+      }
       return;
     }
 
-    createPayment({
+    const createdPayment = createPayment({
       type: 'out',
       amount: outgoingForm.amount,
       referenceId: outgoingForm.supplierId,
@@ -1587,14 +1756,30 @@ export default function Payments() {
     loadData();
     closeModal();
 
+    if (outgoingSubmitMode === 'save_print') {
+      printCashVoucherReceipt({
+        payment: createdPayment,
+        partyName: targetSupplier?.name || 'مورد',
+        isSupplier: true,
+        supplierBalanceAfter: expectedBalanceAfter,
+      });
+    }
+
     setOutgoingForm((current) => ({
       supplierId: current.supplierId,
       amount: 0,
       date: today(),
       description: '',
     }));
+    setOutgoingSubmitMode('save');
 
-    setMessage({ type: 'success', text: 'تم حفظ دفعة المورد بنجاح.' });
+    setMessage({
+      type: 'success',
+      text:
+        expectedBalanceAfter !== undefined && expectedBalanceAfter < 0
+          ? `تم حفظ دفعة المورد بنجاح وإضافة الزيادة (${formatCurrency(Math.abs(expectedBalanceAfter))}) كرصيد دائن لصالح الشركة في حساب المورد.`
+          : 'تم حفظ دفعة المورد بنجاح.',
+    });
   };
 
 
@@ -1609,38 +1794,40 @@ export default function Payments() {
             حركة اليوم: {todayPayments.length} معاملة
           </span>
         </div>
-        {user?.role !== 'manager' && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => openModal('in')}
-              className="flex items-center gap-1.5 bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
-            >
-              <Plus size={15} />
-              <span>سداد عميل</span>
-            </button>
-            <button
-              onClick={() => openModal('out')}
-              className="flex items-center gap-1.5 bg-rose-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-rose-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
-            >
-              <Plus size={15} />
-              <span>دفعة مورد</span>
-            </button>
-            {hasPermission(user, 'closing:write') && (
+        <div className="flex items-center gap-2">
+          {hasPermission(user, 'payments:write') && (
+            <>
               <button
-                onClick={() => {
-                  setClosingDate(today());
-                  setClosedPeriodDateFilter(today());
-                  setClosingNotes('');
-                  setShowClosingModal(true);
-                }}
-                className="flex items-center gap-1.5 bg-slate-800 text-white px-3.5 py-1.5 rounded-lg hover:bg-slate-900 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+                onClick={() => openModal('in')}
+                className="flex items-center gap-1.5 bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
               >
-                <Lock size={15} />
-                <span>إغلاق اليومية</span>
+                <Plus size={15} />
+                <span>سداد عميل</span>
               </button>
-            )}
-          </div>
-        )}
+              <button
+                onClick={() => openModal('out')}
+                className="flex items-center gap-1.5 bg-rose-600 text-white px-3.5 py-1.5 rounded-lg hover:bg-rose-700 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>دفعة مورد</span>
+              </button>
+            </>
+          )}
+          {isAdmin(user) && hasPermission(user, 'closing:write') && (
+            <button
+              onClick={() => {
+                setClosingDate(today());
+                setClosedPeriodDateFilter(today());
+                setClosingNotes('');
+                setShowClosingModal(true);
+              }}
+              className="flex items-center gap-1.5 bg-slate-800 text-white px-3.5 py-1.5 rounded-lg hover:bg-slate-900 transition-colors text-xs font-bold shadow-xs cursor-pointer"
+            >
+              <Lock size={15} />
+              <span>إغلاق اليومية</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {message && (
@@ -1685,17 +1872,68 @@ export default function Payments() {
 
       {/* Tier 3: Flexible & Scrollable Data Table Card */}
       <div className="desktop-table-card">
+        {/* Search & Date History Filter Bar */}
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-slate-100 bg-slate-50/70 px-3.5 py-2.5 shrink-0">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              placeholder="بحث بالعميل / المورد / رقم الفاتورة / الإيصال..."
+              className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pr-9 pl-3 text-xs font-medium text-slate-700 outline-none focus:border-blue-500"
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <DatePicker
+              value={historyDateFilter}
+              onChange={(date) => setHistoryDateFilter(date)}
+              placeholder="كل التواريخ"
+              className="w-40 border-slate-200 bg-white px-2.5 py-1 text-xs"
+            />
+            {historyDateFilter !== today() && (
+              <button
+                type="button"
+                onClick={() => setHistoryDateFilter(today())}
+                className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 cursor-pointer"
+              >
+                اليوم
+              </button>
+            )}
+            {historyDateFilter && (
+              <button
+                type="button"
+                onClick={() => setHistoryDateFilter('')}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                كل الأيام
+              </button>
+            )}
+          </div>
+          <label className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showVoidedPayments}
+              onChange={(e) => setShowVoidedPayments(e.target.checked)}
+              className="rounded border-slate-300 text-blue-600"
+            />
+            <span>عرض الملغاة</span>
+          </label>
+        </div>
+
         {/* Mobile Cards View (< md) */}
         <div className="md:hidden flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5 custom-scrollbar">
           {loading ? (
             <div className="py-10 text-center text-slate-400 text-xs font-bold">جاري التحميل...</div>
-          ) : todayPayments.length === 0 ? (
+          ) : filteredPayments.length === 0 ? (
             <div className="py-12 px-4 text-center text-slate-400 flex flex-col items-center gap-2">
               <Banknote size={28} className="text-slate-300" />
-              <p className="text-sm font-bold text-slate-700">لا توجد معاملات مضافة بتاريخ اليوم</p>
+              <p className="text-sm font-bold text-slate-700">
+                {historyDateFilter || historySearch ? 'لا توجد معاملات مطابقة للفلتر المحدد' : 'لا توجد معاملات مضافة بعد'}
+              </p>
             </div>
           ) : (
-            todayPayments.map((payment) => {
+            filteredPayments.map((payment) => {
               const customerName =
                 customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
               const supplierName =
@@ -1790,20 +2028,22 @@ export default function Payments() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <LoadingState variant="table" colSpan={7} />
-              ) : todayPayments.length === 0 ? (
+              ) : filteredPayments.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-16 px-4 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2.5 min-h-[220px]">
                       <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                         <Banknote size={24} />
                       </div>
-                      <p className="text-sm font-bold text-slate-700">لا توجد معاملات مضافة بتاريخ اليوم</p>
-                      <p className="text-xs text-slate-400">سجل سداد عميل جديد أو دفعة مورد للبدء في حركة اليومية</p>
+                      <p className="text-sm font-bold text-slate-700">
+                        {historyDateFilter || historySearch ? 'لا توجد معاملات مطابقة للفلتر المحدد' : 'لا توجد معاملات مضافة بعد'}
+                      </p>
+                      <p className="text-xs text-slate-400">سجل سداد عميل جديد أو اختر «كل الأيام» لاستعراض السجل الكامل</p>
                     </div>
                   </td>
                 </tr>
               ) : (
-                todayPayments.map((payment) => {
+                filteredPayments.map((payment) => {
                   const customerName =
                   customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '-';
                 const supplierName =
@@ -1876,7 +2116,11 @@ export default function Payments() {
           </table>
         </div>
         <div className="erp-status-bar shrink-0">
-          <span className="font-bold text-slate-700">معاملات الخزينة اليوم: <span className="text-blue-700 font-extrabold">{todayPayments.length}</span></span>
+          <span className="font-bold text-slate-700">
+            المعاملات المعروضة: <span className="text-blue-700 font-extrabold">{filteredPayments.length}</span>
+            <span className="text-slate-400 mx-1.5">|</span>
+            حركة اليوم: <span className="text-slate-800 font-extrabold">{todayPayments.length}</span>
+          </span>
           <span className="font-bold text-slate-700">صافي الحركة اليومية: <span className="text-emerald-700 font-extrabold">{formatCurrency(todayNetMovement)}</span></span>
         </div>
       </div>
@@ -1897,8 +2141,8 @@ export default function Payments() {
               <div className="overflow-y-auto">
                 {paymentType === 'in' ? (
                   <form onSubmit={handleIncomingSubmit} className="space-y-6 p-6">
-                    {/* ─── Payment Mode Toggle (Admin Only) ─────────────────── */}
-                    {isAdmin(user) && (
+                    {/* ─── Payment Mode Toggle ─────────────────── */}
+                    {hasPermission(user, 'payments:write') && (
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-1 flex gap-1">
                         <button
                           type="button"
@@ -2383,11 +2627,20 @@ export default function Payments() {
                           className="input-ui"
                         >
                           <option value="">اختر المورد</option>
-                          {suppliers.map((supplier) => (
-                            <option key={supplier.id} value={supplier.id}>
-                              {supplier.name}
-                            </option>
-                          ))}
+                          {suppliers.map((supplier) => {
+                            const bal = Number(supplier.balance || 0);
+                            const balTag =
+                              bal > 0
+                                ? `مستحق له: ${formatCurrency(bal)}`
+                                : bal < 0
+                                  ? `رصيد لنا: ${formatCurrency(Math.abs(bal))}`
+                                  : 'مصفى';
+                            return (
+                              <option key={supplier.id} value={supplier.id}>
+                                {supplier.name} ({balTag})
+                              </option>
+                            );
+                          })}
                         </select>
                       </Field>
                       <Field label="تاريخ الدفع">
@@ -2419,6 +2672,53 @@ export default function Payments() {
                       </Field>
                     </div>
 
+                    {(() => {
+                      const selectedSup = suppliers.find((s) => s.id === outgoingForm.supplierId);
+                      if (!selectedSup) return null;
+                      const currentBal = Number(selectedSup.balance || 0);
+                      const dues = Math.max(0, currentBal);
+                      const isOverpaying = outgoingForm.amount > dues && outgoingForm.amount > 0;
+                      const excess = Number((outgoingForm.amount - dues).toFixed(2));
+                      return (
+                        <div className="space-y-2.5">
+                          <div className={`rounded-xl border px-3.5 py-2.5 text-xs font-bold flex items-center justify-between ${
+                            currentBal > 0
+                              ? 'bg-slate-50 border-slate-200 text-slate-700'
+                              : currentBal < 0
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                : 'bg-slate-50 border-slate-200 text-slate-600'
+                          }`}>
+                            <span>
+                              {currentBal > 0
+                                ? 'المستحق الحالي للمورد:'
+                                : currentBal < 0
+                                  ? 'رصيد دائن حالي لنا عند المورد (دفعة مقدمة):'
+                                  : 'رصيد المورد الحالي:'}
+                            </span>
+                            <span className="font-mono font-black">
+                              {currentBal < 0 ? formatCurrency(Math.abs(currentBal)) : formatCurrency(currentBal)}
+                            </span>
+                          </div>
+                          {isOverpaying && (
+                            <div className="rounded-2xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950 flex items-start gap-2.5">
+                              <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                              <div className="leading-relaxed">
+                                <strong className="font-black block">
+                                  تنبيه: أنت تدفع للمورد مبلغاً أكبر من مستحقاته الحالية!
+                                </strong>
+                                <span>
+                                  المبلغ المدفوع (<strong>{formatCurrency(outgoingForm.amount)}</strong>) يزيد عن المستحق الحالي (
+                                  <strong>{formatCurrency(dues)}</strong>) بمقدار{' '}
+                                  <strong className="text-emerald-700 font-black">{formatCurrency(excess)}</strong>.
+                                  سيتم إضافة الزيادة تلقائياً إلى حساب المورد كـ <strong>رصيد دائن لنا (دفعة مقدمة)</strong> وتُخصم من أي فواتير شراء قادمة.
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row">
                       <button
                         type="button"
@@ -2429,9 +2729,18 @@ export default function Payments() {
                       </button>
                       <button
                         type="submit"
-                        className="rounded-2xl bg-rose-600 px-4 py-3 font-bold text-white hover:bg-rose-700 sm:w-56"
+                        onClick={() => setOutgoingSubmitMode('save')}
+                        className="rounded-2xl bg-rose-600 px-4 py-3 font-bold text-white hover:bg-rose-700 sm:w-56 transition-all shadow-xs active:scale-95"
                       >
                         حفظ الدفعة
+                      </button>
+                      <button
+                        type="submit"
+                        onClick={() => setOutgoingSubmitMode('save_print')}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#1e40af] hover:bg-[#1d4ed8] px-4 py-3 font-bold text-white transition-all shadow-xs active:scale-95 sm:w-56"
+                      >
+                        <Printer size={17} />
+                        <span>حفظ وطباعة</span>
                       </button>
                     </div>
                   </form>
@@ -2569,6 +2878,7 @@ export default function Payments() {
                             <th className="px-3 py-2.5 text-center font-bold text-sky-800">رصيد الإغلاق</th>
                             <th className="px-3 py-2.5 text-right font-bold">بواسطة</th>
                             <th className="px-3 py-2.5 text-right font-bold">الملاحظات</th>
+                            {isAdmin(user) && <th className="px-3 py-2.5 text-center font-bold">إجراء</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700 text-xs">
@@ -2580,6 +2890,7 @@ export default function Payments() {
                             const computedOut = period.totalOut ?? dayPayments.filter(p => p.type === 'out').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
                             const computedNet = period.netMovement ?? (computedIn - computedOut);
                             const computedBalance = period.closingBalance != null ? period.closingBalance : calculateAccumulatedCashUpToDate(pDate);
+                            const reopenKey = `${period.periodType}:${period.periodDate}`;
 
                             return (
                               <tr key={period.id} className="hover:bg-slate-50/50 transition-colors">
@@ -2592,6 +2903,18 @@ export default function Payments() {
                                 </td>
                                 <td className="px-3 py-2.5 text-slate-600 font-medium whitespace-nowrap">{period.closedBy || 'مدير النظام'}</td>
                                 <td className="px-3 py-2.5 text-xs text-slate-500 max-w-[180px] truncate">{period.notes || '-'}</td>
+                                {isAdmin(user) && (
+                                  <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReopenPeriod(period)}
+                                      disabled={reopeningPeriodKey === reopenKey}
+                                      className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
+                                    >
+                                      {reopeningPeriodKey === reopenKey ? 'جاري الفتح...' : 'إعادة فتح'}
+                                    </button>
+                                  </td>
+                                )}
                               </tr>
                             );
                           })}
@@ -2608,7 +2931,7 @@ export default function Payments() {
 
       {/* Direct Edit / Cancel Installment Payment Modal */}
       {editingInstallmentModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
           <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-l from-slate-900 via-[#1e40af] to-[#1d4ed8] text-white">
               <div className="flex items-center gap-2.5">
@@ -2800,18 +3123,25 @@ function QuickInfo({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatusBadge({ status }: { status: InstallmentSchedule['status'] }) {
-  const toneClass = {
+function StatusBadge({ status }: { status: InstallmentSchedule['status'] | string }) {
+  const toneMap: Record<string, string> = {
     paid: 'bg-emerald-100 text-emerald-700',
+    settled_early: 'bg-amber-100 text-amber-800',
     partial: 'bg-amber-100 text-amber-700',
     unpaid: 'bg-rose-100 text-rose-700',
-  }[status];
+    pending: 'bg-rose-100 text-rose-700',
+  };
 
-  const label = {
+  const labelMap: Record<string, string> = {
     paid: 'مدفوع',
+    settled_early: 'تكييش مبكر',
     partial: 'جزئي',
     unpaid: 'غير مدفوع',
-  }[status];
+    pending: 'غير مدفوع',
+  };
+
+  const toneClass = toneMap[status] || 'bg-slate-100 text-slate-700';
+  const label = labelMap[status] || status;
 
   return <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${toneClass}`}>{label}</span>;
 }

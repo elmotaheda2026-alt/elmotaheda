@@ -41,6 +41,15 @@ process.on('uncaughtException', (err) => {
   } catch (_) {}
 });
 
+// Configure Chromium GPU / Occlusion stability on all Windows builds (prevents Lock/Sleep color glitches & render lag)
+if (isWindows) {
+  try {
+    app.disableHardwareAcceleration();
+  } catch (_) {}
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,D3D11Experimental,AudioServiceOutOfProcess');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+}
+
 // Configure Chromium compatibility flags for Windows 7 / 32-bit / Low-spec GPU
 if (isLegacyWindows || is32Bit || process.argv.includes('--legacy-compat') || process.argv.includes('--disable-gpu')) {
   console.log(`[Compatibility Mode] Active (Platform: ${process.platform}, OS Release: ${osRelease}, Arch: ${process.arch})`);
@@ -109,10 +118,10 @@ function loadConfig() {
   try {
     const pdConfig = getProgramDataConfigFile();
     if (fs.existsSync(pdConfig)) {
-      return JSON.parse(fs.readFileSync(pdConfig, 'utf-8'));
+      return JSON.parse(fs.readFileSync(pdConfig, 'utf-8').replace(/^\uFEFF/, ''));
     }
     if (fs.existsSync(CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+      return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8').replace(/^\uFEFF/, ''));
     }
   } catch (e) {
     console.warn('Could not load config:', e.message);
@@ -191,9 +200,10 @@ async function createMainWindow(apiBaseUrl) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      backgroundThrottling: false,
       preload: path.join(__dirname, 'preload-main.cjs'),
     },
-    title: 'Al-Muttahida ERP',
+    title: 'شركة المتحدة للتجارة والتوريدات',
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -260,7 +270,7 @@ async function createMainWindow(apiBaseUrl) {
       } else if (input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r')) {
         mainWindow.webContents.reload();
         event.preventDefault();
-      } else if (input.key === 'F2') {
+      } else if (input.control && input.shift && input.key.toLowerCase() === 'o') {
         showSetupWindow();
         event.preventDefault();
       }
@@ -346,18 +356,47 @@ ipcMain.handle('open-external-url', async (_event, url) => {
 
 // ── IPC: Real Interactive PDF Print Preview (Fixes "This app doesn't support print preview") ──
 
-function openPrintPreviewFromPdfBuffer(pdfBuffer, title) {
+function resolvePaperSpec(html, requestedPaperSize) {
+  const explicit = typeof requestedPaperSize === 'string' ? requestedPaperSize.toLowerCase().trim() : '';
+  if (explicit === 'thermal-58mm' || explicit === '58mm') {
+    return { kind: 'thermal', widthMm: 58 };
+  }
+  if (explicit === 'thermal-80mm' || explicit === '80mm') {
+    return { kind: 'thermal', widthMm: 80 };
+  }
+  if (explicit === 'a4-landscape') {
+    return { kind: 'a4', landscape: true };
+  }
+  if (explicit === 'a4' || explicit === 'a4-portrait') {
+    return { kind: 'a4', landscape: false };
+  }
+
+  // Auto-detect from HTML @page or body width when paperSize wasn't passed explicitly
+  if (/@page\s*\{[^}]*58mm/i.test(html) || /\bwidth\s*:\s*58mm\b/i.test(html)) {
+    return { kind: 'thermal', widthMm: 58 };
+  }
+  if (/@page\s*\{[^}]*80mm/i.test(html) || /\bwidth\s*:\s*80mm\b/i.test(html)) {
+    return { kind: 'thermal', widthMm: 80 };
+  }
+  if (/@page\s*\{[^}]*A4\s+landscape/i.test(html)) {
+    return { kind: 'a4', landscape: true };
+  }
+  return { kind: 'a4', landscape: false };
+}
+
+function openPrintPreviewFromPdfBuffer(pdfBuffer, title, options = {}) {
   const tempPdfPath = path.join(
     os.tmpdir(),
     `elmotaheda-preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`
   );
   fs.writeFileSync(tempPdfPath, pdfBuffer);
 
+  const isThermal = options.kind === 'thermal';
   const iconCandidate = path.join(__dirname, 'icon.png');
   const previewWin = new BrowserWindow({
-    width: 1000,
-    height: 840,
-    minWidth: 700,
+    width: isThermal ? 560 : 1000,
+    height: isThermal ? 780 : 840,
+    minWidth: isThermal ? 420 : 700,
     minHeight: 550,
     title: title || 'معاينة الطباعة - شركة المتحدة',
     autoHideMenuBar: true,
@@ -377,11 +416,29 @@ function openPrintPreviewFromPdfBuffer(pdfBuffer, title) {
   });
 }
 
-async function renderWebContentsToPdf(webContents) {
+async function renderWebContentsToPdf(webContents, options = {}) {
+  if (options.kind === 'thermal' && options.widthInches && options.heightInches) {
+    return await webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: false,
+      pageSize: {
+        width: options.widthInches,
+        height: options.heightInches,
+      },
+      margins: {
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0,
+      },
+    });
+  }
+
   try {
     return await webContents.printToPDF({
       printBackground: true,
       preferCSSPageSize: true,
+      landscape: Boolean(options.landscape),
     });
   } catch (err) {
     console.warn('printToPDF preferCSSPageSize fallback to A4:', err?.message || err);
@@ -389,6 +446,7 @@ async function renderWebContentsToPdf(webContents) {
       printBackground: true,
       preferCSSPageSize: false,
       pageSize: 'A4',
+      landscape: Boolean(options.landscape),
     });
   }
 }
@@ -398,6 +456,7 @@ ipcMain.handle('print-preview-html', async (_event, payload = {}) => {
   const title = typeof payload?.title === 'string' ? payload.title : 'معاينة الطباعة';
   if (!html) return { success: false, error: 'Empty HTML content' };
 
+  const paperSpec = resolvePaperSpec(html, payload?.paperSize);
   const tempHtmlPath = path.join(
     os.tmpdir(),
     `elmotaheda-print-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.html`
@@ -406,10 +465,15 @@ ipcMain.handle('print-preview-html', async (_event, payload = {}) => {
 
   try {
     fs.writeFileSync(tempHtmlPath, html, 'utf8');
+    const thermalCssWidthPx =
+      paperSpec.kind === 'thermal' ? Math.round((paperSpec.widthMm / 25.4) * 96) : 1000;
+
     renderWin = new BrowserWindow({
       show: false,
-      width: 1000,
-      height: 1200,
+      frame: paperSpec.kind !== 'thermal',
+      width: thermalCssWidthPx,
+      height: paperSpec.kind === 'thermal' ? 100 : 1200,
+      useContentSize: paperSpec.kind === 'thermal',
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -420,8 +484,41 @@ ipcMain.handle('print-preview-html', async (_event, payload = {}) => {
     // Give webfonts and RTL table layout a moment to settle
     await new Promise((resolve) => setTimeout(resolve, 220));
 
-    const pdfBuffer = await renderWebContentsToPdf(renderWin.webContents);
-    openPrintPreviewFromPdfBuffer(pdfBuffer, title);
+    let pdfOptions = { kind: 'a4', landscape: Boolean(paperSpec.landscape) };
+    if (paperSpec.kind === 'thermal') {
+      const contentHeightPx = await renderWin.webContents.executeJavaScript(`(() => {
+        const el = document.querySelector('.receipt') || document.body;
+        const rect = el ? el.getBoundingClientRect() : { height: 0 };
+        return Math.ceil(Math.max(rect.height || 0, el?.scrollHeight || 0, 180));
+      })()`);
+
+      const widthInches = Number((paperSpec.widthMm / 25.4).toFixed(4));
+      // 96 CSS px = 1 inch, plus ~3mm (0.12 in) bottom buffer to prevent clipping without wasting roll paper
+      const heightInches = Number((contentHeightPx / 96 + 0.12).toFixed(4));
+      const heightMm = Math.ceil(heightInches * 25.4);
+
+      await renderWin.webContents.insertCSS(`
+        @page { size: ${paperSpec.widthMm}mm ${heightMm}mm !important; margin: 0 !important; }
+        html, body {
+          width: ${paperSpec.widthMm}mm !important;
+          max-width: ${paperSpec.widthMm}mm !important;
+          height: auto !important;
+          min-height: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow: hidden !important;
+        }
+      `);
+
+      pdfOptions = {
+        kind: 'thermal',
+        widthInches,
+        heightInches,
+      };
+    }
+
+    const pdfBuffer = await renderWebContentsToPdf(renderWin.webContents, pdfOptions);
+    openPrintPreviewFromPdfBuffer(pdfBuffer, title, { kind: paperSpec.kind });
     return { success: true };
   } catch (err) {
     console.error('print-preview-html failed:', err);
@@ -437,8 +534,12 @@ ipcMain.handle('print-preview-html', async (_event, payload = {}) => {
 ipcMain.handle('print-preview-current', async (event, payload = {}) => {
   try {
     const title = typeof payload?.title === 'string' ? payload.title : 'معاينة الطباعة';
-    const pdfBuffer = await renderWebContentsToPdf(event.sender);
-    openPrintPreviewFromPdfBuffer(pdfBuffer, title);
+    const paperSpec = resolvePaperSpec('', payload?.paperSize);
+    const pdfBuffer = await renderWebContentsToPdf(event.sender, {
+      kind: 'a4',
+      landscape: Boolean(paperSpec.landscape),
+    });
+    openPrintPreviewFromPdfBuffer(pdfBuffer, title, { kind: 'a4' });
     return { success: true };
   } catch (err) {
     console.error('print-preview-current failed:', err);
@@ -453,140 +554,123 @@ ipcMain.handle('run-firewall-setup', async () => {
   });
 });
 
-ipcMain.handle('save-custom-sql-config', async (_event, customSql) => {
+ipcMain.handle('save-custom-sql-config', async (_event, customSql = {}) => {
   try {
-    saveConfig(customSql);
+    const { port: customPort, ...rest } = customSql || {};
+    saveConfig({
+      ...rest,
+      ...(customPort ? { dbPort: Number(customPort) } : {}),
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 
-ipcMain.handle('download-and-install-sql', async (event) => {
+function getInstallerPaths() {
+  const installersDir = path.join(getAppDataDir(), 'installers');
+  try {
+    if (!fs.existsSync(installersDir)) fs.mkdirSync(installersDir, { recursive: true });
+  } catch (_) {}
+  return {
+    installersDir,
+    sqlPath: path.join(installersDir, 'SQL2025-SSEI-Expr.exe'),
+    ssmsPath: path.join(installersDir, 'vs_SSMS.exe'),
+  };
+}
+
+function broadcastSqlProgress(event, payload) {
+  try {
+    if (event && event.sender && !event.sender.isDestroyed()) {
+      event.sender.send('sql-install-progress', payload);
+    }
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('sql-install-progress', payload);
+    }
+    if (setupWindow && !setupWindow.isDestroyed() && setupWindow.webContents) {
+      setupWindow.webContents.send('sql-install-progress', payload);
+    }
+  } catch (_) {}
+}
+
+function downloadInstallerWithProgress({ url, targetPath, targetLabel, targetKey, fallbackBytes, event }) {
   const https = require('https');
   const http = require('http');
-  const fs = require('fs');
-  const path = require('path');
-  const { exec } = require('child_process');
+  const tmpPath = `${targetPath}.download`;
 
-  const sendProgress = (step, percent, msg) => {
-    try {
-      if (event && event.sender && !event.sender.isDestroyed()) {
-        event.sender.send('sql-install-progress', { step, percent, msg });
-      }
-      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-        mainWindow.webContents.send('sql-install-progress', { step, percent, msg });
-      }
-      if (setupWindow && !setupWindow.isDestroyed() && setupWindow.webContents) {
-        setupWindow.webContents.send('sql-install-progress', { step, percent, msg });
-      }
-    } catch (_) {}
-  };
+  return new Promise((resolve, reject) => {
+    const getWithRedirects = (currentUrl, redirectsLeft = 6) => {
+      if (redirectsLeft <= 0) return reject(new Error('تجاوز عدد التحويلات المسموح بها'));
+      const client = currentUrl.startsWith('https') ? https : http;
+      const req = client.get(currentUrl, (response) => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          let nextUrl = response.headers.location;
+          if (!nextUrl.startsWith('http')) {
+            const parsed = new URL(currentUrl);
+            nextUrl = `${parsed.protocol}//${parsed.host}${nextUrl}`;
+          }
+          response.resume();
+          return getWithRedirects(nextUrl, redirectsLeft - 1);
+        }
 
-  // 1. Try to start existing installed SQL Server services first
-  sendProgress('service-check', 10, 'جاري فحص خدمات SQL Server على جهازك وتشغيلها تلقائياً...');
-  const startServiceResult = await new Promise((res) => {
-    exec('sc config MSSQLSERVER start= auto & net start MSSQLSERVER || sc config MSSQL$SQLEXPRESS start= auto & net start MSSQL$SQLEXPRESS', (err) => {
-      res(!err);
-    });
-  });
+        if (response.statusCode !== 200) {
+          response.resume();
+          return reject(new Error(`فشل التحميل برمز: ${response.statusCode}`));
+        }
 
-  if (startServiceResult) {
-    sendProgress('service-started', 80, 'تم تشغيل محرك SQL Server... جاري تهيئة قاعدة البيانات...');
-    await ensureSqlConfigured();
-    ensureFirewallRules();
-    sendProgress('done', 100, 'تم الاتصال وتفعيل محرك البيانات بنجاح!');
-    return { success: true, startedExisting: true };
-  }
+        const totalBytes = parseInt(response.headers['content-length'] || String(fallbackBytes), 10) || fallbackBytes;
+        let receivedBytes = 0;
+        const fileStream = fs.createWriteStream(tmpPath);
 
-  // 2. Download official Microsoft SQL Server Express installer
-  sendProgress('downloading', 20, 'جاري تحميل محرك قواعد البيانات الرسمي (SQL Server Express)...');
-  const targetDir = getAppDataDir();
-  try {
-    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-  } catch (_) {}
-  const installerPath = path.join(targetDir, 'SQL2025-SSEI-Expr.exe');
-  const downloadUrl = 'https://go.microsoft.com/fwlink/p/?linkid=2216019';
+        response.on('data', (chunk) => {
+          receivedBytes += chunk.length;
+          const pct = Math.min(92, 5 + Math.round((receivedBytes / totalBytes) * 87));
+          const mbDone = (receivedBytes / (1024 * 1024)).toFixed(1);
+          const mbTotal = (totalBytes / (1024 * 1024)).toFixed(1);
+          broadcastSqlProgress(event, {
+            target: targetKey,
+            step: 'downloading',
+            percent: pct,
+            msg: `جاري تحميل ${targetLabel} (${mbDone} ميجابايت من ${mbTotal} ميجابايت)...`,
+          });
+        });
 
-  const downloadFile = (url) => {
-    return new Promise((resolve, reject) => {
-      const getWithRedirects = (currentUrl, redirectsLeft = 5) => {
-        if (redirectsLeft <= 0) return reject(new Error('تجاوز عدد التحويلات المسموح بها'));
-        const client = currentUrl.startsWith('https') ? https : http;
-        client.get(currentUrl, (response) => {
-          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-            let nextUrl = response.headers.location;
-            if (!nextUrl.startsWith('http')) {
-              const parsed = new URL(currentUrl);
-              nextUrl = `${parsed.protocol}//${parsed.host}${nextUrl}`;
+        response.pipe(fileStream);
+        fileStream.on('finish', () => {
+          fileStream.close(() => {
+            try {
+              if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+              fs.renameSync(tmpPath, targetPath);
+              resolve(targetPath);
+            } catch (renameErr) {
+              reject(renameErr);
             }
-            return getWithRedirects(nextUrl, redirectsLeft - 1);
-          }
-
-          if (response.statusCode !== 200) {
-            return reject(new Error(`فشل التحميل برمز: ${response.statusCode}`));
-          }
-
-          const totalBytes = parseInt(response.headers['content-length'] || '4606792', 10);
-          let receivedBytes = 0;
-          const fileStream = fs.createWriteStream(installerPath);
-
-          response.on('data', (chunk) => {
-            receivedBytes += chunk.length;
-            const pct = Math.min(85, 20 + Math.round((receivedBytes / totalBytes) * 65));
-            const mbDone = (receivedBytes / (1024 * 1024)).toFixed(1);
-            const mbTotal = (totalBytes / (1024 * 1024)).toFixed(1);
-            sendProgress('downloading', pct, `جاري تحميل محرك البيانات (${mbDone} ميجابايت من ${mbTotal} ميجابايت)...`);
           });
+        });
+        fileStream.on('error', (err) => {
+          try { fs.unlinkSync(tmpPath); } catch (_) {}
+          reject(err);
+        });
+      });
+      req.setTimeout(30000, () => {
+        req.destroy(new Error('انتهت مهلة الاتصال أثناء التحميل'));
+      });
+      req.on('error', (err) => {
+        try { fs.unlinkSync(tmpPath); } catch (_) {}
+        reject(err);
+      });
+    };
 
-          response.pipe(fileStream);
-          fileStream.on('finish', () => {
-            fileStream.close();
-            resolve();
-          });
-          fileStream.on('error', reject);
-        }).on('error', reject);
-      };
+    getWithRedirects(url);
+  });
+}
 
-      getWithRedirects(url);
-    });
-  };
-
-  try {
-    await downloadFile(downloadUrl);
-  } catch (dlErr) {
-    console.error('Download error:', dlErr);
-    sendProgress('error', 0, `تعذر التحميل التلقائي: ${dlErr.message}`);
-    return { success: false, error: dlErr.message };
-  }
-
-  // 3. Launch the installer with Unattended parameters including Mixed-mode and TCP
-  sendProgress('installing', 90, 'تم التحميل بنجاح. جاري تشغيل مثبت محرك البيانات تلقائياً...');
-  ensureFirewallRules();
-
-  try {
-    const installArgs = '/Action=Install /IACCEPTSQLSERVERLICENSETERMS /QS /Hideconsole /FEATURES=SQL /INSTANCENAME=SQLEXPRESS /SECURITYMODE=SQL /SAPWD="Alm@2026#App" /TCPENABLED=1 /NPENABLED=1 /SQLSYSADMINACCOUNTS="BUILTIN\\Administrators"';
-    const child = exec(`"${installerPath}" ${installArgs}`, {
-      detached: true,
-      windowsHide: false,
-    });
-    child.unref();
-
-    sendProgress('installing', 95, 'معالج التثبيت يعمل الآن لتجهيز قاعدة البيانات... يرجى الانتظار دقيقة.');
-    return { success: true, launched: true };
-  } catch (execErr) {
-    const { shell } = require('electron');
-    await shell.openPath(installerPath);
-    return { success: true, opened: true };
-  }
-});
-
-ipcMain.handle('check-sql-status', async () => {
+function checkPort1433() {
   const net = require('net');
-  const checkPort = () => new Promise((resolve) => {
+  return new Promise((resolve) => {
     const socket = new net.Socket();
     let resolved = false;
-    socket.setTimeout(1200);
+    socket.setTimeout(900);
     socket.on('connect', () => {
       if (!resolved) { resolved = true; socket.destroy(); resolve(true); }
     });
@@ -598,33 +682,291 @@ ipcMain.handle('check-sql-status', async () => {
     });
     socket.connect(1433, '127.0.0.1');
   });
+}
 
-  const isPortOpen = await checkPort();
-  if (isPortOpen) {
-    ensureSqlConfigured().catch(() => {});
-    return { running: true, port: 1433 };
+function checkDbHealthDetails(apiUrl) {
+  const http = require('http');
+  return new Promise((resolve) => {
+    const req = http.get(`${apiUrl}/health/db`, { timeout: 6000 }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          resolve({ ok: res.statusCode === 200 && Boolean(parsed.ok), error: parsed.error || null });
+        } catch {
+          resolve({ ok: res.statusCode === 200, error: res.statusCode === 200 ? null : `HTTP ${res.statusCode}` });
+        }
+      });
+    });
+    req.on('error', (err) => resolve({ ok: false, error: err.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'انتهت مهلة فحص قاعدة البيانات' }); });
+  });
+}
+
+let schemaProvisionPromise = null;
+
+async function ensureBackendSchemaReady(timeoutMs = 15000) {
+  if (schemaProvisionPromise) {
+    return schemaProvisionPromise;
   }
 
-  // If port 1433 did not respond, check if SQL Server service is present and try init script
-  const unpackedPsCheck = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'init-sql-login.ps1');
-  const psScript = fs.existsSync(unpackedPsCheck) ? unpackedPsCheck : path.join(__dirname, 'init-sql-login.ps1');
-  if (fs.existsSync(psScript)) {
-    const psOk = await new Promise((resolve) => {
-      exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}"`, (err, stdout) => {
-        if (!err && stdout && stdout.includes('SUCCESS')) {
-          resolve(true);
-        } else {
-          resolve(false);
+  schemaProvisionPromise = (async () => {
+    try {
+      const quickApiUrl = currentApiUrl || 'http://127.0.0.1:4000';
+      const quickCheck = await checkDbHealthDetails(quickApiUrl);
+      if (quickCheck.ok) {
+        return quickCheck;
+      }
+
+      const port = await startBackend();
+      const apiUrl = `http://127.0.0.1:${port}`;
+      currentApiUrl = apiUrl;
+
+      const deadline = Date.now() + timeoutMs;
+      let lastResult = { ok: false, error: 'جاري تهيئة قاعدة البيانات...' };
+      while (Date.now() < deadline) {
+        lastResult = await checkDbHealthDetails(apiUrl);
+        if (lastResult.ok) {
+          return lastResult;
+        }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      return lastResult;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  })().finally(() => {
+    schemaProvisionPromise = null;
+  });
+
+  return schemaProvisionPromise;
+}
+
+async function detectSqlEnvironment() {
+  const { sqlPath, ssmsPath } = getInstallerPaths();
+  const isPortOpen = await checkPort1433();
+
+  let sqlInstalled = isPortOpen;
+  let sqlRunning = isPortOpen;
+  let ssmsInstalled = false;
+
+  if (process.platform === 'win32') {
+    const psDetectScript = `
+      $sqlInst = $false; $sqlRun = $false; $ssmsInst = $false;
+      try {
+        $svcs = Get-Service -Name 'MSSQLSERVER','MSSQL$*' -ErrorAction SilentlyContinue
+        if ($svcs) {
+          $sqlInst = $true
+          if ($svcs | Where-Object { $_.Status -eq 'Running' }) { $sqlRun = $true }
+        }
+        if (-not $sqlInst -and (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL')) {
+          $props = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL' -ErrorAction SilentlyContinue).PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' }
+          if ($props) { $sqlInst = $true }
+        }
+      } catch {}
+      try {
+        $ssmsPaths = @(
+          "$env:ProgramFiles\\Microsoft SQL Server Management Studio*",
+          "\${env:ProgramFiles(x86)}\\Microsoft SQL Server Management Studio*"
+        )
+        foreach ($p in $ssmsPaths) {
+          if (Get-ChildItem -Path $p -Filter 'Ssms.exe' -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            $ssmsInst = $true; break
+          }
+        }
+        if (-not $ssmsInst) {
+          $uninstKeys = @(
+            'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+            'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+          )
+          $hit = Get-ItemProperty $uninstKeys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*SQL Server Management Studio*' } | Select-Object -First 1
+          if ($hit) { $ssmsInst = $true }
+        }
+      } catch {}
+      [PSCustomObject]@{ sqlInstalled=$sqlInst; sqlRunning=$sqlRun; ssmsInstalled=$ssmsInst } | ConvertTo-Json -Compress
+    `;
+
+    const detected = await new Promise((resolve) => {
+      const encoded = Buffer.from(psDetectScript, 'utf16le').toString('base64');
+      exec(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { timeout: 6000 }, (err, stdout) => {
+        if (err || !stdout) return resolve(null);
+        try {
+          resolve(JSON.parse(stdout.trim()));
+        } catch {
+          resolve(null);
         }
       });
     });
 
-    if (psOk) {
-      return { running: true, port: 1433, configured: true };
+    if (detected) {
+      sqlInstalled = Boolean(detected.sqlInstalled || isPortOpen);
+      sqlRunning = Boolean(detected.sqlRunning || isPortOpen);
+      ssmsInstalled = Boolean(detected.ssmsInstalled);
     }
   }
 
-  return { running: false, error: 'محرك SQL Server غير متصل حالياً' };
+  const sqlInstallerDownloaded = fs.existsSync(sqlPath) && fs.statSync(sqlPath).size > 1024 * 1024;
+  const ssmsInstallerDownloaded = fs.existsSync(ssmsPath) && fs.statSync(ssmsPath).size > 1024 * 1024;
+
+  // Verify the backend can actually log into SQL Server and initDb() has created all tables
+  let schemaReady = false;
+  if (isPortOpen || sqlRunning) {
+    const schemaCheck = await ensureBackendSchemaReady(10000);
+    schemaReady = Boolean(schemaCheck && schemaCheck.ok);
+  }
+
+  const sqlReady = Boolean((isPortOpen || sqlRunning) && schemaReady);
+
+  let recommendedStep = 'ready';
+  if (!sqlInstalled) recommendedStep = 'download_sql';
+  else if (!sqlReady) recommendedStep = 'configure_sql';
+  else if (!ssmsInstalled) recommendedStep = 'download_ssms';
+
+  return {
+    sqlInstalled,
+    sqlRunning,
+    sqlReady,
+    ssmsInstalled,
+    sqlInstallerDownloaded,
+    ssmsInstallerDownloaded,
+    sqlInstallerPath: sqlPath,
+    ssmsInstallerPath: ssmsPath,
+    recommendedStep,
+  };
+}
+
+ipcMain.handle('check-sql-environment', async () => {
+  return detectSqlEnvironment();
+});
+
+ipcMain.handle('configure-sql-database', async (event) => {
+  broadcastSqlProgress(event, { target: 'sql', step: 'configuring', percent: 30, msg: 'جاري تشغيل خدمات SQL Server وتفعيل المصادقة والصلاحيات...' });
+  await ensureSqlConfigured();
+  ensureFirewallRules();
+
+  broadcastSqlProgress(event, { target: 'sql', step: 'configuring', percent: 65, msg: 'جاري ربط قاعدة البيانات وإنشاء الجداول التلقائية...' });
+  const schemaRes = await ensureBackendSchemaReady(25000);
+  if (schemaRes.ok) {
+    broadcastSqlProgress(event, { target: 'sql', step: 'done', percent: 100, msg: 'تم تشغيل محرك SQL Server وإنشاء جداول قاعدة البيانات بنجاح!' });
+    return { success: true, running: true };
+  }
+
+  const detail = schemaRes.error ? ` (${schemaRes.error})` : '';
+  return {
+    success: false,
+    error: `تعذر إتمام الربط وإنشاء الجداول في SQL Server${detail}. تأكد من تشغيل خدمة SQL Server ثم أعد المحاولة.`,
+  };
+});
+
+ipcMain.handle('download-and-install-sql', async (event) => {
+  const { shell } = require('electron');
+  const envState = await detectSqlEnvironment();
+
+  if (envState.sqlInstalled) {
+    broadcastSqlProgress(event, { target: 'sql', step: 'service-check', percent: 40, msg: 'تم العثور على SQL Server مثبتاً بالفعل، جاري تفعيله وإنشاء الجداول...' });
+    await ensureSqlConfigured();
+    ensureFirewallRules();
+    const schemaRes = await ensureBackendSchemaReady(25000);
+    if (schemaRes.ok) {
+      broadcastSqlProgress(event, { target: 'sql', step: 'done', percent: 100, msg: 'تم تشغيل وتفعيل محرك SQL Server وجداول قاعدة البيانات بنجاح!' });
+      return { success: true, startedExisting: true };
+    }
+  }
+
+  const { sqlPath } = getInstallerPaths();
+  if (!envState.sqlInstallerDownloaded) {
+    broadcastSqlProgress(event, { target: 'sql', step: 'downloading', percent: 5, msg: 'جاري بدء تحميل مثبت SQL Server Express الرسمي...' });
+    try {
+      await downloadInstallerWithProgress({
+        url: 'https://go.microsoft.com/fwlink/p/?linkid=2216019',
+        targetPath: sqlPath,
+        targetLabel: 'SQL Server Express',
+        targetKey: 'sql',
+        fallbackBytes: 4606792,
+        event,
+      });
+    } catch (dlErr) {
+      console.error('SQL download error:', dlErr);
+      broadcastSqlProgress(event, { target: 'sql', step: 'error', percent: 0, msg: `تعذر تحميل مثبت SQL: ${dlErr.message}` });
+      return { success: false, error: dlErr.message };
+    }
+  }
+
+  broadcastSqlProgress(event, { target: 'sql', step: 'installing', percent: 95, msg: 'تم التحميل بنجاح! جاري فتح معالج تثبيت SQL Server...' });
+  ensureFirewallRules();
+  const openErr = await shell.openPath(sqlPath);
+  if (openErr) {
+    return { success: false, error: `تعذر فتح ملف التثبيت: ${openErr}` };
+  }
+  return { success: true, launched: true, installerPath: sqlPath };
+});
+
+ipcMain.handle('download-ssms-installer', async (event) => {
+  const { shell } = require('electron');
+  const envState = await detectSqlEnvironment();
+  if (envState.ssmsInstalled) {
+    broadcastSqlProgress(event, { target: 'ssms', step: 'done', percent: 100, msg: 'أداة SSMS مثبتة بالفعل على جهازك!' });
+    return { success: true, alreadyInstalled: true };
+  }
+
+  const { ssmsPath } = getInstallerPaths();
+  if (!envState.ssmsInstallerDownloaded) {
+    broadcastSqlProgress(event, { target: 'ssms', step: 'downloading', percent: 5, msg: 'جاري بدء تحميل أداة إدارة قواعد البيانات (SSMS)...' });
+    try {
+      await downloadInstallerWithProgress({
+        url: 'https://aka.ms/ssmsfullsetup',
+        targetPath: ssmsPath,
+        targetLabel: 'أداة إدارة قاعدة البيانات SSMS',
+        targetKey: 'ssms',
+        fallbackBytes: 5994632,
+        event,
+      });
+    } catch (dlErr) {
+      console.error('SSMS download error:', dlErr);
+      broadcastSqlProgress(event, { target: 'ssms', step: 'error', percent: 0, msg: `تعذر تحميل SSMS: ${dlErr.message}` });
+      return { success: false, error: dlErr.message };
+    }
+  }
+
+  broadcastSqlProgress(event, { target: 'ssms', step: 'installing', percent: 95, msg: 'تم تحميل SSMS بنجاح! جاري فتح المثبت الآن...' });
+  const openErr = await shell.openPath(ssmsPath);
+  if (openErr) {
+    return { success: false, error: `تعذر فتح مثبت SSMS: ${openErr}` };
+  }
+  return { success: true, launched: true, installerPath: ssmsPath };
+});
+
+ipcMain.handle('open-downloaded-installer', async (_event, target) => {
+  const { shell } = require('electron');
+  const { sqlPath, ssmsPath } = getInstallerPaths();
+  const targetPath = target === 'ssms' ? ssmsPath : sqlPath;
+  if (!fs.existsSync(targetPath)) {
+    return { success: false, error: 'ملف التثبيت غير موجود بعد، يرجى تحميله أولاً.' };
+  }
+  const openErr = await shell.openPath(targetPath);
+  if (openErr) return { success: false, error: openErr };
+  return { success: true };
+});
+
+ipcMain.handle('check-sql-status', async () => {
+  const envState = await detectSqlEnvironment();
+  if (envState.sqlReady) {
+    return { running: true, port: 1433, ...envState };
+  }
+  if (envState.sqlInstalled) {
+    await ensureSqlConfigured();
+    const schemaRes = await ensureBackendSchemaReady(20000);
+    if (schemaRes.ok) {
+      return { running: true, port: 1433, configured: true, ...envState, sqlReady: true };
+    }
+    return {
+      running: false,
+      error: schemaRes.error || 'تعذر ربط وتهيئة جداول قاعدة البيانات في SQL Server.',
+      ...envState,
+    };
+  }
+  return { running: false, error: 'محرك SQL Server غير متصل حالياً', ...envState };
 });
 
 ipcMain.handle('test-server-ip', async (_event, ip) => {
@@ -748,9 +1090,9 @@ ipcMain.on('start-app', async (event, config) => {
       const apiUrl = `http://127.0.0.1:${port}`;
       currentApiUrl = apiUrl;
 
-      // Check database connection via /health/db
+      // Check database connection via /health/db (allow up to 45s for first-time schema/index initialization)
       let dbReady = false;
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 45; i++) {
         try {
           await checkHealth(`${apiUrl}/health/db`);
           dbReady = true;
@@ -857,6 +1199,16 @@ async function initAndLaunch() {
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   initAndLaunch();
+
+  const repaintMainWindow = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.webContents.invalidate();
+      } catch (_) {}
+    }
+  };
+  powerMonitor.on('unlock-screen', repaintMainWindow);
+  powerMonitor.on('resume', repaintMainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

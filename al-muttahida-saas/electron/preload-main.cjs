@@ -9,11 +9,19 @@ try {
   contextBridge.exposeInMainWorld('__API_BASE_URL__', apiBaseUrl);
 
   contextBridge.exposeInMainWorld('electronAPI', {
-    // 1. SQL Server engine & setup
+    // 1. SQL Server engine, SSMS & setup
     checkSqlStatus: () => ipcRenderer.invoke('check-sql-status'),
+    checkSqlEnvironment: () => ipcRenderer.invoke('check-sql-environment'),
+    configureSqlDatabase: () => ipcRenderer.invoke('configure-sql-database'),
     downloadAndInstallSql: () => ipcRenderer.invoke('download-and-install-sql'),
+    downloadSsmsInstaller: () => ipcRenderer.invoke('download-ssms-installer'),
+    openDownloadedInstaller: (target) => ipcRenderer.invoke('open-downloaded-installer', target),
     saveCustomSqlConfig: (cfg) => ipcRenderer.invoke('save-custom-sql-config', cfg),
-    onSqlProgress: (callback) => ipcRenderer.on('sql-install-progress', (_event, data) => callback(data)),
+    onSqlProgress: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('sql-install-progress', handler);
+      return () => ipcRenderer.removeListener('sql-install-progress', handler);
+    },
 
     // 2. Network scan & client probe
     scanNetwork: () => ipcRenderer.invoke('scan-network'),

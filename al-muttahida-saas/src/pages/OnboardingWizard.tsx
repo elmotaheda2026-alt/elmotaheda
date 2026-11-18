@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import companyLogo from '../assets/company-logo-sm.jpg';
 import {
@@ -11,21 +11,46 @@ import {
   ArrowRight,
   ArrowLeft,
   Wifi,
-  Sparkles,
   ShieldCheck,
-  Building2,
   Loader2,
   Settings,
   ChevronDown,
   ChevronUp,
   Save,
-  KeyRound
+  KeyRound,
+  Download,
+  Play,
+  ExternalLink
 } from 'lucide-react';
+
+interface SqlEnvStatus {
+  sqlInstalled: boolean;
+  sqlRunning: boolean;
+  sqlReady: boolean;
+  ssmsInstalled: boolean;
+  sqlInstallerDownloaded: boolean;
+  ssmsInstallerDownloaded: boolean;
+  sqlInstallerPath: string;
+  ssmsInstallerPath: string;
+  recommendedStep: 'download_sql' | 'configure_sql' | 'download_ssms' | 'ready';
+}
+
+interface SqlProgressPayload {
+  target?: 'sql' | 'ssms';
+  step: string;
+  percent: number;
+  msg: string;
+}
 
 interface ElectronAPI {
   startApp: (config: { mode: 'server' | 'client'; serverIp?: string }) => void;
   checkSqlStatus: () => Promise<{ running: boolean; port?: number; error?: string }>;
+  checkSqlEnvironment?: () => Promise<SqlEnvStatus>;
+  configureSqlDatabase?: () => Promise<{ success: boolean; error?: string }>;
   downloadAndInstallSql: () => Promise<{ success: boolean; error?: string }>;
+  downloadSsmsInstaller?: () => Promise<{ success: boolean; path?: string; error?: string }>;
+  openDownloadedInstaller?: (target: 'sql' | 'ssms') => Promise<{ success: boolean; error?: string }>;
+  openExternalUrl?: (url: string) => Promise<{ success: boolean; error?: string }>;
   saveCustomSqlConfig?: (cfg: {
     host?: string;
     instanceName?: string;
@@ -35,7 +60,7 @@ interface ElectronAPI {
     database?: string;
     lastSuccessfulServer?: string;
   }) => Promise<{ success: boolean; error?: string }>;
-  onSqlProgress: (callback: (data: { step: string; percent: number; msg: string }) => void) => void;
+  onSqlProgress: (callback: (data: SqlProgressPayload) => void) => (() => void) | void;
   scanNetwork: () => Promise<string | null>;
   testServerIp: (ip: string) => Promise<{ ok: boolean; error?: string }>;
   closeWindow: () => void;
@@ -44,6 +69,9 @@ interface ElectronAPI {
   onAppStarted?: (callback: (data: { success: boolean; mode: string; apiUrl: string }) => void) => void;
   onNavigate?: (callback: (route: string) => void) => void;
 }
+
+const SQL_EXPRESS_URL = 'https://go.microsoft.com/fwlink/p/?linkid=2216019';
+const SSMS_DOWNLOAD_URL = 'https://aka.ms/ssmsfullsetup';
 
 declare global {
   interface Window {
@@ -59,10 +87,20 @@ export default function OnboardingWizard() {
   const [currentStep, setCurrentStep] = useState<Step>('role');
   const [selectedMode, setSelectedMode] = useState<Mode>('server');
 
-  // Server state
+  // Server & smart SQL/SSMS detection state
   const [sqlStatus, setSqlStatus] = useState<'idle' | 'checking' | 'ready' | 'error'>('idle');
-  const [sqlMessage, setSqlMessage] = useState<string>('جاري اختبار محرك البيانات...');
-  const [installProgress, setInstallProgress] = useState<{ percent: number; msg: string } | null>(null);
+  const [sqlMessage, setSqlMessage] = useState<string>('جاري فحص بيئة قواعد البيانات على الجهاز...');
+  const [sqlEnv, setSqlEnv] = useState<SqlEnvStatus | null>(null);
+  const [activeProgress, setActiveProgress] = useState<{
+    target: 'sql' | 'ssms';
+    percent: number;
+    msg: string;
+  } | null>(null);
+  const [downloadingTarget, setDownloadingTarget] = useState<'sql' | 'ssms' | null>(null);
+  const [configuringSql, setConfiguringSql] = useState<boolean>(false);
+  const [skipSsms, setSkipSsms] = useState<boolean>(false);
+  const [sqlSubError, setSqlSubError] = useState<string | null>(null);
+  const autoConfigAttemptedRef = useRef<boolean>(false);
 
   // Advanced SQL configuration
   const [showAdvancedSql, setShowAdvancedSql] = useState<boolean>(false);
@@ -109,64 +147,225 @@ export default function OnboardingWizard() {
     }
   }, [navigate]);
 
-  // Check SQL Status on Server Mode
-  const checkSqlEngine = async () => {
-    setSqlStatus('checking');
-    setSqlMessage('جاري التحقق من خدمات SQL Server وجاهزية قاعدة البيانات...');
+  useEffect(() => {
+    if (!window.electronAPI?.onSqlProgress) return;
+    const unsubscribe = window.electronAPI.onSqlProgress((data) => {
+      setActiveProgress({
+        target: data.target || 'sql',
+        percent: Math.min(100, Math.max(0, data.percent || 0)),
+        msg: data.msg || '',
+      });
+    });
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
 
-    if (!window.electronAPI || !window.electronAPI.checkSqlStatus) {
-      // Running inside browser / web mode
-      setTimeout(() => {
-        setSqlStatus('ready');
-        setSqlMessage('النظام متصل بالسيرفر المحلي بنجاح.');
-      }, 700);
+  // Configure existing SQL Server engine and database
+  const handleConfigureSql = useCallback(async () => {
+    if (!window.electronAPI?.configureSqlDatabase) return;
+    setConfiguringSql(true);
+    setSqlSubError(null);
+    setActiveProgress({ target: 'sql', percent: 35, msg: 'جاري تفعيل خدمة SQL Server وتهيئة قاعدة البيانات...' });
+    try {
+      const res = await window.electronAPI.configureSqlDatabase();
+      if (res && res.success) {
+        setActiveProgress({ target: 'sql', percent: 100, msg: 'تم تشغيل وتهيئة قاعدة البيانات بنجاح!' });
+        const env = await window.electronAPI.checkSqlEnvironment?.();
+        if (env) {
+          setSqlEnv(env);
+          if (env.sqlReady) {
+            setSqlStatus('ready');
+            setSqlMessage(
+              env.ssmsInstalled
+                ? 'محرك SQL Server وأداة SSMS جاهزان للعمل بالكامل.'
+                : 'تم تجهيز محرك SQL Server بنجاح! انتقل الآن لتحميل أداة SSMS.'
+            );
+          }
+        } else {
+          setSqlStatus('ready');
+          setSqlMessage('محرك البيانات وقاعدة بيانات AlMuttahida_New جاهزان للعمل بنجاح.');
+        }
+        setTimeout(() => setActiveProgress(null), 900);
+      } else {
+        setSqlSubError(res?.error || 'تعذر تهيئة SQL Server تلقائياً. يرجى التأكد من اكتمال التثبيت ثم إعادة الفحص.');
+        setActiveProgress(null);
+      }
+    } catch (err: any) {
+      setSqlSubError('حدث خطأ أثناء تهيئة SQL Server: ' + (err?.message || String(err)));
+      setActiveProgress(null);
+    } finally {
+      setConfiguringSql(false);
+    }
+  }, []);
+
+  // Smart SQL + SSMS environment check
+  const checkSqlEngine = useCallback(
+    async (silent = false) => {
+      if (!silent) {
+        setSqlStatus('checking');
+        setSqlSubError(null);
+        setSqlMessage('جاري فحص SQL Server وأداة SSMS على هذا الجهاز...');
+      }
+
+      if (!window.electronAPI) {
+        // Running inside browser / web mode
+        setTimeout(() => {
+          setSqlStatus('ready');
+          setSqlMessage('النظام متصل بالخادم بنجاح عبر المتصفح.');
+        }, 400);
+        return;
+      }
+
+      if (window.electronAPI.checkSqlEnvironment) {
+        try {
+          const env = await window.electronAPI.checkSqlEnvironment();
+          setSqlEnv(env);
+
+          if (env.sqlReady) {
+            setSqlStatus('ready');
+            setSqlMessage(
+              env.ssmsInstalled
+                ? 'تم التحقق: محرك SQL Server وأداة SSMS وقاعدة البيانات جاهزون للعمل بنجاح.'
+                : 'محرك SQL Server جاهز للعمل. الخطوة التالية هي تثبيت أداة الإدارة SSMS.'
+            );
+          } else if (env.sqlInstalled) {
+            setSqlStatus('error');
+            setSqlMessage('تم العثور على SQL Server مثبّتاً على الجهاز، وجاري أو يلزم تفعيل الخدمة وتهيئة قاعدة البيانات.');
+            if (!autoConfigAttemptedRef.current && !configuringSql && !downloadingTarget) {
+              autoConfigAttemptedRef.current = true;
+              void handleConfigureSql();
+            }
+          } else {
+            autoConfigAttemptedRef.current = false;
+            setSqlStatus('error');
+            setSqlMessage(
+              env.sqlInstallerDownloaded
+                ? 'ملف تثبيت SQL Server جاهز على جهازك. اضغط تشغيل المثبت ثم أكمل خطوات التثبيت.'
+                : 'لم يتم العثور على SQL Server على هذا الجهاز. يرجى تحميله وتثبيته أولاً.'
+            );
+          }
+          return;
+        } catch (err: any) {
+          if (!silent) {
+            setSqlStatus('error');
+            setSqlMessage('تعذر فحص بيئة البيانات: ' + (err?.message || String(err)));
+          }
+          return;
+        }
+      }
+
+      // Fallback for older IPC
+      if (window.electronAPI.checkSqlStatus) {
+        try {
+          const res = await window.electronAPI.checkSqlStatus();
+          if (res && res.running) {
+            setSqlStatus('ready');
+            setSqlMessage('محرك البيانات وقاعدة بيانات AlMuttahida_New جاهزان للعمل بنجاح.');
+          } else {
+            setSqlStatus('error');
+            setSqlMessage(res?.error || 'محرك SQL Server غير متصل حالياً على هذا الجهاز.');
+          }
+        } catch (err: any) {
+          setSqlStatus('error');
+          setSqlMessage('تعذر الاتصال بمحرك البيانات: ' + (err?.message || String(err)));
+        }
+      }
+    },
+    [configuringSql, downloadingTarget, handleConfigureSql]
+  );
+
+  // Auto-poll environment while waiting for user to finish installing SQL Server or SSMS
+  useEffect(() => {
+    if (currentStep !== 'connection' || selectedMode !== 'server') return;
+    if (!window.electronAPI?.checkSqlEnvironment) return;
+
+    const timer = window.setInterval(() => {
+      if (!downloadingTarget && !configuringSql) {
+        void checkSqlEngine(true);
+      }
+    }, 3500);
+
+    return () => window.clearInterval(timer);
+  }, [currentStep, selectedMode, downloadingTarget, configuringSql, checkSqlEngine]);
+
+  // Download SQL Server Express and launch installer (or auto-configure if already present)
+  const handleDownloadOrStartSql = async () => {
+    if (!window.electronAPI?.downloadAndInstallSql) {
+      window.open(SQL_EXPRESS_URL, '_blank', 'noopener,noreferrer');
       return;
     }
 
-    try {
-      const res = await window.electronAPI.checkSqlStatus();
-      if (res && res.running) {
-        setSqlStatus('ready');
-        setSqlMessage('محرك البيانات وقاعدة بيانات AlMuttahida_New جاهزان للعمل بنجاح.');
-      } else {
-        setSqlStatus('error');
-        setSqlMessage(res?.error || 'محرك SQL Server غير متصل حالياً على هذا الجهاز.');
-      }
-    } catch (err: any) {
-      setSqlStatus('error');
-      setSqlMessage('تعذر الاتصال بمحرك البيانات: ' + (err.message || String(err)));
-    }
-  };
-
-  // Start auto SQL provision
-  const handleAutoProvisionSql = async () => {
-    if (!window.electronAPI || !window.electronAPI.downloadAndInstallSql) return;
-    setSqlStatus('checking');
-    setInstallProgress({ percent: 15, msg: 'جاري تشغيل خدمات SQL Server وتفعيل المصادقة...' });
-
-    if (window.electronAPI.onSqlProgress) {
-      window.electronAPI.onSqlProgress((data) => {
-        setInstallProgress({ percent: data.percent, msg: data.msg });
-      });
-    }
+    setDownloadingTarget('sql');
+    setSqlSubError(null);
+    setActiveProgress({ target: 'sql', percent: 5, msg: 'جاري بدء تحميل SQL Server Express من مايكروسوفت...' });
 
     try {
       const res = await window.electronAPI.downloadAndInstallSql();
       if (res && res.success) {
-        setInstallProgress({ percent: 100, msg: 'اكتملت التهيئة بنجاح!' });
         setTimeout(() => {
-          checkSqlEngine();
-          setInstallProgress(null);
-        }, 1200);
+          setActiveProgress(null);
+          void checkSqlEngine(true);
+        }, 900);
       } else {
-        setSqlStatus('error');
-        setSqlMessage(res.error || 'فشلت التهيئة التلقائية.');
-        setInstallProgress(null);
+        setSqlSubError(res?.error || 'تعذر تحميل أو تشغيل مثبّت SQL Server.');
+        setActiveProgress(null);
       }
     } catch (e: any) {
-      setSqlStatus('error');
-      setSqlMessage('حدث خطأ أثناء التهيئة: ' + e.message);
-      setInstallProgress(null);
+      setSqlSubError('حدث خطأ أثناء تحميل SQL Server: ' + (e?.message || String(e)));
+      setActiveProgress(null);
+    } finally {
+      setDownloadingTarget(null);
+    }
+  };
+
+  // Download SSMS installer and launch it
+  const handleDownloadSsms = async () => {
+    if (!window.electronAPI?.downloadSsmsInstaller) {
+      window.open(SSMS_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    setDownloadingTarget('ssms');
+    setSqlSubError(null);
+    setActiveProgress({ target: 'ssms', percent: 5, msg: 'جاري تحميل أداة SSMS من مايكروسوفت...' });
+
+    try {
+      const res = await window.electronAPI.downloadSsmsInstaller();
+      if (res && res.success) {
+        setTimeout(() => {
+          setActiveProgress(null);
+          void checkSqlEngine(true);
+        }, 900);
+      } else {
+        setSqlSubError(res?.error || 'تعذر تحميل أو تشغيل مثبّت SSMS.');
+        setActiveProgress(null);
+      }
+    } catch (e: any) {
+      setSqlSubError('حدث خطأ أثناء تحميل SSMS: ' + (e?.message || String(e)));
+      setActiveProgress(null);
+    } finally {
+      setDownloadingTarget(null);
+    }
+  };
+
+  // Re-launch already downloaded installer (.exe)
+  const handleOpenInstaller = async (target: 'sql' | 'ssms') => {
+    setSqlSubError(null);
+    if (!window.electronAPI?.openDownloadedInstaller) {
+      if (target === 'sql') await handleDownloadOrStartSql();
+      else await handleDownloadSsms();
+      return;
+    }
+    try {
+      const res = await window.electronAPI.openDownloadedInstaller(target);
+      if (!res?.success) {
+        setSqlSubError(res?.error || 'تعذر فتح المثبت المحمّل. يمكنك إعادة التحميل.');
+      }
+    } catch (err: any) {
+      setSqlSubError(err?.message || String(err));
     }
   };
 
@@ -342,10 +541,6 @@ export default function OnboardingWizard() {
               <p className="text-xs text-slate-500 font-medium">معالج الإعداد والتهيئة التلقائية للنظام</p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
-            <Sparkles className="w-3.5 h-3.5" />
-            الإصدار 2.0 المحدث
-          </span>
         </div>
 
         {/* Stepper Progress Bar */}
@@ -484,16 +679,24 @@ export default function OnboardingWizard() {
           {currentStep === 'connection' && (
             <div className="space-y-6">
               {selectedMode === 'server' ? (
-                <div>
-                  <div className="text-center max-w-md mx-auto mb-6">
-                    <h2 className="text-xl font-bold text-slate-900 mb-2">فحص وتهيئة محرك قواعد البيانات</h2>
-                    <p className="text-sm text-slate-500">
-                      يقوم النظام بالتأكد من تشغيل SQL Server، تفعيل الصلاحيات، وإنشاء قاعدة البيانات تلقائياً.
+                <div className="space-y-5">
+                  <div className="text-center max-w-lg mx-auto mb-2">
+                    <h2 className="text-xl font-bold text-slate-900 mb-1.5">التجهيز الذكي لمحرك قواعد البيانات</h2>
+                    <p className="text-sm text-slate-500 leading-relaxed">
+                      يفحص النظام جهازك تلقائياً ويقودك خطوة بخطوة لتجهيز <strong className="text-slate-700">SQL Server</strong> وأداة الإدارة <strong className="text-slate-700">SSMS</strong>.
                     </p>
                   </div>
 
-                  {/* Status Banner */}
-                  <div className="p-5 rounded-2xl border border-slate-200/90 bg-slate-50 mb-6">
+                  {/* Overall Smart Status Banner */}
+                  <div
+                    className={`p-4 rounded-2xl border transition-colors ${
+                      sqlStatus === 'ready'
+                        ? 'border-emerald-200 bg-emerald-50/50'
+                        : sqlStatus === 'error'
+                        ? 'border-amber-200 bg-amber-50/40'
+                        : 'border-slate-200 bg-slate-50'
+                    }`}
+                  >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex items-start gap-3">
                         <div
@@ -514,10 +717,10 @@ export default function OnboardingWizard() {
                           )}
                         </div>
                         <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-sm font-bold text-slate-900">حالة SQL Server</span>
+                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                            <span className="text-sm font-bold text-slate-900">حالة بيئة البيانات</span>
                             <span
-                              className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                              className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
                                 sqlStatus === 'ready'
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : sqlStatus === 'error'
@@ -525,7 +728,11 @@ export default function OnboardingWizard() {
                                   : 'bg-blue-100 text-blue-800'
                               }`}
                             >
-                              {sqlStatus === 'ready' ? 'متصل وجاهز' : sqlStatus === 'error' ? 'بحاجة للتهيئة' : 'جاري الفحص...'}
+                              {sqlStatus === 'ready'
+                                ? 'المحرك جاهز'
+                                : sqlStatus === 'error'
+                                ? 'يحتاج خطوة إعداد'
+                                : 'جاري الفحص...'}
                             </span>
                           </div>
                           <p className="text-xs text-slate-600 leading-relaxed">{sqlMessage}</p>
@@ -533,49 +740,363 @@ export default function OnboardingWizard() {
                       </div>
 
                       <button
-                        onClick={checkSqlEngine}
-                        disabled={sqlStatus === 'checking'}
-                        className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5 transition shrink-0"
+                        type="button"
+                        onClick={() => void checkSqlEngine(false)}
+                        disabled={sqlStatus === 'checking' || Boolean(downloadingTarget) || configuringSql}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 transition shrink-0 disabled:opacity-50"
                       >
-                        <RefreshCw className={`w-3.5 h-3.5 ${sqlStatus === 'checking' ? 'animate-spin' : ''}`} />
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${
+                            sqlStatus === 'checking' || configuringSql ? 'animate-spin' : ''
+                          }`}
+                        />
                         إعادة فحص
                       </button>
                     </div>
-
-                    {/* Progress Bar (if provisioning) */}
-                    {installProgress && (
-                      <div className="mt-4 pt-4 border-t border-slate-200">
-                        <div className="flex justify-between text-xs text-slate-600 font-medium mb-1.5">
-                          <span>{installProgress.msg}</span>
-                          <span className="font-bold text-blue-700">{installProgress.percent}%</span>
-                        </div>
-                        <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
-                            style={{ width: `${installProgress.percent}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
 
-                  {/* Auto Provision Card when error or offline */}
-                  {sqlStatus === 'error' && !installProgress && (
-                    <div className="p-5 rounded-2xl bg-blue-50/60 border border-blue-200 mb-6">
-                      <div className="flex items-center gap-2 text-blue-900 font-bold text-sm mb-1">
-                        <Sparkles className="w-4 h-4 text-blue-600" />
-                        <span>التهيئة الآلية بضغطة زر واحدة</span>
-                      </div>
-                      <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                        اضغط الزر بالأسفل وسيقوم النظام بتفعيل صلاحيات المستخدم، وإعادة تشغيل محرك البيانات وربط قاعدة البيانات تلقائياً بدون تدخل منك.
-                      </p>
-                      <button
-                        onClick={handleAutoProvisionSql}
-                        className="w-full py-2.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white font-bold text-xs shadow-sm shadow-blue-600/30 transition flex items-center justify-center gap-2"
+                  {/* Inline Action Error Notice */}
+                  {sqlSubError && (
+                    <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{sqlSubError}</span>
+                    </div>
+                  )}
+
+                  {/* Smart Step-by-Step Checklist */}
+                  {window.electronAPI?.checkSqlEnvironment ? (
+                    <div className="space-y-3">
+                      {/* STEP A: SQL Server Engine */}
+                      {(() => {
+                        const sqlDone = Boolean(sqlEnv?.sqlReady);
+                        const sqlActive = !sqlDone;
+                        const sqlProgress = activeProgress?.target === 'sql' ? activeProgress : null;
+                        return (
+                          <div
+                            className={`rounded-2xl border p-4 transition-all ${
+                              sqlDone
+                                ? 'border-emerald-200 bg-emerald-50/30'
+                                : sqlActive
+                                ? 'border-blue-300 bg-blue-50/30 shadow-sm'
+                                : 'border-slate-200 bg-white'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <div
+                                  className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
+                                    sqlDone
+                                      ? 'bg-emerald-600 text-white'
+                                      : 'bg-[#1e40af] text-white'
+                                  }`}
+                                >
+                                  {sqlDone ? <CheckCircle2 className="w-4 h-4" /> : '1'}
+                                </div>
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h3 className="text-sm font-bold text-slate-900">
+                                      محرك قواعد البيانات (SQL Server Express)
+                                    </h3>
+                                    {sqlDone && (
+                                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                        مكتمل ويعمل
+                                      </span>
+                                    )}
+                                    {!sqlDone && sqlEnv?.sqlInstalled && (
+                                      <span className="text-[11px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                                        مثبّت وبانتظار التشغيل
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-slate-600 leading-relaxed">
+                                    {sqlDone
+                                      ? 'تم تثبيت المحرك وتشغيل الخدمة وربط قاعدة البيانات بنجاح.'
+                                      : sqlEnv?.sqlInstalled
+                                      ? 'تم العثور على SQL Server مثبّتاً على جهازك. سيقوم النظام بتفعيله وتجهيز قاعدة البيانات.'
+                                      : 'لم يتم العثور على SQL Server على هذا الجهاز. يلزم تحميله وتثبيته ليتمكن الجهاز الرئيسي من حفظ البيانات.'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {sqlProgress && (
+                              <div className="mt-3 pt-3 border-t border-blue-200/60">
+                                <div className="flex justify-between text-xs text-slate-700 font-medium mb-1.5">
+                                  <span>{sqlProgress.msg}</span>
+                                  <span className="font-bold text-blue-700">{sqlProgress.percent}%</span>
+                                </div>
+                                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
+                                    style={{ width: `${sqlProgress.percent}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {!sqlDone && !sqlProgress && (
+                              <div className="mt-3.5 flex flex-wrap items-center gap-2.5 pr-11">
+                                {sqlEnv?.sqlInstalled ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleConfigureSql()}
+                                    disabled={configuringSql}
+                                    className="px-4 py-2 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-sm transition flex items-center gap-2 disabled:opacity-60"
+                                  >
+                                    {configuringSql ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <ShieldCheck className="w-4 h-4" />
+                                    )}
+                                    تفعيل وتشغيل قاعدة البيانات الآن
+                                  </button>
+                                ) : sqlEnv?.sqlInstallerDownloaded ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleOpenInstaller('sql')}
+                                      disabled={Boolean(downloadingTarget)}
+                                      className="px-4 py-2 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-sm transition flex items-center gap-2"
+                                    >
+                                      <Play className="w-3.5 h-3.5" />
+                                      تشغيل مثبّت SQL Server
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDownloadOrStartSql()}
+                                      disabled={Boolean(downloadingTarget)}
+                                      className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      إعادة التحميل
+                                    </button>
+                                    <span className="text-[11px] text-slate-500">
+                                      أكمل خطوات التثبيت في النافذة المفتوحة وسيتقدم المعالج تلقائياً.
+                                    </span>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDownloadOrStartSql()}
+                                    disabled={Boolean(downloadingTarget)}
+                                    className="px-5 py-2.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-sm shadow-blue-600/20 transition flex items-center gap-2 disabled:opacity-60"
+                                  >
+                                    <Download className="w-4 h-4" />
+                                    تحميل وتثبيت SQL Server
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* STEP B: SSMS Tool */}
+                      {(() => {
+                        const sqlDone = Boolean(sqlEnv?.sqlReady);
+                        const ssmsDone = Boolean(sqlEnv?.ssmsInstalled);
+                        const ssmsActive = sqlDone && !ssmsDone && !skipSsms;
+                        const ssmsProgress = activeProgress?.target === 'ssms' ? activeProgress : null;
+                        return (
+                          <div
+                            className={`rounded-2xl border p-4 transition-all ${
+                              ssmsDone
+                                ? 'border-emerald-200 bg-emerald-50/30'
+                                : ssmsActive
+                                ? 'border-blue-300 bg-blue-50/30 shadow-sm'
+                                : 'border-slate-200 bg-white/80'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <div
+                                  className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
+                                    ssmsDone
+                                      ? 'bg-emerald-600 text-white'
+                                      : ssmsActive
+                                      ? 'bg-[#1e40af] text-white'
+                                      : 'bg-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  {ssmsDone ? <CheckCircle2 className="w-4 h-4" /> : '2'}
+                                </div>
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h3 className="text-sm font-bold text-slate-900">
+                                      أداة إدارة قاعدة البيانات (SSMS)
+                                    </h3>
+                                    {ssmsDone ? (
+                                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                        مثبّت وجاهز
+                                      </span>
+                                    ) : skipSsms ? (
+                                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                                        تم التخطي مؤقتاً
+                                      </span>
+                                    ) : (
+                                      <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
+                                        مطلوب للإدارة والنسخ الاحتياطي
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-slate-600 leading-relaxed">
+                                    {ssmsDone
+                                      ? 'أداة SQL Server Management Studio (SSMS) مثبّتة وجاهزة على جهازك.'
+                                      : 'تحتاج أيضاً إلى تحميل وتثبيت أداة SSMS لسهولة إدارة قاعدة البيانات، متابعة الجداول، واستعادة النسخ الاحتياطية.'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {ssmsProgress && (
+                              <div className="mt-3 pt-3 border-t border-blue-200/60">
+                                <div className="flex justify-between text-xs text-slate-700 font-medium mb-1.5">
+                                  <span>{ssmsProgress.msg}</span>
+                                  <span className="font-bold text-blue-700">{ssmsProgress.percent}%</span>
+                                </div>
+                                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
+                                    style={{ width: `${ssmsProgress.percent}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {!ssmsDone && !ssmsProgress && (
+                              <div className="mt-3.5 flex flex-wrap items-center gap-2.5 pr-11">
+                                {sqlEnv?.ssmsInstallerDownloaded ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleOpenInstaller('ssms')}
+                                      disabled={Boolean(downloadingTarget)}
+                                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                                        ssmsActive
+                                          ? 'bg-[#1e40af] hover:bg-[#1d4ed8] text-white shadow-sm'
+                                          : 'border border-slate-300 bg-white hover:bg-slate-50 text-slate-700'
+                                      }`}
+                                    >
+                                      <Play className="w-3.5 h-3.5" />
+                                      تشغيل مثبّت SSMS
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDownloadSsms()}
+                                      disabled={Boolean(downloadingTarget)}
+                                      className="px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      إعادة التحميل
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDownloadSsms()}
+                                    disabled={Boolean(downloadingTarget)}
+                                    className={`px-5 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 disabled:opacity-60 ${
+                                      ssmsActive
+                                        ? 'bg-[#1e40af] hover:bg-[#1d4ed8] text-white shadow-sm shadow-blue-600/20'
+                                        : 'border border-blue-300 bg-white hover:bg-blue-50 text-blue-700'
+                                    }`}
+                                  >
+                                    <Download className="w-4 h-4" />
+                                    تحميل وتثبيت SSMS
+                                  </button>
+                                )}
+
+                                {sqlDone && !skipSsms && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSkipSsms(true)}
+                                    className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition"
+                                  >
+                                    تخطي الآن والمتابعة
+                                  </button>
+                                )}
+                                {skipSsms && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSkipSsms(false)}
+                                    className="px-3 py-2 rounded-xl text-xs font-semibold text-blue-600 hover:bg-blue-50 transition"
+                                  >
+                                    الرجوع لخيار التثبيت
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* STEP C: Ready Summary */}
+                      <div
+                        className={`rounded-2xl border p-4 transition-all ${
+                          sqlStatus === 'ready' && (sqlEnv?.ssmsInstalled || skipSsms)
+                            ? 'border-emerald-200 bg-emerald-50/40'
+                            : 'border-slate-200 bg-slate-50/60'
+                        }`}
                       >
-                        <ShieldCheck className="w-4 h-4" />
-                        بدء التهيئة والربط الآلي الآن
-                      </button>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 ${
+                                sqlStatus === 'ready' && (sqlEnv?.ssmsInstalled || skipSsms)
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-200 text-slate-600'
+                              }`}
+                            >
+                              {sqlStatus === 'ready' && (sqlEnv?.ssmsInstalled || skipSsms) ? (
+                                <CheckCircle2 className="w-4 h-4" />
+                              ) : (
+                                '3'
+                              )}
+                            </div>
+                            <div>
+                              <h3 className="text-sm font-bold text-slate-900">
+                                قاعدة بيانات المتحدة والجاهزية النهائية
+                              </h3>
+                              <p className="text-xs text-slate-600">
+                                {sqlStatus === 'ready' && (sqlEnv?.ssmsInstalled || skipSsms)
+                                  ? 'جميع المتطلبات جاهزة! يمكنك الضغط على (متابعة) للبدء فوراً.'
+                                  : !sqlEnv?.sqlReady
+                                  ? 'سيتم ربط قاعدة البيانات تلقائياً بمجرد اكتمال تثبيت SQL Server.'
+                                  : 'تم ربط قاعدة البيانات بنجاح. أكمل تثبيت SSMS أو اختر التخطي للمتابعة.'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Clean Browser / Web Mode Fallback */
+                    <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-3">
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        أنت تستخدم المعالج عبر المتصفح. لتثبيت متطلبات قاعدة البيانات محلياً على السيرفر يمكنك التحميل مباشرة:
+                      </p>
+                      <div className="flex flex-wrap gap-2.5">
+                        <a
+                          href={SQL_EXPRESS_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-4 py-2 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold inline-flex items-center gap-2 transition"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          تحميل SQL Server Express
+                          <ExternalLink className="w-3 h-3 opacity-80" />
+                        </a>
+                        <a
+                          href={SSMS_DOWNLOAD_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-4 py-2 rounded-xl border border-blue-300 bg-white hover:bg-blue-50 text-blue-700 text-xs font-bold inline-flex items-center gap-2 transition"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          تحميل أداة SSMS
+                          <ExternalLink className="w-3 h-3 opacity-80" />
+                        </a>
+                      </div>
                     </div>
                   )}
 
@@ -817,14 +1338,33 @@ export default function OnboardingWizard() {
             )}
 
             {currentStep !== 'launch' ? (
-              <button
-                onClick={goToNextStep}
-                disabled={selectedMode === 'server' && currentStep === 'connection' && sqlStatus !== 'ready'}
-                className="px-6 py-2.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
-              >
-                متابعة
-                <ArrowLeft className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-3">
+                {selectedMode === 'server' &&
+                  currentStep === 'connection' &&
+                  sqlStatus === 'ready' &&
+                  Boolean(window.electronAPI?.checkSqlEnvironment) &&
+                  !sqlEnv?.ssmsInstalled &&
+                  !skipSsms && (
+                    <span className="text-[11px] text-amber-700 font-medium hidden sm:inline">
+                      ثبّت أداة SSMS أو اختر تخطي للمتابعة
+                    </span>
+                  )}
+                <button
+                  onClick={goToNextStep}
+                  disabled={
+                    selectedMode === 'server' &&
+                    currentStep === 'connection' &&
+                    (sqlStatus !== 'ready' ||
+                      (Boolean(window.electronAPI?.checkSqlEnvironment) &&
+                        !sqlEnv?.ssmsInstalled &&
+                        !skipSsms))
+                  }
+                  className="px-6 py-2.5 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  متابعة
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+              </div>
             ) : (
               <button
                 onClick={handleLaunchApp}

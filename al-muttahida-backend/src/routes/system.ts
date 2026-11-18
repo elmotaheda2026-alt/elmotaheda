@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import os from 'os';
-import fs from 'fs';
-import path from 'path';
-import { config } from '../config.js';
+import { config, getSavedConfig, saveAppConfig } from '../config.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 
 function isLoopbackRequest(req: any): boolean {
@@ -49,38 +47,21 @@ function getNetworkAddresses(): { primary: string; all: string[] } {
   };
 }
 
-function getConfigPath(): string {
-  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-  return path.join(appData, 'Al-Muttahida ERP', 'config.json');
-}
-
 function readConfig(): any {
-  try {
-    const file = getConfigPath();
-    if (fs.existsSync(file)) {
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
-    }
-  } catch (e) {
-    // ignore
-  }
-  return null;
+  return getSavedConfig();
 }
 
 function writeConfig(data: any): void {
-  const file = getConfigPath();
-  const dir = path.dirname(file);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+  saveAppConfig(data);
 }
 
 // GET /network-info (or /system/network-info, /api/system/network-info)
-router.get('/network-info', (_req, res) => {
+router.get('/network-info', (req, res) => {
   try {
     const net = getNetworkAddresses();
     const saved = readConfig();
     const isServer = saved?.mode !== 'client';
+    const isLoopback = isLoopbackRequest(req);
 
     res.json({
       ok: true,
@@ -89,16 +70,20 @@ router.get('/network-info', (_req, res) => {
       allIps: net.all,
       hostname: os.hostname(),
       backendPort: config.port,
-      frontendUrl: `http://${net.primary}:5173`,
+      frontendUrl: `http://${net.primary}:${config.port}`,
       apiUrl: `http://${net.primary}:${config.port}`,
-      dbConfig: sanitizeConfigForResponse(saved) || {
-        mode: 'server',
-        db: {
-          host: '127.0.0.1',
-          port: config.sql.port,
-          database: config.sql.database,
-        },
-      },
+      ...(isLoopback
+        ? {
+            dbConfig: sanitizeConfigForResponse(saved) || {
+              mode: 'server',
+              db: {
+                host: '127.0.0.1',
+                port: config.sql.port,
+                database: config.sql.database,
+              },
+            },
+          }
+        : {}),
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });

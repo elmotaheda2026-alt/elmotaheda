@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { hashPassword, uid } from '../utils.js';
 import { audit } from '../audit.js';
 
@@ -48,7 +48,7 @@ const defaultPermissions = {
 const userSchema = z.object({
   name: z.string().min(1),
   username: z.string().min(3).regex(/^[A-Za-z0-9_]+$/),
-  password: z.string().min(6).optional().or(z.literal('')),
+  password: z.string().min(8, 'كلمة المرور يجب أن تكون 8 أحرف على الأقل').optional().or(z.literal('')),
   role: z.enum(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']),
   phone: z.string().optional().nullable(),
   isActive: z.boolean().default(true),
@@ -56,7 +56,7 @@ const userSchema = z.object({
 });
 
 // GET /users/admins - List active admin users for authorization selects
-router.get('/admins', async (_req, res) => {
+router.get('/admins', requireAnyPermission('users:manage', 'payments:write'), async (_req, res) => {
   try {
     const db = await dbPromise;
     const rows = await db.all<{ id: string; name: string; username: string }>(
@@ -186,6 +186,36 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
     });
 
     return res.json({ message: 'User updated successfully' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// PATCH /users/:id/status
+router.patch('/:id/status', requirePermission('users:manage'), requireAdmin, async (req: AuthedRequest, res) => {
+  const parsed = z.object({ isActive: z.boolean() }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid status payload' });
+  }
+
+  try {
+    const db = await dbPromise;
+    const current = await db.get<{ id: string; username: string }>('SELECT id, username FROM users WHERE id = ?', req.params.id);
+    if (!current) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (req.user?.userId === req.params.id && !parsed.data.isActive) {
+      return res.status(400).json({ message: 'لا يمكنك تعطيل حسابك الحالي النشط' });
+    }
+
+    await db.run('UPDATE users SET is_active = ? WHERE id = ?', parsed.data.isActive ? 1 : 0, req.params.id);
+    await audit('user.toggle_status', 'user', req.params.id, req.user?.name || 'system', {
+      username: current.username,
+      isActive: parsed.data.isActive,
+    });
+
+    return res.json({ message: 'تم تحديث حالة المستخدم بنجاح', isActive: parsed.data.isActive });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
