@@ -31,7 +31,7 @@ const broadPermissionMap: Partial<Record<Permission, LegacyPermission[]>> = {
   'shareholders:manage': ['shareholders'],
 };
 
-const rolePermissions: Record<User['role'], Permission[]> = {
+export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
   admin: [
     'dashboard:view',
     'sales:read',
@@ -69,7 +69,6 @@ const rolePermissions: Record<User['role'], Permission[]> = {
     'payments:write',
     'payments:reverse',
     'closing:write',
-    'reports:read',
     'inventory:manage',
     'purchases:manage',
     'notifications:read',
@@ -92,6 +91,37 @@ const rolePermissions: Record<User['role'], Permission[]> = {
     'notifications:read',
   ],
 };
+
+let dynamicRolePermissions: Record<User['role'], Permission[]> = Object.fromEntries(
+  Object.entries(DEFAULT_ROLE_PERMISSIONS).map(([role, perms]) => [role, [...perms]])
+) as Record<User['role'], Permission[]>;
+
+export function setDynamicRolePermissions(custom?: Partial<Record<User['role'], Permission[]>> | null): void {
+  const next: Record<User['role'], Permission[]> = Object.fromEntries(
+    Object.entries(DEFAULT_ROLE_PERMISSIONS).map(([role, perms]) => [role, [...perms]])
+  ) as Record<User['role'], Permission[]>;
+
+  if (custom && typeof custom === 'object') {
+    (Object.keys(DEFAULT_ROLE_PERMISSIONS) as User['role'][]).forEach((role) => {
+      if (role === 'admin') {
+        next.admin = [...DEFAULT_ROLE_PERMISSIONS.admin];
+        return;
+      }
+      const list = custom[role];
+      if (Array.isArray(list)) {
+        next[role] = Array.from(new Set(list));
+      }
+    });
+  }
+
+  dynamicRolePermissions = next;
+}
+
+export function getRolePermissionsSnapshot(): Record<User['role'], Permission[]> {
+  return Object.fromEntries(
+    Object.entries(dynamicRolePermissions).map(([role, perms]) => [role, [...perms]])
+  ) as Record<User['role'], Permission[]>;
+}
 
 const MOBILE_BLOCKED_WRITE_PERMISSIONS: ReadonlySet<Permission> = new Set([
   'sales:write',
@@ -124,8 +154,8 @@ export const hasPermission = (user: User | null, permission: Permission): boolea
     }
   }
 
-  // Fallback to role defaults
-  return rolePermissions[user.role]?.includes(permission) ?? false;
+  // Fallback to dynamic role defaults
+  return dynamicRolePermissions[user.role]?.includes(permission) ?? false;
 };
 
 export const canViewNotification = (
@@ -136,20 +166,26 @@ export const canViewNotification = (
   if (isAdmin(user)) return true;
 
   const text = `${notification.title || ''} ${notification.message || ''}`;
-  if (text.includes('حركة شريك') || text.includes('مساهم') || text.includes('تسوية أرباح')) {
-    return hasPermission(user, 'shareholders:manage');
-  }
-  if (text.includes('شراء تلقائي') || text.includes('فاتورة شراء') || text.includes('مديونية المورد')) {
-    return hasPermission(user, 'purchases:manage') || hasPermission(user, 'sales:read');
-  }
-  if (text.includes('سند صرف') || text.includes('حركة خزينة') || text.includes('تكييش') || text.includes('عكس حركة مالية')) {
-    return hasPermission(user, 'payments:read') || hasPermission(user, 'payments:write');
-  }
-  if (text.includes('فاتورة جديدة') || text.includes('تعديل تعاقد') || text.includes('مرتجع') || text.includes('ترحيل قسط')) {
-    return hasPermission(user, 'sales:read') || hasPermission(user, 'sales:write');
-  }
-  if (text.includes('نسخة احتياطية') || text.includes('إعدادات')) {
-    return hasPermission(user, 'settings:manage');
-  }
-  return hasPermission(user, 'payments:read') || hasPermission(user, 'sales:read') || hasPermission(user, 'notifications:read');
-};
+    if (text.includes('حركة شريك') || text.includes('مساهم') || text.includes('تسوية أرباح') || text.includes('رأس المال')) {
+      return hasPermission(user, 'shareholders:manage');
+    }
+    if (text.includes('تقرير') || text.includes('قيود') || text.includes('ميزان') || text.includes('أرباح')) {
+      return hasPermission(user, 'reports:read');
+    }
+    if (text.includes('مستخدم') || text.includes('صلاحيات')) {
+      return hasPermission(user, 'users:manage');
+    }
+    if (text.includes('نسخة احتياطية') || text.includes('إعدادات') || text.includes('واتساب') || text.includes('حذف جميع البيانات')) {
+      return hasPermission(user, 'settings:manage');
+    }
+    if (text.includes('شراء تلقائي') || text.includes('فاتورة شراء') || text.includes('مديونية المورد')) {
+      return hasPermission(user, 'purchases:manage') || hasPermission(user, 'sales:read');
+    }
+      if (text.includes('سند صرف') || text.includes('حركة خزينة') || text.includes('تكييش') || text.includes('عكس حركة مالية') || text.includes('إغلاق')) {
+        return hasPermission(user, 'payments:read') || hasPermission(user, 'payments:write');
+      }
+      if (text.includes('فاتورة جديدة') || text.includes('تعديل تعاقد') || text.includes('مرتجع') || text.includes('ترحيل قسط')) {
+        return hasPermission(user, 'sales:read') || hasPermission(user, 'sales:write');
+      }
+      return hasPermission(user, 'payments:read') || hasPermission(user, 'sales:read') || hasPermission(user, 'notifications:read');
+    };

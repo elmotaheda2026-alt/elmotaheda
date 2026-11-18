@@ -147,7 +147,11 @@ function getCandidateConfigs(): any[] {
  * IMPORTANT: This function never throws – failures are non-fatal.
  */
 async function ensureDatabaseExists(activeConfig: any): Promise<void> {
-  const targetDb = activeConfig.database || 'AlMuttahida_New';
+  const rawDb = String(activeConfig.database || 'AlMuttahida_New').trim();
+  if (!/^[A-Za-z0-9_]{1,64}$/.test(rawDb)) {
+    throw new Error(`Invalid database name: ${rawDb}`);
+  }
+  const targetDb = rawDb;
   let masterPool: any = null;
   try {
     const masterConfig = { 
@@ -201,6 +205,13 @@ async function tryConnectMssql(): Promise<any> {
       await sql.close();
 
       const pool = await sql.connect(candidate);
+
+      pool.on('error', (poolErr: any) => {
+        console.warn('[MSSQL Pool Error] Connection interrupted (will reconnect on next query):', poolErr?.message || poolErr);
+        if (mssqlPool === pool) {
+          mssqlPool = null;
+        }
+      });
 
       const dbNameResult = await pool.request().query('SELECT DB_NAME() AS currentDb');
       const currentDb = dbNameResult.recordset[0]?.currentDb;

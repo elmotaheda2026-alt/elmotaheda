@@ -10,6 +10,7 @@ import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 interface CollectionInvoiceView {
   saleId: string;
@@ -345,38 +346,42 @@ export default function CollectionStatement() {
     );
   }, [customers, invoiceSearchTerm]);
 
+  const loadCollectionData = async () => {
+    if (isApiMode()) {
+      const [apiCustomers, apiSales, apiSalesReps] = await Promise.all([
+        api.listCustomers(),
+        api.listSalesForCollection(),
+        api.listSalesReps(),
+      ]);
+      setCustomers(apiCustomers);
+      setSales(apiSales.filter((sale) => sale.status !== 'cancelled').slice().reverse());
+      setSalesReps(apiSalesReps);
+      return;
+    }
+
+    setCustomers(getCustomers());
+    setSales(getSales().filter((sale) => sale.status !== 'cancelled').slice().reverse());
+    setSalesReps(getSalesReps());
+  };
+
+  useRealtimeSync(['sales', 'payments', 'customers'], () => {
+    void loadCollectionData();
+  });
+
   useEffect(() => {
-    const loadData = async () => {
-      if (isApiMode()) {
-        const [apiCustomers, apiSales, apiSalesReps] = await Promise.all([
-          api.listCustomers(),
-          api.listSalesForCollection(),
-          api.listSalesReps(),
-        ]);
-        setCustomers(apiCustomers);
-        setSales(apiSales.filter((sale) => sale.status !== 'cancelled').slice().reverse());
-        setSalesReps(apiSalesReps);
-        return;
-      }
-
-      setCustomers(getCustomers());
-      setSales(getSales().filter((sale) => sale.status !== 'cancelled').slice().reverse());
-      setSalesReps(getSalesReps());
-    };
-
-    void loadData();
+    void loadCollectionData();
 
     // Reload when user comes back to this tab/page (e.g. after making a payment)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void loadData();
+        void loadCollectionData();
       }
     };
 
     // Reload when localStorage changes (e.g. payment saved in another tab/component)
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === null || e.key?.includes('sales') || e.key?.includes('payments')) {
-        void loadData();
+        void loadCollectionData();
       }
     };
 

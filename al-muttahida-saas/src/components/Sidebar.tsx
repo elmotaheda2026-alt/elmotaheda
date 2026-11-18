@@ -47,74 +47,74 @@ const menuGroups: {
   };
   items: { icon: any; label: string; path: string; permission?: PermissionKey; adminOnly?: boolean }[];
 }[] = [
-  {
-    title: 'المبيعات والعملاء',
-    defaultOpen: true,
-    accent: {
-      dot: 'bg-slate-400',
-      activeBorder: 'border-blue-600',
-      activeBg: 'bg-blue-50/80',
-      activeText: 'text-blue-700',
-      activeIcon: 'text-blue-600',
+    {
+      title: 'المبيعات والعملاء',
+      defaultOpen: true,
+      accent: {
+        dot: 'bg-slate-400',
+        activeBorder: 'border-blue-600',
+        activeBg: 'bg-blue-50/80',
+        activeText: 'text-blue-700',
+        activeIcon: 'text-blue-600',
+      },
+      items: [
+        { icon: Warehouse, label: 'الرئيسية', path: '/' },
+        { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
+        { icon: Receipt, label: 'إصدار فاتورة', path: '/invoices', permission: 'sales:read' },
+        { icon: Truck, label: 'الموردين', path: '/suppliers', permission: 'sales:read' },
+        { icon: UserCheck, label: 'المناديب', path: '/sales-reps', permission: 'sales:read' },
+        { icon: Package, label: 'الأصناف والمخزون', path: '/products-inventory', permission: 'inventory:manage' },
+      ],
     },
-    items: [
-      { icon: Warehouse, label: 'الرئيسية', path: '/' },
-      { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
-      { icon: Receipt, label: 'إصدار فاتورة', path: '/invoices', permission: 'sales:read' },
-      { icon: Truck, label: 'الموردين', path: '/suppliers', permission: 'sales:read' },
-      { icon: UserCheck, label: 'المناديب', path: '/sales-reps', permission: 'sales:read' },
-      { icon: Package, label: 'الأصناف والمخزون', path: '/products-inventory', permission: 'inventory:manage' },
-    ],
-  },
-  {
-    title: 'الخزينة والتحصيل',
-    defaultOpen: true,
-    accent: {
-      dot: 'bg-slate-400',
-      activeBorder: 'border-blue-600',
-      activeBg: 'bg-blue-50/80',
-      activeText: 'text-blue-700',
-      activeIcon: 'text-blue-600',
+    {
+      title: 'الخزينة والتحصيل',
+      defaultOpen: true,
+      accent: {
+        dot: 'bg-slate-400',
+        activeBorder: 'border-blue-600',
+        activeBg: 'bg-blue-50/80',
+        activeText: 'text-blue-700',
+        activeIcon: 'text-blue-600',
+      },
+      items: [
+        { icon: Banknote, label: 'الخزينة', path: '/payments', permission: 'payments:read' },
+        { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
+        { icon: ClipboardList, label: 'المصروفات', path: '/expenses', permission: 'payments:write' },
+      ],
     },
-    items: [
-      { icon: Banknote, label: 'الخزينة', path: '/payments', permission: 'payments:read' },
-      { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
-      { icon: ClipboardList, label: 'المصروفات', path: '/expenses', permission: 'payments:write' },
-    ],
-  },
-  {
-    title: 'التقارير والمالية',
-    defaultOpen: true,
-    accent: {
-      dot: 'bg-slate-400',
-      activeBorder: 'border-blue-600',
-      activeBg: 'bg-blue-50/80',
-      activeText: 'text-blue-700',
-      activeIcon: 'text-blue-600',
+    {
+      title: 'التقارير والمالية',
+      defaultOpen: true,
+      accent: {
+        dot: 'bg-slate-400',
+        activeBorder: 'border-blue-600',
+        activeBg: 'bg-blue-50/80',
+        activeText: 'text-blue-700',
+        activeIcon: 'text-blue-600',
+      },
+      items: [
+        { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'reports:read' },
+        { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'reports:read' },
+        { icon: PieChart, label: 'الشركاء والمساهمين', path: '/shareholders', permission: 'shareholders:manage' },
+      ],
     },
-    items: [
-      { icon: ShoppingBag, label: 'سجل المبيعات', path: '/sales', permission: 'sales:read' },
-      { icon: Calculator, label: 'التقارير والقيود المالية', path: '/accounts', permission: 'reports:read' },
-      { icon: PieChart, label: 'الشركاء والمساهمين', path: '/shareholders', permission: 'shareholders:manage' },
-    ],
-  },
-  {
-    title: 'الإدارة',
-    defaultOpen: true,
-    accent: {
-      dot: 'bg-slate-400',
-      activeBorder: 'border-blue-600',
-      activeBg: 'bg-blue-50/80',
-      activeText: 'text-blue-700',
-      activeIcon: 'text-blue-600',
+    {
+      title: 'الإدارة',
+      defaultOpen: true,
+      accent: {
+        dot: 'bg-slate-400',
+        activeBorder: 'border-blue-600',
+        activeBg: 'bg-blue-50/80',
+        activeText: 'text-blue-700',
+        activeIcon: 'text-blue-600',
+      },
+      items: [
+        { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
+        { icon: Bell, label: 'مركز التنبيهات', path: '/notifications', permission: 'notifications:read' },
+        { icon: Settings, label: 'الإعدادات', path: '/settings', permission: 'settings:manage' },
+      ],
     },
-    items: [
-      { icon: Users, label: 'المستخدمين', path: '/users', permission: 'users:manage' },
-      { icon: Bell, label: 'مركز التنبيهات', path: '/notifications' },
-      { icon: Settings, label: 'الإعدادات', path: '/settings', permission: 'settings:manage' },
-    ],
-  },
-];
+  ];
 
 export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
   const navigate = useNavigate();
@@ -173,15 +173,13 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
       <aside
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className={`fixed right-0 top-0 z-40 lg:z-20 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${
-          isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
-        } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
+        className={`fixed right-0 top-0 z-40 lg:z-20 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
+          } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
         {/* Header / Branding with Custom Corporate Logo (exact h-14 match & seamless fade into Header) */}
         <div
-          className={`relative overflow-hidden h-14 shrink-0 flex items-center justify-between border-b border-slate-200 ${
-            isExpanded ? 'px-3' : 'px-2 justify-center'
-          }`}
+          className={`sidebar-brand-header relative overflow-hidden h-14 shrink-0 flex items-center justify-between border-b border-slate-200 ${isExpanded ? 'px-3' : 'px-2 justify-center'
+            }`}
           style={{
             background: isExpanded
               ? 'linear-gradient(to left, #0f1f4a 0%, #162b61 42%, #476299 66%, #9fb0d1 83%, #e5ebf5 94%, #ffffff 100%)'
@@ -257,19 +255,16 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
                                 onClose();
                               }
                             }}
-                            className={`group flex w-full items-center gap-3 rounded-lg font-bold transition-all duration-150 cursor-pointer ${
-                              isExpanded ? 'px-3 py-2 text-sm' : 'justify-center px-2 py-2.5 text-xs'
-                            } ${
-                              isActive
+                            className={`group flex w-full items-center gap-3 rounded-lg font-bold transition-all duration-150 cursor-pointer ${isExpanded ? 'px-3 py-2 text-sm' : 'justify-center px-2 py-2.5 text-xs'
+                              } ${isActive
                                 ? `border-r-4 ${group.accent.activeBorder} ${group.accent.activeBg} ${group.accent.activeText} font-bold shadow-2xs`
                                 : 'border-r-4 border-transparent text-slate-700 hover:bg-slate-100 hover:text-slate-900'
-                            }`}
+                              }`}
                           >
                             <Icon
                               size={18}
-                              className={`shrink-0 transition-colors ${
-                                isActive ? group.accent.activeIcon : 'text-slate-500 group-hover:text-slate-800'
-                              }`}
+                              className={`shrink-0 transition-colors ${isActive ? group.accent.activeIcon : 'text-slate-500 group-hover:text-slate-800'
+                                }`}
                             />
                             {isExpanded && <span className="truncate text-sm font-bold">{item.label}</span>}
                           </button>
@@ -291,11 +286,10 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
               setIsHovered(false);
               onToggle();
             }}
-            className={`flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold transition shadow-2xs active:scale-95 cursor-pointer ${
-              isOpen
+            className={`flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold transition shadow-2xs active:scale-95 cursor-pointer ${isOpen
                 ? 'text-blue-700 hover:border-blue-300 hover:bg-blue-50'
                 : 'text-slate-600 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
-            }`}
+              }`}
             title={isOpen ? 'تصغير القائمة (تفعيل التوسيع التلقائي بالماوس)' : 'تثبيت القائمة مفتوحة دائماً'}
           >
             {isOpen ? (

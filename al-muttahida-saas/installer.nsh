@@ -1,27 +1,18 @@
 !macro customCheckAppRunning
-  ; Try graceful termination first before force closing process tree (including backend child process)
-  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /t & exit 0"'
+  nsExec::Exec 'cmd /c "taskkill /f /t /im \"${APP_EXECUTABLE_FILENAME}\" >nul 2>&1 & exit 0"'
   Pop $0
-  Sleep 1500
-  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f /t & exit 0"'
-  Pop $0
-  nsExec::Exec 'cmd /c "taskkill /im \"AlMuttahida*\" /f /t & exit 0"'
-  Pop $0
-  Sleep 800
 !macroend
 
 !macro customUnInstall
   DetailPrint "Stopping running application and backend processes before uninstall..."
-  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f /t & exit 0"'
+  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f /t >nul 2>&1 & taskkill /im \"AlMuttahida*\" /f /t >nul 2>&1 & exit 0"'
   Pop $0
-  nsExec::Exec 'cmd /c "taskkill /im \"AlMuttahida*\" /f /t & exit 0"'
-  Pop $0
-  Sleep 1000
+  Sleep 200
 !macroend
 
 !macro customInstall
   DetailPrint "Ensuring existing processes are terminated..."
-  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f & exit 0"'
+  nsExec::Exec 'cmd /c "taskkill /im \"${APP_EXECUTABLE_FILENAME}\" /f >nul 2>&1 & exit 0"'
   Pop $0
 
   DetailPrint "Configuring Windows Firewall rules for AlMuttahida ERP..."
@@ -31,10 +22,10 @@
   DetailPrint "Ensuring SQL Server database service is set to automatic start..."
   nsExec::Exec 'sc config MSSQLSERVER start= auto'
   Pop $0
-  nsExec::Exec 'net start MSSQLSERVER'
+  nsExec::Exec 'sc start MSSQLSERVER'
   Pop $0
   nsExec::Exec 'sc config "MSSQL$$SQLEXPRESS" start= auto'
   Pop $0
-  nsExec::Exec 'net start "MSSQL$$SQLEXPRESS"'
+  nsExec::Exec 'sc start "MSSQL$$SQLEXPRESS"'
   Pop $0
 !macroend

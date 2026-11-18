@@ -97,6 +97,9 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
   }
 
   const data = parsed.data;
+  if (data.role === 'admin' && req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'إنشاء حساب مدير نظام يتطلب صلاحية المدير العام.' });
+  }
   if (!data.password) {
     return res.status(400).json({ message: 'Password is required' });
   }
@@ -149,6 +152,9 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
   }
 
   const data = parsed.data;
+  if (data.role === 'admin' && req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'ترقية حساب إلى مدير نظام يتطلب صلاحية المدير العام.' });
+  }
 
   try {
     const db = await dbPromise;

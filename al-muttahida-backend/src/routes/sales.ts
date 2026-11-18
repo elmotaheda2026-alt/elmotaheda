@@ -578,27 +578,32 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     const itemsBySaleId = new Map<string, SaleItemRow[]>();
 
     if (saleIds.length) {
-      const placeholders = saleIds.map(() => '?').join(',');
-      const scheduleRows = await db.all<ScheduleRow & { sale_id: string }>(
-        `SELECT * FROM installment_schedules WHERE sale_id IN (${placeholders}) ORDER BY sale_id ASC, month_index ASC`,
-        ...saleIds,
-      );
-      scheduleRows.forEach((schedule) => {
-        const saleSchedules = schedulesBySaleId.get(schedule.sale_id) || [];
-        saleSchedules.push(schedule);
-        schedulesBySaleId.set(schedule.sale_id, saleSchedules);
-      });
-
-      if (includeItems) {
-        const itemRows = await db.all<SaleItemRow & { sale_id: string }>(
-          `SELECT * FROM sale_items WHERE sale_id IN (${placeholders})`,
-          ...saleIds,
+      // Chunk IDs in batches of 500 to stay safely below SQL Server's 2,100-parameter limit
+      const chunkSize = 500;
+      for (let i = 0; i < saleIds.length; i += chunkSize) {
+        const chunk = saleIds.slice(i, i + chunkSize);
+        const placeholders = chunk.map(() => '?').join(',');
+        const scheduleRows = await db.all<ScheduleRow & { sale_id: string }>(
+          `SELECT * FROM installment_schedules WHERE sale_id IN (${placeholders}) ORDER BY sale_id ASC, month_index ASC`,
+          ...chunk,
         );
-        itemRows.forEach((item) => {
-          const saleItems = itemsBySaleId.get(item.sale_id) || [];
-          saleItems.push(item);
-          itemsBySaleId.set(item.sale_id, saleItems);
+        scheduleRows.forEach((schedule) => {
+          const saleSchedules = schedulesBySaleId.get(schedule.sale_id) || [];
+          saleSchedules.push(schedule);
+          schedulesBySaleId.set(schedule.sale_id, saleSchedules);
         });
+
+        if (includeItems) {
+          const itemRows = await db.all<SaleItemRow & { sale_id: string }>(
+            `SELECT * FROM sale_items WHERE sale_id IN (${placeholders})`,
+            ...chunk,
+          );
+          itemRows.forEach((item) => {
+            const saleItems = itemsBySaleId.get(item.sale_id) || [];
+            saleItems.push(item);
+            itemsBySaleId.set(item.sale_id, saleItems);
+          });
+        }
       }
     }
 
@@ -1084,6 +1089,16 @@ router.post('/:id/return', requirePermission('sales:write'), requireAdmin, async
     let refundReceipt: string | null = null;
 
     await db.withTransaction(async (txDb) => {
+      const lockedSale = (await txDb.get(
+        'SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        req.params.id,
+      )) as SaleRow | undefined;
+      if (!lockedSale || lockedSale.status === 'cancelled') {
+        const conflictErr: any = new Error('الفاتورة ملغاة أو مرتجعة بالفعل');
+        conflictErr.statusCode = 409;
+        throw conflictErr;
+      }
+
       const oldItems = (await txDb.all('SELECT * FROM sale_items WHERE sale_id = ?', req.params.id)) as SaleItemRow[];
       for (const item of oldItems) {
         await txDb.run(

@@ -334,10 +334,23 @@ export interface Setting {
   invoicePrefix: string;
   invoiceFooter?: string;
   whatsappRemindersEnabled?: boolean;
+  whatsappMode?: 'web_session' | 'meta_api';
   whatsappPhoneNumberId?: string;
   whatsappAccessToken?: string;
   whatsappTemplateName?: string;
   whatsappTemplateLanguage?: string;
+  whatsappMessageTemplate?: string;
+  whatsappReminderOffsets?: number[];
+  whatsappMinDelaySec?: number;
+  whatsappMaxDelaySec?: number;
+  whatsappDailyLimit?: number;
+  whatsappBatchSize?: number;
+  whatsappBatchPauseSec?: number;
+  whatsappSendStartHour?: string;
+  whatsappSendEndHour?: string;
+  whatsappAntiBanVariation?: boolean;
+  whatsappAutoSkipInvalid?: boolean;
+  rolePermissions?: Partial<Record<User['role'], Permission[]>>;
   isConfigured?: boolean;
 }
 

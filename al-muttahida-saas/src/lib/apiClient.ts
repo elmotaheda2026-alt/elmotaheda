@@ -264,6 +264,14 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   listSales: () => requestArray<any>('/sales?includeItems=true', 'sales'),
+  listSalesPaged: (filters: { page?: number; limit?: number; search?: string; status?: string; includeItems?: boolean } = {}) => {
+    const params = new URLSearchParams({ includeItems: filters.includeItems === false ? 'false' : 'true' });
+    params.set('page', String(filters.page || 1));
+    params.set('limit', String(filters.limit || 50));
+    if (filters.search) params.set('search', filters.search);
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+    return request<{ total: number; page: number; limit: number; sales: any[] }>(`/sales?${params.toString()}`);
+  },
   searchSales: (filters: { search?: string; limit?: number; includeItems?: boolean } = {}) => {
     const params = new URLSearchParams({ includeItems: filters.includeItems === false ? 'false' : 'true' });
     if (filters.search) params.set('search', filters.search);
@@ -370,6 +378,26 @@ export const api = {
     const query = params.toString();
     return requestArray<any>(`/payments${query ? `?${query}` : ''}`, 'payments');
   },
+  listPaymentsPaged: (filters: { page?: number; limit?: number; date?: string; search?: string } = {}) => {
+    const params = new URLSearchParams({ includeMeta: '1' });
+    params.set('page', String(filters.page || 1));
+    params.set('limit', String(filters.limit || 100));
+    if (filters.date) params.set('date', filters.date);
+    if (filters.search) params.set('search', filters.search);
+    return request<{ total: number; page: number; limit: number; totalPages: number; payments: any[] }>(`/payments?${params.toString()}`);
+  },
+  getPaymentsSummary: (date?: string) =>
+    request<{
+      totalCount: number;
+      totalIn: number;
+      totalOut: number;
+      totalExpenses: number;
+      netCash: number;
+      todayIn: number;
+      todayOut: number;
+      todayExpenses: number;
+      todayNet: number;
+    }>(`/payments/summary${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   createPayment: (payload: any) => request<{ id: string; receiptNumber: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
   updatePayment: (id: string, payload: { amount: number; date: string; description?: string }) =>
     request<{ message: string }>(`/payments/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
@@ -378,6 +406,21 @@ export const api = {
   getCollectionRate: () => request<{ billed: number; collected: number; rate: number }>('/reports/collection-rate'),
   getDailyCash: (date: string) => request<{ date: string; cashIn: number; cashOut: number; net: number }>(`/reports/daily-cash?date=${encodeURIComponent(date)}`),
   listCustomers: () => requestArray<any>('/customers', 'customers'),
+  listCustomersPaged: (filters: { page?: number; limit?: number; search?: string; filter?: string } = {}) => {
+    const params = new URLSearchParams();
+    params.set('page', String(filters.page || 1));
+    params.set('limit', String(filters.limit || 50));
+    if (filters.search) params.set('search', filters.search);
+    if (filters.filter && filters.filter !== 'all') params.set('filter', filters.filter);
+    return request<{
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+      stats: { totalCount: number; debtorsCount: number; suedCount: number; totalReceivables: number };
+      customers: any[];
+    }>(`/customers?${params.toString()}`);
+  },
   createCustomer: (payload: any) => request<{ id: string }>('/customers', { method: 'POST', body: JSON.stringify(payload) }),
   updateCustomer: (id: string, payload: any) => request<{ message: string }>(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   toggleCustomerSued: (id: string, isSued: boolean, suedDate?: string) =>
@@ -459,6 +502,11 @@ export const api = {
   // Settings
   getSettings: () => request<any>('/settings'),
   updateSettings: (payload: any) => request<{ message: string }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  updateRolePermissions: (rolePermissions: Record<string, string[]>) =>
+    request<{ message: string; rolePermissions: Record<string, string[]> }>('/settings/role-permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ rolePermissions }),
+    }),
   getOpeningBalances: () => request<any>('/settings/opening-balances'),
   updateOpeningBalances: (payload: any) => request<{ message: string }>('/settings/opening-balances', { method: 'PUT', body: JSON.stringify(payload) }),
   clearAllData: () => request<{ message: string }>('/settings/clear-data', { method: 'POST' }),

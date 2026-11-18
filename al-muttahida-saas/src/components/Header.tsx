@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bell, HelpCircle, LogOut, Mail, Menu, Search, Shield, User, Wifi, WifiOff } from 'lucide-react';
+import { Bell, HelpCircle, LogOut, Mail, Menu, Moon, Search, Shield, Sun, User, Wifi, WifiOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getNotifications, markAllNotificationsRead, markNotificationRead, syncNotifications } from '../lib/storage';
@@ -16,7 +16,23 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [isConnected, setIsConnected] = useState<boolean | null>(true);
+  const [isDark, setIsDark] = useState(() => {
+    try {
+      return localStorage.getItem('almuttahida_theme') === 'dark';
+    } catch {
+      return false;
+    }
+  });
   const [showNotifications, setShowNotifications] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark);
+    try {
+      localStorage.setItem('almuttahida_theme', isDark ? 'dark' : 'light');
+    } catch {
+      // Ignore storage errors
+    }
+  }, [isDark]);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showHelpGuide, setShowHelpGuide] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -192,6 +208,16 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
                 <span>غير متصل بالخادم</span>
               </div>
             )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsDark((prev) => !prev)}
+            title={isDark ? 'تفعيل الوضع النهاري' : 'تفعيل الوضع الليلي'}
+            aria-label={isDark ? 'تفعيل الوضع النهاري' : 'تفعيل الوضع الليلي'}
+            className="rounded-xl p-2 text-slate-600 hover:bg-slate-100 hover:text-blue-700 transition-colors cursor-pointer"
+          >
+            {isDark ? <Sun size={18} className="text-amber-400" /> : <Moon size={18} />}
           </button>
 
           <button

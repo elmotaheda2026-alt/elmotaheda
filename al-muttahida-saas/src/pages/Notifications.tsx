@@ -20,6 +20,7 @@ import { getNotifications, markNotificationRead, markAllNotificationsRead, syncN
 import { useAuth } from '../context/AuthContext';
 import { canViewNotification } from '../lib/permissions';
 import { formatDateDisplay, today } from '../lib/dateUtils';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 type FilterType =
   | 'all'
@@ -263,24 +264,23 @@ export default function Notifications() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
 
-  useEffect(() => {
-    let active = true;
-    const loadNotifications = async () => {
-      try {
-        await syncNotifications();
-      } catch (error) {
-        console.error('Failed to sync notifications:', error);
-      }
-      if (active) {
-        setNotifications(getNotifications().filter((n) => canViewNotification(user, n)));
-      }
-    };
+  const refreshNotifications = async () => {
+    try {
+      await syncNotifications();
+    } catch (error) {
+      console.error('Failed to sync notifications:', error);
+    }
+    setNotifications(getNotifications().filter((n) => canViewNotification(user, n)));
+  };
 
-    loadNotifications();
-    return () => {
-      active = false;
-    };
+  useEffect(() => {
+    void refreshNotifications();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  useRealtimeSync(['notifications', 'sales', 'payments'], () => {
+    void refreshNotifications();
+  });
 
   const handleMarkRead = async (id: string) => {
     setNotifications((current) =>

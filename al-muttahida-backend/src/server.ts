@@ -10,9 +10,10 @@ import { config } from './config.js';
 import rateLimit from 'express-rate-limit';
 import { requestLogger } from './middleware/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
-import swaggerUi from 'swagger-ui-express';
-import swaggerJsdoc from 'swagger-jsdoc';
-import { initDb, mssqlPool } from './db.js';
+import jwt from 'jsonwebtoken';
+import { subscribeSseClient, broadcastDataChange } from './realtime.js';
+import { dbPromise, initDb, mssqlPool } from './db.js';
+import { setRolePermissions } from './permissions.js';
 import authRoutes from './routes/auth.js';
 import salesRoutes from './routes/sales.js';
 import paymentRoutes from './routes/payments.js';
@@ -37,9 +38,10 @@ import { startAutoBackupScheduler } from './autoBackupService.js';
 
 async function bootstrap() {
   const app = express();
-  const allowedOrigins = (process.env.CORS_ORIGIN || '*')
+  const allowedOrigins = (process.env.CORS_ORIGIN || '')
     .split(',')
-    .map((o) => o.trim());
+    .map((o) => o.trim())
+    .filter(Boolean);
 
   app.use(
     cors({
@@ -188,19 +190,91 @@ async function bootstrap() {
 
   // Swagger setup (development only)
   if (process.env.NODE_ENV !== 'production') {
-    const swaggerSpec = swaggerJsdoc({
-      definition: {
-        openapi: '3.0.0',
-        info: { title: 'Al-Muttahida API', version: '1.0.0' },
-      },
-      apis: ['./src/routes/*.ts'],
-    });
-    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+    try {
+      const [{ default: swaggerUi }, { default: swaggerJsdoc }] = await Promise.all([
+        import('swagger-ui-express'),
+        import('swagger-jsdoc'),
+      ]);
+      const swaggerSpec = swaggerJsdoc({
+        definition: {
+          openapi: '3.0.0',
+          info: { title: 'Al-Muttahida API', version: '1.0.0' },
+        },
+        apis: ['./src/routes/*.ts'],
+      });
+      app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+    } catch {
+      // Swagger is optional and omitted in production bundles
+    }
   }
 
   // System & Network configuration routes
   app.use('/system', systemRoutes);
   app.use('/api/system', systemRoutes);
+
+  // Real-Time Server-Sent Events (SSE) stream for 20-PC instant LAN sync
+  const eventsHandler = (req: express.Request, res: express.Response) => {
+    const authHeader = req.headers.authorization || '';
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : queryToken.trim();
+    if (!token) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    try {
+      jwt.verify(token, config.jwtSecret);
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token' });
+    }
+    subscribeSseClient(req, res);
+    return undefined;
+  };
+  app.get('/events', eventsHandler);
+  app.get('/api/events', eventsHandler);
+
+  // Automatic real-time broadcast to all 20 LAN PCs whenever any mutation succeeds
+  app.use((req, res, next) => {
+    const method = req.method.toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+      return next();
+    }
+    res.on('finish', () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      const p = req.path.replace(/^\/api/, '').toLowerCase();
+      if (p.startsWith('/customers')) {
+        broadcastDataChange('customers', method);
+      } else if (p.startsWith('/sales') || p.startsWith('/invoices') || p.startsWith('/contracts') || p.startsWith('/installments')) {
+        broadcastDataChange('sales', method);
+        broadcastDataChange('customers', method);
+        broadcastDataChange('products', method);
+        broadcastDataChange('notifications', method);
+      } else if (p.startsWith('/payments')) {
+        broadcastDataChange('payments', method);
+        broadcastDataChange('sales', method);
+        broadcastDataChange('customers', method);
+        broadcastDataChange('notifications', method);
+      } else if (p.startsWith('/products')) {
+        broadcastDataChange('products', method);
+      } else if (p.startsWith('/suppliers') || p.startsWith('/purchases')) {
+        broadcastDataChange('suppliers', method);
+        broadcastDataChange('products', method);
+        broadcastDataChange('payments', method);
+      } else if (p.startsWith('/expenses')) {
+        broadcastDataChange('expenses', method);
+        broadcastDataChange('payments', method);
+      } else if (p.startsWith('/shareholders')) {
+        broadcastDataChange('shareholders', method);
+        broadcastDataChange('payments', method);
+      } else if (p.startsWith('/notifications')) {
+        broadcastDataChange('notifications', method);
+      } else if (p.startsWith('/closing')) {
+        broadcastDataChange('payments', method);
+        broadcastDataChange('sales', method);
+      } else if (p.startsWith('/settings')) {
+        broadcastDataChange('settings', method);
+      }
+    });
+    return next();
+  });
 
   // Business domain routes
   app.use('/auth', authRoutes);
@@ -267,10 +341,13 @@ async function bootstrap() {
   app.use('/api/document-templates', documentTemplatesRoutes);
 
   // Serve built frontend static files so LAN browsers can open http://<server-ip>:4000 directly
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const currentDir =
+    typeof __dirname !== 'undefined'
+      ? __dirname
+      : path.dirname(fileURLToPath(import.meta.url));
   const candidateFrontendDirs = [
-    path.resolve(__dirname, '..', 'frontend'),
-    path.resolve(__dirname, '..', '..', 'al-muttahida-saas', 'dist'),
+    path.resolve(currentDir, '..', 'frontend'),
+    path.resolve(currentDir, '..', '..', 'al-muttahida-saas', 'dist'),
   ];
   const frontendDir = candidateFrontendDirs.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
   if (frontendDir) {
@@ -292,9 +369,29 @@ async function bootstrap() {
     startDiscoveryService();
   });
 
+  const syncRolePermissionsFromDb = async () => {
+    try {
+      const db = await dbPromise;
+      const col = await db.get<any>(`SELECT COL_LENGTH('settings', 'role_permissions_json') AS len`);
+      if (!col?.len) return;
+      const row = await db.get<{ role_permissions_json?: string | null }>('SELECT TOP 1 role_permissions_json FROM settings');
+      if (row?.role_permissions_json) {
+        const parsed = JSON.parse(row.role_permissions_json);
+        if (parsed && typeof parsed === 'object') {
+          setRolePermissions(parsed);
+        }
+      }
+    } catch {
+      // Ignore startup role permission sync errors
+    }
+  };
+
   // Initialize Database in the background and retry every 4s until connected & schema initialized
   let dbRetryTimer: ReturnType<typeof setInterval> | null = null;
   ensureDbInitialized().then((connected) => {
+    if (connected) {
+      void syncRolePermissionsFromDb();
+    }
     if (!connected && !dbRetryTimer) {
       dbRetryTimer = setInterval(() => {
         if (dbStatus.connected) {
@@ -305,6 +402,9 @@ async function bootstrap() {
           return;
         }
         void ensureDbInitialized().then((ok) => {
+          if (ok) {
+            void syncRolePermissionsFromDb();
+          }
           if (ok && dbRetryTimer) {
             clearInterval(dbRetryTimer);
             dbRetryTimer = null;

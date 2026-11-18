@@ -7,7 +7,7 @@ import { hashPassword, uid } from '../utils.js';
 import { getAutoBackupConfig, updateAutoBackupConfig, performAutoBackup } from '../autoBackupService.js';
 
 const router = Router();
-router.use(requireAuth, requirePermission('settings:manage'));
+router.use(requireAuth, requireAdmin);
 
 const BACKUP_VERSION = 1;
 const BACKUP_KEY_NAMES = [

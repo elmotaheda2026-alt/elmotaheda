@@ -16,6 +16,7 @@ import { Product } from '../types';
 import { getProducts, createProduct, updateProduct, deleteProduct, getSales, getPurchases } from '../lib/storage';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 const PRODUCT_RENDER_LIMIT = 100;
 
@@ -77,6 +78,10 @@ export default function ProductsInventory() {
     didLoadRef.current = true;
     void loadData();
   }, []);
+
+  useRealtimeSync(['products', 'sales', 'suppliers'], () => {
+    void loadData();
+  });
 
   useEffect(() => {
     if (!pendingRenderMeasureRef.current) return;

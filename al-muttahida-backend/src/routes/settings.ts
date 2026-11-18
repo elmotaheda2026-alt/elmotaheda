@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
+import { getRolePermissions, setRolePermissions, validPermissions } from '../permissions.js';
+import { broadcastDataChange } from '../realtime.js';
+import type { Permission, UserRole } from '../types.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -16,7 +19,57 @@ const settingsSchema = z.object({
   currency: z.string().min(1),
   invoicePrefix: z.string().min(1),
   invoiceFooter: z.string().optional().nullable(),
+  whatsappRemindersEnabled: z.boolean().optional(),
+  whatsappMode: z.enum(['web_session', 'meta_api']).optional(),
+  whatsappPhoneNumberId: z.string().optional().nullable(),
+  whatsappAccessToken: z.string().optional().nullable(),
+  whatsappTemplateName: z.string().optional().nullable(),
+  whatsappTemplateLanguage: z.string().optional().nullable(),
+  whatsappMessageTemplate: z.string().optional().nullable(),
+  whatsappReminderOffsets: z.array(z.number()).optional(),
+  whatsappMinDelaySec: z.number().nonnegative().optional(),
+  whatsappMaxDelaySec: z.number().nonnegative().optional(),
+  whatsappDailyLimit: z.number().positive().optional(),
+  whatsappBatchSize: z.number().positive().optional(),
+  whatsappBatchPauseSec: z.number().nonnegative().optional(),
+  whatsappSendStartHour: z.string().optional().nullable(),
+  whatsappSendEndHour: z.string().optional().nullable(),
+  whatsappAntiBanVariation: z.boolean().optional(),
+  whatsappAutoSkipInvalid: z.boolean().optional(),
 });
+
+async function ensureWhatsappConfigColumn(db: any) {
+  await db.run(`
+    IF COL_LENGTH('settings', 'whatsapp_config_json') IS NULL
+    BEGIN
+      ALTER TABLE settings ADD whatsapp_config_json NVARCHAR(MAX) NULL;
+    END
+    IF COL_LENGTH('settings', 'role_permissions_json') IS NULL
+    BEGIN
+      ALTER TABLE settings ADD role_permissions_json NVARCHAR(MAX) NULL;
+    END
+  `);
+}
+
+function parseRolePermissionsJson(raw?: string | null): Partial<Record<UserRole, Permission[]>> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseWhatsappConfig(raw?: string | null) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 const openingBalancesSchema = z.object({
   startingCashBalance: z.number().nonnegative(),
@@ -26,9 +79,10 @@ const openingBalancesSchema = z.object({
 });
 
 // GET /settings
-router.get('/', async (_req, res) => {
+router.get('/', async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
+    await ensureWhatsappConfigColumn(db);
     let settings = await db.get<any>('SELECT TOP 1 * FROM settings');
     
     // Seed default settings if not exists
@@ -50,6 +104,13 @@ router.get('/', async (_req, res) => {
       settings.tax_rate = 0;
     }
 
+    const waConfig = parseWhatsappConfig(settings.whatsapp_config_json);
+    const savedRolePerms = parseRolePermissionsJson(settings.role_permissions_json);
+    const effectiveRolePermissions = savedRolePerms ? setRolePermissions(savedRolePerms) : getRolePermissions();
+    const canManageSettings =
+      req.user?.role === 'admin' ||
+      (Array.isArray(req.user?.permissions) && req.user.permissions.includes('settings:manage'));
+
     return res.json({
       companyName: settings.company_name,
       companyAddress: settings.company_address,
@@ -60,6 +121,24 @@ router.get('/', async (_req, res) => {
       invoicePrefix: settings.invoice_prefix,
       baselineCapital: Number(settings.baseline_capital || 8500000),
       invoiceFooter: settings.invoice_footer,
+      whatsappRemindersEnabled: Boolean(waConfig.whatsappRemindersEnabled),
+      whatsappMode: waConfig.whatsappMode === 'meta_api' ? 'meta_api' : 'web_session',
+      whatsappPhoneNumberId: canManageSettings ? (waConfig.whatsappPhoneNumberId || '') : '',
+      whatsappAccessToken: canManageSettings ? (waConfig.whatsappAccessToken || '') : '',
+      whatsappTemplateName: waConfig.whatsappTemplateName || 'installment_reminder',
+      whatsappTemplateLanguage: waConfig.whatsappTemplateLanguage || 'ar',
+      whatsappMessageTemplate: waConfig.whatsappMessageTemplate || '',
+      whatsappReminderOffsets: Array.isArray(waConfig.whatsappReminderOffsets) ? waConfig.whatsappReminderOffsets : [-2, -1, 0],
+      whatsappMinDelaySec: Number.isFinite(waConfig.whatsappMinDelaySec) ? waConfig.whatsappMinDelaySec : 15,
+      whatsappMaxDelaySec: Number.isFinite(waConfig.whatsappMaxDelaySec) ? waConfig.whatsappMaxDelaySec : 45,
+      whatsappDailyLimit: Number.isFinite(waConfig.whatsappDailyLimit) ? waConfig.whatsappDailyLimit : 80,
+      whatsappBatchSize: Number.isFinite(waConfig.whatsappBatchSize) ? waConfig.whatsappBatchSize : 15,
+      whatsappBatchPauseSec: Number.isFinite(waConfig.whatsappBatchPauseSec) ? waConfig.whatsappBatchPauseSec : 180,
+      whatsappSendStartHour: waConfig.whatsappSendStartHour || '10:00',
+      whatsappSendEndHour: waConfig.whatsappSendEndHour || '21:00',
+      whatsappAntiBanVariation: waConfig.whatsappAntiBanVariation !== false,
+      whatsappAutoSkipInvalid: waConfig.whatsappAutoSkipInvalid !== false,
+      rolePermissions: effectiveRolePermissions,
     });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -74,14 +153,34 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
   }
 
   const data = parsed.data;
+  const whatsappConfigJson = JSON.stringify({
+    whatsappRemindersEnabled: Boolean(data.whatsappRemindersEnabled),
+    whatsappMode: data.whatsappMode === 'meta_api' ? 'meta_api' : 'web_session',
+    whatsappPhoneNumberId: data.whatsappPhoneNumberId || '',
+    whatsappAccessToken: data.whatsappAccessToken || '',
+    whatsappTemplateName: data.whatsappTemplateName || 'installment_reminder',
+    whatsappTemplateLanguage: data.whatsappTemplateLanguage || 'ar',
+    whatsappMessageTemplate: data.whatsappMessageTemplate || '',
+    whatsappReminderOffsets: Array.isArray(data.whatsappReminderOffsets) ? data.whatsappReminderOffsets : [-2, -1, 0],
+    whatsappMinDelaySec: Number.isFinite(data.whatsappMinDelaySec) ? data.whatsappMinDelaySec : 15,
+    whatsappMaxDelaySec: Number.isFinite(data.whatsappMaxDelaySec) ? data.whatsappMaxDelaySec : 45,
+    whatsappDailyLimit: Number.isFinite(data.whatsappDailyLimit) ? data.whatsappDailyLimit : 80,
+    whatsappBatchSize: Number.isFinite(data.whatsappBatchSize) ? data.whatsappBatchSize : 15,
+    whatsappBatchPauseSec: Number.isFinite(data.whatsappBatchPauseSec) ? data.whatsappBatchPauseSec : 180,
+    whatsappSendStartHour: data.whatsappSendStartHour || '10:00',
+    whatsappSendEndHour: data.whatsappSendEndHour || '21:00',
+    whatsappAntiBanVariation: data.whatsappAntiBanVariation !== false,
+    whatsappAutoSkipInvalid: data.whatsappAutoSkipInvalid !== false,
+  });
 
   try {
     const db = await dbPromise;
+    await ensureWhatsappConfigColumn(db);
     const existing = await db.get('SELECT TOP 1 company_name FROM settings');
     if (!existing) {
       await db.run(
-        `INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer, whatsapp_config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         data.companyName,
         data.companyAddress,
         data.companyPhone,
@@ -89,13 +188,14 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
         data.taxRate,
         data.currency,
         data.invoicePrefix,
-        data.invoiceFooter || null
+        data.invoiceFooter || null,
+        whatsappConfigJson
       );
     } else {
       await db.run(
         `UPDATE settings
          SET company_name = ?, company_address = ?, company_phone = ?, company_email = ?,
-             tax_rate = ?, currency = ?, invoice_prefix = ?, invoice_footer = ?`,
+             tax_rate = ?, currency = ?, invoice_prefix = ?, invoice_footer = ?, whatsapp_config_json = ?`,
         data.companyName,
         data.companyAddress,
         data.companyPhone,
@@ -103,7 +203,8 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
         data.taxRate,
         data.currency,
         data.invoicePrefix,
-        data.invoiceFooter || null
+        data.invoiceFooter || null,
+        whatsappConfigJson
       );
     }
 
@@ -204,6 +305,61 @@ router.post('/clear-data', requirePermission('settings:manage'), requireAdmin, a
     
     await audit('database.clear', 'database', 'global', req.user?.name || 'system', {});
     return res.json({ message: 'تم حذف جميع البيانات بنجاح' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+const rolePermissionsUpdateSchema = z.object({
+  rolePermissions: z.record(
+    z.enum(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']),
+    z.array(z.string())
+  ),
+});
+
+// PUT /settings/role-permissions (Admin only)
+router.put('/role-permissions', requireAdmin, async (req: AuthedRequest, res) => {
+  const parsed = rolePermissionsUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid role permissions payload', errors: parsed.error.format() });
+  }
+
+  try {
+    const db = await dbPromise;
+    await ensureWhatsappConfigColumn(db);
+
+    const sanitized: Partial<Record<UserRole, Permission[]>> = {};
+    for (const [role, perms] of Object.entries(parsed.data.rolePermissions)) {
+      if (role === 'admin') continue;
+      sanitized[role as UserRole] = Array.from(
+        new Set(perms.filter((p): p is Permission => validPermissions.includes(p as Permission)))
+      );
+    }
+
+    const updatedMatrix = setRolePermissions(sanitized);
+    const jsonPayload = JSON.stringify(updatedMatrix);
+
+    const existing = await db.get('SELECT TOP 1 company_name FROM settings');
+    if (existing) {
+      await db.run('UPDATE settings SET role_permissions_json = ?', jsonPayload);
+    } else {
+      await db.run(
+        `INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer, role_permissions_json)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+        'شركة المتحدة',
+        'الشارع المقابل للبوابة الخلفية للمستشفى العام',
+        '01001207474',
+        'info@almuttahida.com',
+        'جنيه',
+        'INV',
+        'شكراً للتعامل معنا - شركة المتحدة',
+        jsonPayload
+      );
+    }
+
+    await audit('settings.role_permissions.update', 'settings', 'role_permissions', req.user?.name || 'admin', updatedMatrix);
+    broadcastDataChange('settings', 'update');
+    return res.json({ message: 'تم تحديث صلاحيات الأدوار بنجاح', rolePermissions: updatedMatrix });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

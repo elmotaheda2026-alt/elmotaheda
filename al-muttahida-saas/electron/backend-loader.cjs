@@ -8,6 +8,7 @@ const http = require('http');
 const os = require('os');
 
 let backendProcess = null;
+let isStopping = false;
 
 function getAppDataDir() {
   const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -22,13 +23,17 @@ function getBackendPath() {
 
   // Packaged extraResources
   if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'backend', 'server.bundle.cjs'));
     candidates.push(path.join(process.resourcesPath, 'backend', 'server.js'));
+    candidates.push(path.join(process.resourcesPath, 'backend', 'dist', 'server.bundle.cjs'));
     candidates.push(path.join(process.resourcesPath, 'backend', 'dist', 'server.js'));
     candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'backend', 'server.js'));
   }
 
   // Development paths
+  candidates.push(path.join(__dirname, '..', '..', 'al-muttahida-backend', 'dist', 'server.bundle.cjs'));
   candidates.push(path.join(__dirname, '..', '..', 'al-muttahida-backend', 'dist', 'server.js'));
+  candidates.push(path.join(__dirname, '..', 'backend', 'server.bundle.cjs'));
   candidates.push(path.join(__dirname, '..', 'backend', 'server.js'));
 
   for (const p of candidates) {
@@ -90,6 +95,7 @@ function checkHealth(url) {
  * @returns {Promise<number>} The port the backend is listening on
  */
 function startBackend() {
+  isStopping = false;
   return new Promise(async (resolve, reject) => {
     // Check if backend is ALREADY running on port 4000
     try {
@@ -226,11 +232,20 @@ function startBackend() {
     backendProcess.on('exit', (code) => {
       appendLog(`EXIT: code ${code}`);
       console.log(`Backend process exited with code ${code}`);
+      backendProcess = null;
       if (!started) {
         const details = stderrLogs.slice(-5).join(' ').trim();
         reject(new Error(`Backend process exited with code ${code}${details ? `: ${details}` : ''}`));
+      } else if (!isStopping) {
+        appendLog('WARN: Backend exited unexpectedly after startup; scheduling auto-restart in 1.5s');
+        setTimeout(() => {
+          if (!isStopping) {
+            startBackend().catch((restartErr) => {
+              appendLog(`ERROR: Auto-restart failed: ${restartErr.message}`);
+            });
+          }
+        }, 1500);
       }
-      backendProcess = null;
     });
 
     // Actively poll health check every 400ms up to 25 seconds
@@ -265,9 +280,22 @@ function startBackend() {
 }
 
 /**
+ * Ensure the backend server is alive and healthy (restarts if dropped during sleep).
+ */
+async function ensureBackendRunning(port = 4000) {
+  if (isStopping) return;
+  try {
+    await checkHealth(`http://127.0.0.1:${port}/health`);
+  } catch (_) {
+    await startBackend();
+  }
+}
+
+/**
  * Stop the backend server
  */
 function stopBackend() {
+  isStopping = true;
   if (backendProcess) {
     try {
       if (backendProcess.send) {
@@ -304,4 +332,4 @@ function stopBackend() {
   }
 }
 
-module.exports = { startBackend, stopBackend, checkHealth, getAppDataDir };
+module.exports = { startBackend, stopBackend, checkHealth, ensureBackendRunning, getAppDataDir };

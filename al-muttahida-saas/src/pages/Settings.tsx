@@ -29,6 +29,7 @@ import {
 import QRCode from 'qrcode';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
+import RolePermissionsManager from '../components/RolePermissionsManager';
 import { Setting, OpeningBalances } from '../types';
 import {
   clearAllData,
@@ -52,6 +53,7 @@ import {
 import { hasPermission } from '../lib/permissions';
 import { scanLanForServer } from '../lib/lanDiscovery';
 import DocumentTemplatesManager from '../components/DocumentTemplatesManager';
+import WhatsappControlCenter from '../components/WhatsappControlCenter';
 
 async function fetchNetworkInfo(retries = 2, delayMs = 600) {
   const currentBase = getServerApiUrl();
@@ -268,16 +270,16 @@ export default function Settings() {
   };
 
   const [searchParams] = useSearchParams();
-  const requestedTab = searchParams.get('tab') as 'company' | 'documents' | 'network' | 'backup' | 'balances' | 'danger' | null;
-  const [activeTab, setActiveTab] = useState<'company' | 'documents' | 'network' | 'backup' | 'balances' | 'danger'>(() => {
-    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
+  const requestedTab = searchParams.get('tab') as 'company' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger' | null;
+  const [activeTab, setActiveTab] = useState<'company' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger'>(() => {
+    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
       return requestedTab;
     }
     return 'company';
   });
 
   useEffect(() => {
-    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'danger'].includes(requestedTab)) {
+    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
       setActiveTab(requestedTab);
     }
   }, [requestedTab]);
@@ -690,6 +692,8 @@ export default function Settings() {
   const tabs = [
     { key: 'company' as const, label: 'معلومات الشركة' },
     { key: 'documents' as const, label: 'قوالب المستندات' },
+    { key: 'whatsapp' as const, label: 'رسائل الواتساب' },
+    ...(user?.role === 'admin' ? [{ key: 'roles' as const, label: 'صلاحيات الأدوار' }] : []),
     { key: 'network' as const, label: 'اعدادات الشبكة' },
     { key: 'balances' as const, label: 'الارصدة الافتتاحية' },
     { key: 'backup' as const, label: 'النسخ الاحتياطي' },
@@ -1911,6 +1915,18 @@ export default function Settings() {
         )}
 
         {activeTab === 'documents' && <DocumentTemplatesManager />}
+
+        {activeTab === 'whatsapp' && (
+          <WhatsappControlCenter
+            formData={formData}
+            setFormData={setFormData}
+            onSave={handleSubmit}
+            saved={saved}
+            canManage={hasPermission(user, 'settings:manage')}
+          />
+        )}
+
+        {activeTab === 'roles' && <RolePermissionsManager />}
 
         {activeTab === 'danger' && (
           <div className="p-6">

@@ -56,6 +56,17 @@ try {
       ipcRenderer.on('updater-status', handler);
       return () => ipcRenderer.removeListener('updater-status', handler);
     },
+
+    // 7. WhatsApp Web Session
+    openWhatsappSession: () => ipcRenderer.invoke('whatsapp-open-session'),
+    checkWhatsappSession: () => ipcRenderer.invoke('whatsapp-check-session'),
+    logoutWhatsappSession: () => ipcRenderer.invoke('whatsapp-logout-session'),
+    sendWhatsappWebMessage: (payload) => ipcRenderer.invoke('whatsapp-send-web-message', payload),
+    onWhatsappSessionUpdated: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('whatsapp-session-updated', handler);
+      return () => ipcRenderer.removeListener('whatsapp-session-updated', handler);
+    },
   });
 } catch (err) {
   console.error('Failed to initialize preload-main:', err);

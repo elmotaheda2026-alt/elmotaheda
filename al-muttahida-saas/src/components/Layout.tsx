@@ -4,9 +4,19 @@ import Sidebar from './Sidebar';
 import Header from './Header';
 import UpdateBanner from './UpdateBanner';
 import { useAuth } from '../context/AuthContext';
+import { startRealtimeSync, stopRealtimeSync } from '../lib/realtimeSync';
 
 export default function Layout() {
-  const { settings } = useAuth();
+  const { settings, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      startRealtimeSync();
+    } else {
+      stopRealtimeSync();
+    }
+    return () => stopRealtimeSync();
+  }, [isAuthenticated]);
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 1024) {
       return false;

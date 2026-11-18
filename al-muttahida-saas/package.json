@@ -142,13 +142,6 @@
         ]
       },
       {
-        "from": "../al-muttahida-backend/node_modules",
-        "to": "backend/node_modules",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "../al-muttahida-backend/package.json",
         "to": "backend/package.json"
       }

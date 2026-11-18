@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { Permission, User, Setting, UserPermissions } from '../types';
 import * as db from '../lib/storage';
 import { api, clearApiToken, getApiUser, isApiMode, setApiSession } from '../lib/apiClient';
+import { setDynamicRolePermissions } from '../lib/permissions';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 interface AuthContextType {
   user: User | null;
@@ -54,6 +56,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    setDynamicRolePermissions(settings?.rolePermissions);
+  }, [settings?.rolePermissions]);
+
+  useRealtimeSync(['settings'], () => {
+    if (isApiMode() && user) {
+      void db.syncSettings().then(setSettings).catch(() => {});
+    }
+  });
 
   const login = async (username: string, password: string): Promise<boolean> => {
     try {

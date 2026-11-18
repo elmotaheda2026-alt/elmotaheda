@@ -4,6 +4,14 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx'
 import './index.css'
 import App from './App.tsx'
 
+try {
+  if (localStorage.getItem('almuttahida_theme') === 'dark') {
+    document.documentElement.classList.add('dark');
+  }
+} catch {
+  // Ignore storage access errors
+}
+
 // HelmetProvider removed; not needed
 
 // In Electron, route window.print() through Chromium's PDF print preview so Windows 11

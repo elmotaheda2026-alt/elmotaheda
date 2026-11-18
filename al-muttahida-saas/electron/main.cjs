@@ -1,9 +1,9 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, powerMonitor, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { exec } = require('child_process');
-const { startBackend, stopBackend, checkHealth, getAppDataDir } = require('./backend-loader.cjs');
+const { startBackend, stopBackend, checkHealth, ensureBackendRunning, getAppDataDir } = require('./backend-loader.cjs');
 
 let autoUpdater = null;
 try {
@@ -48,13 +48,9 @@ process.on('uncaughtException', (err) => {
   } catch (_) {}
 });
 
-// Configure Chromium GPU / Occlusion stability on all Windows builds (prevents Lock/Sleep color glitches & render lag)
+// Prevent Chromium window occlusion / audio service stalls on Windows while keeping GPU acceleration enabled on Windows 10/11
 if (isWindows) {
-  try {
-    app.disableHardwareAcceleration();
-  } catch (_) {}
-  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,D3D11Experimental,AudioServiceOutOfProcess');
-  app.commandLine.appendSwitch('disable-gpu-sandbox');
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,AudioServiceOutOfProcess');
 }
 
 // Configure Chromium compatibility flags for Windows 7 / 32-bit / Low-spec GPU
@@ -219,24 +215,26 @@ async function createMainWindow(apiBaseUrl) {
     }
   });
 
-  // Ensure backend is healthy before loading the page (avoids blank/white screen on startup)
-  if (apiBaseUrl && apiBaseUrl.startsWith('http')) {
-    for (let i = 0; i < 15; i++) {
-      try {
-        await checkHealth(`${apiBaseUrl}/health`);
-        break;
-      } catch (_) {
-        await new Promise((r) => setTimeout(r, 300));
-      }
-    }
-  }
-
-  // Safety fallback: if ready-to-show takes more than 3s, force display window so it doesn't get stuck hidden
+  // Load UI immediately without blocking on backend health polling
   setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
       mainWindow.show();
     }
-  }, 3000);
+  }, 800);
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.warn(`[Main Window] Renderer gone (${details?.reason}); reloading...`);
+    if (details?.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.reload();
+    }
+  });
+
+  mainWindow.on('unresponsive', () => {
+    console.warn('[Main Window] Window unresponsive; reloading...');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.reload();
+    }
+  });
 
   // If page load fails, retry after a short delay instead of staying blank
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
@@ -286,6 +284,11 @@ async function createMainWindow(apiBaseUrl) {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+      isAppQuitting = true;
+      whatsappWindow.destroy();
+      whatsappWindow = null;
+    }
   });
 
   // Handle render-process-gone (GPU/Renderer crash on sleep or memory pressure)
@@ -1184,22 +1187,28 @@ async function initAndLaunch() {
     return;
   }
 
-  // Server mode
+  // Server mode: open UI window immediately while launching backend in parallel
   try {
+    const apiPort = Number(appConfig?.port || 4000);
+    createMainWindow(`http://127.0.0.1:${apiPort}`);
     ensureFirewallRules();
-    ensureSqlConfigured().catch(() => {});
     console.log('Auto-launching local Express backend...');
-    let port = 4000;
-    try {
-      port = await startBackend();
-    } catch (e) {
-      console.warn('Backend start error:', e.message);
+    startBackend()
+      .catch((e) => {
+        console.warn('Backend start warning, ensuring SQL configuration:', e.message);
+        return ensureSqlConfigured().then(() => startBackend());
+      })
+      .catch((err) => {
+        console.error('Failed to auto-start backend server:', err);
+      });
+    if (!appConfig.lastSuccessfulServer) {
+      ensureSqlConfigured().catch(() => {});
     }
-    const apiUrl = `http://127.0.0.1:${port}`;
-    createMainWindow(apiUrl);
   } catch (err) {
     console.error('Failed to auto-start backend server:', err);
-    createMainWindow('http://127.0.0.1:4000');
+    if (!mainWindow) {
+      createMainWindow('http://127.0.0.1:4000');
+    }
   }
 }
 
@@ -1318,16 +1327,269 @@ ipcMain.handle('install-update', () => {
   return { ok: true };
 });
 
+// ── WhatsApp Web Persistent Session IPC ────────────────────────
+const WHATSAPP_PARTITION = 'persist:whatsapp';
+const WHATSAPP_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const WHATSAPP_LOGIN_CHECK_JS = `
+  Boolean(
+    window.localStorage.getItem('last-wid-md') ||
+    window.localStorage.getItem('last-wid') ||
+    document.querySelector('#pane-side, [data-testid="chat-list"], [aria-label="Chat list"], [aria-label="قائمة الدردشات"]')
+  )
+`;
+let whatsappWindow = null;
+let whatsappWatcherTimer = null;
+
+function stopWhatsappLoginWatcher() {
+  if (whatsappWatcherTimer) {
+    clearInterval(whatsappWatcherTimer);
+    whatsappWatcherTimer = null;
+  }
+}
+
+function sendWhatsappSessionUpdate(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('whatsapp-session-updated', payload);
+    } catch (_) {}
+  }
+}
+
+function startWhatsappLoginWatcher(win) {
+  stopWhatsappLoginWatcher();
+  whatsappWatcherTimer = setInterval(async () => {
+    if (!win || win.isDestroyed()) {
+      stopWhatsappLoginWatcher();
+      return;
+    }
+    try {
+      const loggedIn = await win.webContents.executeJavaScript(WHATSAPP_LOGIN_CHECK_JS).catch(() => false);
+      if (loggedIn) {
+        saveConfig({ whatsappSessionConnected: true });
+        appConfig = loadConfig();
+        sendWhatsappSessionUpdate({ connected: true, windowOpen: true });
+        stopWhatsappLoginWatcher();
+      }
+    } catch (_) {}
+  }, 2000);
+}
+
+let isAppQuitting = false;
+
+function ensureWhatsappWindow(showWindow = false) {
+  if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+    if (showWindow) {
+      if (whatsappWindow.isMinimized()) whatsappWindow.restore();
+      whatsappWindow.show();
+      whatsappWindow.focus();
+    }
+    return whatsappWindow;
+  }
+
+  whatsappWindow = new BrowserWindow({
+    width: 1100,
+    height: 780,
+    show: showWindow,
+    title: 'جلسة واتساب ويب - شركة المتحدة',
+    icon: path.join(__dirname, 'icon.png'),
+    webPreferences: {
+      partition: WHATSAPP_PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
+  });
+  whatsappWindow.setMenuBarVisibility(false);
+  whatsappWindow.webContents.setUserAgent(WHATSAPP_UA);
+  whatsappWindow.on('close', (e) => {
+    if (!isAppQuitting && whatsappWindow && !whatsappWindow.isDestroyed()) {
+      e.preventDefault();
+      whatsappWindow.hide();
+    }
+  });
+  whatsappWindow.on('closed', () => {
+    stopWhatsappLoginWatcher();
+    whatsappWindow = null;
+  });
+  return whatsappWindow;
+}
+
+ipcMain.handle('whatsapp-check-session', async () => {
+  try {
+    let hasLoggedInDom = false;
+    if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+      hasLoggedInDom = await whatsappWindow.webContents
+        .executeJavaScript(WHATSAPP_LOGIN_CHECK_JS)
+        .catch(() => false);
+      if (hasLoggedInDom) {
+        saveConfig({ whatsappSessionConnected: true });
+        appConfig = loadConfig();
+      }
+    }
+    const cfg = appConfig || loadConfig();
+    const waSession = session.fromPartition(WHATSAPP_PARTITION);
+    const cookies = await waSession.cookies.get({});
+    const hasWaCookies = cookies.some((c) => (c.domain || '').includes('whatsapp.com'));
+    const indexedDbDir = path.join(app.getPath('userData'), 'Partitions', 'whatsapp', 'IndexedDB');
+    const hasIndexedDbOnDisk = fs.existsSync(indexedDbDir) && fs.readdirSync(indexedDbDir).length > 0;
+    const connected = Boolean(
+      hasLoggedInDom || cfg?.whatsappSessionConnected === true || (hasWaCookies && hasIndexedDbOnDisk),
+    );
+    return {
+      connected,
+      windowOpen: Boolean(whatsappWindow && !whatsappWindow.isDestroyed()),
+    };
+  } catch (err) {
+    return { connected: false, windowOpen: false, error: err?.message };
+  }
+});
+
+ipcMain.handle('whatsapp-open-session', async () => {
+  try {
+    const win = ensureWhatsappWindow(true);
+    const currentUrl = win.webContents.getURL();
+    if (!currentUrl || !currentUrl.startsWith('https://web.whatsapp.com')) {
+      await win.loadURL('https://web.whatsapp.com/', { userAgent: WHATSAPP_UA });
+    }
+    startWhatsappLoginWatcher(win);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'تعذر فتح نافذة واتساب ويب' };
+  }
+});
+
+ipcMain.handle('whatsapp-logout-session', async () => {
+  try {
+    stopWhatsappLoginWatcher();
+    saveConfig({ whatsappSessionConnected: false });
+    appConfig = loadConfig();
+    if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+      whatsappWindow.destroy();
+      whatsappWindow = null;
+    }
+    const waSession = session.fromPartition(WHATSAPP_PARTITION);
+    await waSession.clearStorageData();
+    sendWhatsappSessionUpdate({ connected: false, windowOpen: false });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'تعذر مسح الجلسة' };
+  }
+});
+
+ipcMain.handle('whatsapp-send-web-message', async (_event, payload) => {
+  const cleanPhone = String(payload?.phone || '').replace(/\D/g, '');
+  const message = String(payload?.message || '');
+  if (!cleanPhone || !message) {
+    return { ok: false, reason: 'invalid_phone', error: 'رقم الهاتف أو نص الرسالة غير مكتمل' };
+  }
+
+  try {
+    const win = ensureWhatsappWindow(false);
+    const targetUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(message)}`;
+    await win.loadURL(targetUrl, { userAgent: WHATSAPP_UA });
+
+    const outcome = await win.webContents.executeJavaScript(`
+      new Promise((resolve) => {
+        let attempts = 0;
+        const timer = setInterval(() => {
+          attempts += 1;
+
+          // 1. Check if QR screen appeared (not logged in)
+          const hasQrCanvas = Boolean(document.querySelector('canvas[aria-label]'));
+          const hasChatPane = Boolean(document.querySelector('#pane-side, [data-testid="chat-list"]'));
+          if (hasQrCanvas && !hasChatPane && attempts >= 5) {
+            clearInterval(timer);
+            resolve({ status: 'not_logged_in' });
+            return;
+          }
+
+          // 2. Check for invalid phone / no WhatsApp account modal
+          const popup = document.querySelector('[data-animate-modal-popup="true"], [role="dialog"]');
+          if (popup) {
+            const txt = (popup.textContent || '').toLowerCase();
+            if (
+              txt.includes('invalid') ||
+              txt.includes('not on whatsapp') ||
+              txt.includes('غير صحيح') ||
+              txt.includes('غير مسجل') ||
+              txt.includes('ليس على واتساب') ||
+              txt.includes('رابط غير صالح')
+            ) {
+              const okBtn = popup.querySelector('button');
+              if (okBtn) okBtn.click();
+              clearInterval(timer);
+              resolve({ status: 'no_whatsapp' });
+              return;
+            }
+          }
+
+          // 3. Check for send button
+          const btn =
+            document.querySelector('button[aria-label="Send"], button[aria-label="إرسال"]') ||
+            document.querySelector('span[data-icon="send"]')?.closest('button') ||
+            document.querySelector('span[data-icon="wds-ic-send-filled"]')?.closest('button');
+          if (btn) {
+            clearInterval(timer);
+            setTimeout(() => {
+              btn.click();
+              resolve({ status: 'sent' });
+            }, 700);
+            return;
+          }
+
+          if (attempts >= 25) {
+            clearInterval(timer);
+            resolve({ status: 'timeout' });
+          }
+        }, 900);
+      })
+    `);
+
+    if (outcome?.status === 'sent') {
+      saveConfig({ whatsappSessionConnected: true });
+      appConfig = loadConfig();
+      return { ok: true, autoSent: true };
+    }
+    if (outcome?.status === 'no_whatsapp') {
+      return { ok: false, reason: 'no_whatsapp', error: 'هذا الرقم لا يملك حساب واتساب' };
+    }
+    if (outcome?.status === 'not_logged_in') {
+      return { ok: false, reason: 'not_logged_in', error: 'يرجى مسح كود QR أولاً لتفعيل الجلسة' };
+    }
+    return { ok: false, reason: 'timeout', error: 'انتهت مهلة تحميل المحادثة' };
+  } catch (err) {
+    return { ok: false, reason: 'send_error', error: err?.message || 'فشل إرسال الرسالة عبر جلسة واتساب ويب' };
+  }
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   initAndLaunch();
   setupAutoUpdater();
 
   const repaintMainWindow = () => {
+    if (appConfig?.mode !== 'client') {
+      ensureBackendRunning(Number(appConfig?.port || 4000)).catch(() => {});
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       try {
         mainWindow.webContents.invalidate();
       } catch (_) {}
+      mainWindow.webContents
+        .executeJavaScript('Boolean(document.getElementById("root") && document.getElementById("root").childElementCount > 0)')
+        .then((hasContent) => {
+          if (!hasContent && mainWindow && !mainWindow.isDestroyed()) {
+            console.warn('[Main Window] Blank DOM detected on resume/unlock; reloading...');
+            mainWindow.webContents.reload();
+          }
+        })
+        .catch(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            console.warn('[Main Window] Renderer unresponsive on resume/unlock; reloading...');
+            mainWindow.webContents.reload();
+          }
+        });
     }
   };
   powerMonitor.on('unlock-screen', repaintMainWindow);
@@ -1348,5 +1610,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  isAppQuitting = true;
+  if (whatsappWindow && !whatsappWindow.isDestroyed()) {
+    whatsappWindow.destroy();
+    whatsappWindow = null;
+  }
   stopBackend();
 });

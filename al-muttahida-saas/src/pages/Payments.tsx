@@ -22,6 +22,7 @@ import {
 import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
 import { createPayment, reversePayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, reopenPeriodApi, getOpeningBalances } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
@@ -119,6 +120,21 @@ export default function Payments() {
   const [autoSuggestedSaleId, setAutoSuggestedSaleId] = useState<string | null>(null);
   const [historyDateFilter, setHistoryDateFilter] = useState<string>(today());
   const [historySearch, setHistorySearch] = useState('');
+  const [debouncedHistorySearch, setDebouncedHistorySearch] = useState('');
+  const [paymentPage, setPaymentPage] = useState(1);
+  const [paymentTotalPages, setPaymentTotalPages] = useState(1);
+  const [paymentTotalCount, setPaymentTotalCount] = useState(0);
+  const [paymentSummary, setPaymentSummary] = useState<{
+    totalCount: number;
+    totalIn: number;
+    totalOut: number;
+    totalExpenses: number;
+    netCash: number;
+    todayIn: number;
+    todayOut: number;
+    todayExpenses: number;
+    todayNet: number;
+  } | null>(null);
   const [showVoidedPayments, setShowVoidedPayments] = useState(false);
   const [reopeningPeriodKey, setReopeningPeriodKey] = useState<string | null>(null);
 
@@ -197,7 +213,41 @@ export default function Payments() {
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const loadData = async () => {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedHistorySearch(historySearch);
+      setPaymentPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [historySearch]);
+
+  const loadPaymentsPage = async (
+    targetPage = paymentPage,
+    targetDate = toYYYYMMDD(historyDateFilter),
+    targetSearch = debouncedHistorySearch,
+  ) => {
+    if (!isApiMode()) return;
+    try {
+      const [pagedRes, summaryRes] = await Promise.all([
+        api.listPaymentsPaged({
+          page: targetPage,
+          limit: 150,
+          date: targetDate || undefined,
+          search: targetSearch || undefined,
+        }),
+        api.getPaymentsSummary(today()),
+      ]);
+      setPayments(pagedRes.payments || []);
+      setDailyPayments(pagedRes.payments || []);
+      setPaymentTotalPages(Math.max(1, pagedRes.totalPages || 1));
+      setPaymentTotalCount(pagedRes.total || 0);
+      setPaymentSummary(summaryRes || null);
+    } catch (err: any) {
+      console.error('[Payments] Page fetch failed:', err);
+    }
+  };
+
+  const loadData = async (targetPage = paymentPage) => {
     setLoading(true);
     const nextSales = getSales().slice().reverse();
     const nextCustomers = getCustomers();
@@ -212,10 +262,15 @@ export default function Payments() {
 
     if (isApiMode()) {
       try {
-        // Fetch payments directly from API to avoid localStorage quota issues
-        // (payments list can be very large - 1.7MB+)
-        const [freshPaymentsRaw] = await Promise.all([
-          api.listPayments({ limit: 10000 }),
+        // Fetch paged payments + SQL summary directly from API to avoid large payloads & localStorage quota issues
+        const [pagedRes, summaryRes] = await Promise.all([
+          api.listPaymentsPaged({
+            page: targetPage,
+            limit: 150,
+            date: toYYYYMMDD(historyDateFilter) || undefined,
+            search: debouncedHistorySearch || undefined,
+          }),
+          api.getPaymentsSummary(today()),
           syncCustomers(),
           syncSuppliers(),
           syncSales(),
@@ -226,8 +281,11 @@ export default function Payments() {
         // Clear old stale payments cache if it exists
         try { localStorage.removeItem('almuttahida_payments'); } catch { /* ignore */ }
 
-        setPayments(freshPaymentsRaw);
-        setDailyPayments(freshPaymentsRaw);
+        setPayments(pagedRes.payments || []);
+        setDailyPayments(pagedRes.payments || []);
+        setPaymentTotalPages(Math.max(1, pagedRes.totalPages || 1));
+        setPaymentTotalCount(pagedRes.total || 0);
+        setPaymentSummary(summaryRes || null);
         setSales(getSales().slice().reverse());
         setCustomers(getCustomers());
         setSuppliers(getSuppliers());
@@ -247,9 +305,23 @@ export default function Payments() {
   };
 
   useEffect(() => {
-    void loadData();
+    void loadData(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setPaymentPage(1);
+  }, [historyDateFilter]);
+
+  useEffect(() => {
+    if (!isApiMode()) return;
+    void loadPaymentsPage(paymentPage, toYYYYMMDD(historyDateFilter), debouncedHistorySearch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentPage, historyDateFilter, debouncedHistorySearch]);
+
+  useRealtimeSync(['payments', 'sales', 'expenses', 'customers', 'suppliers'], () => {
+    void loadData(paymentPage);
+  });
 
   const toYYYYMMDD = (dateStr: string) => {
     if (!dateStr) return '';
@@ -607,15 +679,19 @@ export default function Payments() {
   const todayYYYYMMDD = today();
 
   // Historical cumulative cash balance calculation across all ledger entries:
-  const totalCashBalance = calculateTotalCashBalance(payments, expenses);
+  const totalCashBalance = isApiMode() && paymentSummary
+    ? paymentSummary.netCash
+    : calculateTotalCashBalance(payments, expenses);
 
   // Today's cash activity filtering:
   const todayPaymentsList = payments.filter(
     (p) => toYYYYMMDD(p.date) === todayYYYYMMDD && p.status !== 'voided'
   );
-  const todayInflow = todayPaymentsList
-    .filter((p) => p.type === 'in')
-    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const todayInflow = isApiMode() && paymentSummary
+    ? paymentSummary.todayIn
+    : todayPaymentsList
+        .filter((p) => p.type === 'in')
+        .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
   const todayPaymentOutflow = todayPaymentsList
     .filter((p) => p.type === 'out')
@@ -629,8 +705,12 @@ export default function Payments() {
     )
     .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
 
-  const todayOutflow = todayPaymentOutflow + todayExpenseOutflow;
-  const todayNetMovement = todayInflow - todayOutflow;
+  const todayOutflow = isApiMode() && paymentSummary
+    ? paymentSummary.todayOut + paymentSummary.todayExpenses
+    : todayPaymentOutflow + todayExpenseOutflow;
+  const todayNetMovement = isApiMode() && paymentSummary
+    ? paymentSummary.todayNet
+    : todayInflow - todayOutflow;
   const todayPayments = todayPaymentsList;
 
   const filteredPayments = useMemo(() => {
@@ -2116,11 +2196,39 @@ export default function Payments() {
           </table>
         </div>
         <div className="erp-status-bar shrink-0">
-          <span className="font-bold text-slate-700">
-            المعاملات المعروضة: <span className="text-blue-700 font-extrabold">{filteredPayments.length}</span>
-            <span className="text-slate-400 mx-1.5">|</span>
-            حركة اليوم: <span className="text-slate-800 font-extrabold">{todayPayments.length}</span>
-          </span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="font-bold text-slate-700">
+              المعاملات المعروضة: <span className="text-blue-700 font-extrabold">{filteredPayments.length}</span>
+              {isApiMode() && paymentTotalCount > 0 && (
+                <span className="text-slate-500 text-xs mx-1">(الإجمالي: {paymentTotalCount})</span>
+              )}
+              <span className="text-slate-400 mx-1.5">|</span>
+              حركة اليوم: <span className="text-slate-800 font-extrabold">{todayPayments.length}</span>
+            </span>
+            {isApiMode() && paymentTotalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={paymentPage <= 1}
+                  onClick={() => setPaymentPage((p) => Math.max(1, p - 1))}
+                  className="px-2 py-0.5 rounded border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  السابق
+                </button>
+                <span className="text-xs font-bold text-slate-600 tabular-nums">
+                  صفحة {paymentPage} من {paymentTotalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={paymentPage >= paymentTotalPages}
+                  onClick={() => setPaymentPage((p) => Math.min(paymentTotalPages, p + 1))}
+                  className="px-2 py-0.5 rounded border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  التالي
+                </button>
+              </div>
+            )}
+          </div>
           <span className="font-bold text-slate-700">صافي الحركة اليومية: <span className="text-emerald-700 font-extrabold">{formatCurrency(todayNetMovement)}</span></span>
         </div>
       </div>

@@ -13,6 +13,7 @@ import { hasPermission, isAdmin } from '../lib/permissions';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 const CUSTOMER_RENDER_LIMIT = 100;
 const SEARCH_MODAL_LIMIT = 50;
@@ -102,13 +103,17 @@ export default function Customers() {
   const [searchModal, setSearchModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [serverStats, setServerStats] = useState<{ totalCount: number; debtorsCount: number; suedCount: number; totalReceivables: number } | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(CUSTOMER_RENDER_LIMIT);
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [filterTab, setFilterTab] = useState<'all' | 'debtor' | 'sued'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
-  const didLoadRef = useRef(false);
   const pendingRenderMeasureRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -152,10 +157,56 @@ export default function Customers() {
   const [, setIsProcessingImage] = useState(false);
 
   useEffect(() => {
-    if (didLoadRef.current) return;
-    didLoadRef.current = true;
-    void loadCustomers();
-  }, []);
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
+
+  const loadCustomers = async (
+    targetPage = page,
+    targetSearch = debouncedSearch,
+    targetFilter = filterTab,
+  ) => {
+    try {
+      if (isApiMode()) {
+        const res = await api.listCustomersPaged({
+          page: targetPage,
+          limit: CUSTOMER_RENDER_LIMIT,
+          search: targetSearch,
+          filter: targetFilter === 'debtor' ? 'debtors' : targetFilter,
+        });
+        const updated = (res.customers || []).map((c: Customer, index: number) => ({
+          ...c,
+          customerNumber: c.customerNumber || `C-${String((targetPage - 1) * CUSTOMER_RENDER_LIMIT + index + 1).padStart(4, '0')}`,
+        }));
+        pendingRenderMeasureRef.current = true;
+        setCustomers(updated);
+        setTotalRecords(res.total || 0);
+        setTotalPages(Math.max(1, res.totalPages || 1));
+        setServerStats(res.stats || null);
+      } else {
+        const data = getCustomers();
+        const updated = data.map((c: Customer, index: number) => ({
+          ...c,
+          customerNumber: c.customerNumber || `C-${String(index + 1).padStart(4, '0')}`,
+        }));
+        pendingRenderMeasureRef.current = true;
+        setCustomers(updated);
+      }
+    } catch (err: any) {
+      console.error('Failed to load customers:', err);
+    }
+  };
+
+  useEffect(() => {
+    void loadCustomers(page, debouncedSearch, filterTab);
+  }, [page, debouncedSearch, filterTab]);
+
+  useRealtimeSync(['customers', 'sales', 'payments'], () => {
+    void loadCustomers(page, debouncedSearch, filterTab);
+  });
 
   useEffect(() => {
     if (showForm) {
@@ -185,32 +236,6 @@ export default function Customers() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewImage, webcamSide]);
-
-  const loadCustomers = async () => {
-    console.time('Customers.totalLoad');
-    try {
-      console.time('Customers.networkApiCall');
-      const [data] = await Promise.all([
-        isApiMode() ? api.listCustomers() : Promise.resolve(getCustomers()),
-        isApiMode() ? syncSales() : Promise.resolve(),
-      ]);
-      console.timeEnd('Customers.networkApiCall');
-      const payloadBytes = new Blob([JSON.stringify(data)]).size;
-      console.info(`Customers payload: ${payloadBytes} bytes for ${data.length} rows`);
-
-      console.time('Customers.transformAndState');
-      const updated = data.map((c: Customer, index: number) => ({
-        ...c,
-        customerNumber: c.customerNumber || `C-${String(index + 1).padStart(4, '0')}`,
-      }));
-      pendingRenderMeasureRef.current = true;
-      console.time('Customers.initialRenderCommit');
-      setCustomers(updated);
-      console.timeEnd('Customers.transformAndState');
-    } finally {
-      console.timeEnd('Customers.totalLoad');
-    }
-  };
 
   const nextGeneratedCustomerNumber = useMemo(() => {
     if (!showForm || isEditing) return '';
@@ -564,6 +589,7 @@ export default function Customers() {
   };
 
   const filteredCustomers = useMemo(() => {
+    if (isApiMode()) return customers;
     const term = searchTerm.trim().toLowerCase();
     return customers.filter((customer) => {
       const matchesSearch =
@@ -599,8 +625,16 @@ export default function Customers() {
 
   const nextCustomerNumber = showForm ? selectedCustomer?.customerNumber || nextGeneratedCustomerNumber : '';
 
-  const customerStats = useMemo(
-    () => customers.reduce(
+  const customerStats = useMemo(() => {
+    if (isApiMode() && serverStats) {
+      return {
+        totalCustomersCount: serverStats.totalCount,
+        suedCustomersCount: serverStats.suedCount,
+        activeCustomersCount: serverStats.debtorsCount,
+        totalDebt: serverStats.totalReceivables,
+      };
+    }
+    return customers.reduce(
       (stats, customer) => {
         const balance = Number(customer.balance || 0);
         stats.totalCustomersCount += 1;
@@ -612,9 +646,8 @@ export default function Customers() {
         return stats;
       },
       { totalCustomersCount: 0, suedCustomersCount: 0, activeCustomersCount: 0, totalDebt: 0 },
-    ),
-    [customers],
-  );
+    );
+  }, [customers, serverStats]);
 
   const { totalCustomersCount, suedCustomersCount, activeCustomersCount, totalDebt } = customerStats;
 
@@ -628,6 +661,7 @@ export default function Customers() {
             <button
               onClick={() => {
                 setFilterTab('all');
+                setPage(1);
                 setVisibleLimit(CUSTOMER_RENDER_LIMIT);
               }}
               className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${filterTab === 'all' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
@@ -637,6 +671,7 @@ export default function Customers() {
             <button
               onClick={() => {
                 setFilterTab('debtor');
+                setPage(1);
                 setVisibleLimit(CUSTOMER_RENDER_LIMIT);
               }}
               className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${filterTab === 'debtor' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
@@ -646,6 +681,7 @@ export default function Customers() {
             <button
               onClick={() => {
                 setFilterTab('sued');
+                setPage(1);
                 setVisibleLimit(CUSTOMER_RENDER_LIMIT);
               }}
               className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${filterTab === 'sued' ? 'bg-white text-rose-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'}`}
@@ -942,7 +978,34 @@ export default function Customers() {
           )}
           {/* Sticky Summary Footer Bar */}
           <div className="erp-status-bar shrink-0">
-            <span className="font-bold text-slate-700">إجمالي السجلات: <span className="text-blue-700 font-extrabold">{filteredCustomers.length}</span> (المعروض: {visibleCustomers.length})</span>
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="font-bold text-slate-700">
+                إجمالي السجلات: <span className="text-blue-700 font-extrabold">{isApiMode() ? totalRecords : filteredCustomers.length}</span> (المعروض: {visibleCustomers.length})
+              </span>
+              {isApiMode() && totalPages > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className="px-2 py-0.5 rounded border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    السابق
+                  </button>
+                  <span className="text-xs font-bold text-slate-600 tabular-nums">
+                    صفحة {page} من {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    className="px-2 py-0.5 rounded border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    التالي
+                  </button>
+                </div>
+              )}
+            </div>
             {user?.role !== 'accountant' && (
               <span className="font-bold text-slate-700">إجمالي المستحقات: <span className="text-rose-700 font-extrabold">{formatCurrency(totalDebt)}</span></span>
             )}

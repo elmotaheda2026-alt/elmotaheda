@@ -12,34 +12,74 @@ const defaultSettings: Setting = {
   invoicePrefix: 'INV',
   invoiceFooter: 'شكرا للتعامل معنا - شركة المتحدة',
   whatsappRemindersEnabled: false,
+  whatsappMode: 'web_session',
   whatsappPhoneNumberId: '',
   whatsappAccessToken: '',
   whatsappTemplateName: 'installment_reminder',
   whatsappTemplateLanguage: 'ar',
+  whatsappMessageTemplate: 'عميلنا العزيز {name}، نذكركم بموعد سداد القسط المستحق بقيمة {amount} بتاريخ {dueDate} للعقد رقم {invoiceNumber} - {companyName}',
+  whatsappReminderOffsets: [-2, -1, 0],
+  whatsappMinDelaySec: 15,
+  whatsappMaxDelaySec: 45,
+  whatsappDailyLimit: 80,
+  whatsappBatchSize: 15,
+  whatsappBatchPauseSec: 180,
+  whatsappSendStartHour: '10:00',
+  whatsappSendEndHour: '21:00',
+  whatsappAntiBanVariation: true,
+  whatsappAutoSkipInvalid: true,
 };
 
 let apiSettingsCache: Setting | null = null;
 
+function mergeSettings(raw?: Partial<Setting> | null): Setting {
+  const offsets = Array.isArray(raw?.whatsappReminderOffsets) && raw.whatsappReminderOffsets.length > 0
+    ? raw.whatsappReminderOffsets.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+    : defaultSettings.whatsappReminderOffsets;
+  return {
+    ...defaultSettings,
+    ...(raw || {}),
+    whatsappMode: raw?.whatsappMode === 'meta_api' ? 'meta_api' : 'web_session',
+    whatsappTemplateName: raw?.whatsappTemplateName?.trim() || defaultSettings.whatsappTemplateName,
+    whatsappTemplateLanguage: raw?.whatsappTemplateLanguage?.trim() || defaultSettings.whatsappTemplateLanguage,
+    whatsappMessageTemplate: raw?.whatsappMessageTemplate?.trim() || defaultSettings.whatsappMessageTemplate,
+    whatsappReminderOffsets: offsets && offsets.length > 0 ? offsets : defaultSettings.whatsappReminderOffsets,
+  };
+}
+
 export function getSettings(): Setting {
   if (isApiMode()) {
-    return apiSettingsCache || defaultSettings;
+    if (apiSettingsCache) return mergeSettings(apiSettingsCache);
+    const local = localStorage.getItem(DB_KEYS.SETTINGS);
+    return local ? mergeSettings(JSON.parse(local)) : defaultSettings;
   }
 
   const settings = localStorage.getItem(DB_KEYS.SETTINGS);
-  return settings ? JSON.parse(settings) : defaultSettings;
+  return settings ? mergeSettings(JSON.parse(settings)) : defaultSettings;
 }
 
 export async function syncSettings(): Promise<Setting> {
   if (!isApiMode()) return getSettings();
-  apiSettingsCache = await api.getSettings();
+  const remote = await api.getSettings();
+  apiSettingsCache = mergeSettings(remote);
+  try {
+    localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(apiSettingsCache));
+  } catch {
+    // Ignore storage quota errors
+  }
   return apiSettingsCache;
 }
 
 export async function updateSettings(settings: Setting): Promise<void> {
-  const normalized = { ...settings, taxRate: 0 };
+  const normalized = mergeSettings({ ...settings, taxRate: 0 });
   if (isApiMode()) {
     await api.updateSettings(normalized);
     apiSettingsCache = normalized;
+    try {
+      localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(normalized));
+    } catch {
+      // Ignore storage quota errors
+    }
     return;
   }
 

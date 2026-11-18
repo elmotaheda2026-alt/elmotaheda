@@ -28,6 +28,7 @@ import {
   BarChart3,
 } from 'lucide-react';
 import { Shareholder, ShareholderTransaction, Sale, Expense, Product } from '../types';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import { printHtmlDocument } from '../lib/printHelper';
 import {
   getShareholders,
@@ -229,6 +230,10 @@ export default function Shareholders() {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profitBasis, reportPeriodFrom, reportPeriodTo]);
+
+  useRealtimeSync(['shareholders', 'sales', 'payments', 'expenses', 'suppliers', 'products'], () => {
+    void loadData();
+  });
 
   useEffect(() => {
     const handleFocus = () => {

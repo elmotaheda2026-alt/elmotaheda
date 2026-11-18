@@ -4,6 +4,7 @@ import { dbPromise } from '../db.js';
 import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
+import { broadcastDataChange } from '../realtime.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -41,22 +42,51 @@ const customerSchema = z.object({
   suedDate: z.string().optional().nullable(),
 });
 
-// GET /customers
-router.get('/', requirePermission('sales:read'), async (_req, res) => {
+// GET /customers (lightweight list: omits heavy base64 images; supports optional server-side pagination)
+router.get('/', requirePermission('sales:read'), async (req, res) => {
   try {
     const db = await dbPromise;
-    const queryStart = performance.now();
-    const rows = await db.all(`
-      SELECT id, customer_number, name, phone, email, address, gender,
-             city, governorate, region, date_of_birth, national_id, age,
-             pension_date, balance, balance_type, notes, image, id_card_front, id_card_back, guarantors,
-             is_sued, sued_date, created_at, updated_at
-      FROM customers
-      ORDER BY created_at DESC
-    `);
-    const queryElapsed = performance.now() - queryStart;
-    const logQueryTiming = queryElapsed > 50 ? console.warn : console.info;
-    logQueryTiming(`/customers SQL query took ${queryElapsed.toFixed(1)}ms for ${rows.length} rows`);
+    const rawPage = typeof req.query.page === 'string' ? Number(req.query.page) : undefined;
+    const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const filter = typeof req.query.filter === 'string' ? req.query.filter.trim() : 'all';
+
+    const where: string[] = [];
+    const params: any[] = [];
+
+    if (search) {
+      where.push('(name LIKE ? OR customer_number LIKE ? OR phone LIKE ? OR national_id LIKE ? OR address LIKE ?)');
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like);
+    }
+
+    if (filter === 'debtors') {
+      where.push('balance > 0');
+    } else if (filter === 'sued') {
+      where.push('is_sued = 1');
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const pagination =
+      rawPage && rawLimit
+        ? { page: Math.max(1, Math.trunc(rawPage)), limit: Math.min(200, Math.max(1, Math.trunc(rawLimit))) }
+        : undefined;
+
+    const rows = await db.all<any>(
+      `SELECT id, customer_number, name, phone, email, address, gender,
+              city, governorate, region, date_of_birth, national_id, age,
+              pension_date, balance, balance_type, notes, guarantors,
+              is_sued, sued_date, created_at, updated_at,
+              CASE WHEN image IS NOT NULL AND LEN(image) > 0 THEN 1 ELSE 0 END AS has_image,
+              CASE WHEN id_card_front IS NOT NULL AND LEN(id_card_front) > 0 THEN 1 ELSE 0 END AS has_id_card_front,
+              CASE WHEN id_card_back IS NOT NULL AND LEN(id_card_back) > 0 THEN 1 ELSE 0 END AS has_id_card_back
+       FROM customers
+       ${whereSql}
+       ORDER BY created_at DESC`,
+      params,
+      pagination,
+    );
+
     const mapped = rows.map((row: any) => ({
       id: row.id,
       name: row.name,
@@ -68,9 +98,12 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
       governorate: row.governorate || '',
       region: row.region || '',
       notes: row.notes || null,
-      image: row.image || null,
-      idCardFront: row.id_card_front || null,
-      idCardBack: row.id_card_back || null,
+      image: null,
+      idCardFront: null,
+      idCardBack: null,
+      hasImage: row.has_image === 1 || row.has_image === true,
+      hasIdCardFront: row.has_id_card_front === 1 || row.has_id_card_front === true,
+      hasIdCardBack: row.has_id_card_back === 1 || row.has_id_card_back === true,
       age: Number(row.age || 0),
       balance: Number(row.balance || 0),
       isSued: row.is_sued === 1 || row.is_sued === true,
@@ -84,12 +117,40 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
       createdAt: row.created_at || null,
       updatedAt: row.updated_at || null,
     }));
-    const payloadBytes = Buffer.byteLength(JSON.stringify(mapped), 'utf8');
-    if (payloadBytes > 100 * 1024) {
-      console.warn(`/customers list payload is ${payloadBytes} bytes for ${mapped.length} rows`);
-    } else {
-      console.info(`/customers list payload is ${payloadBytes} bytes for ${mapped.length} rows`);
+
+    if (pagination) {
+      const countRow = await db.get<{ total: number }>(
+        `SELECT COUNT(*) AS total FROM customers ${whereSql}`,
+        ...params,
+      );
+      const statsRow = await db.get<{
+        totalCount: number;
+        debtorsCount: number;
+        suedCount: number;
+        totalReceivables: number;
+      }>(`
+        SELECT COUNT(*) AS totalCount,
+               SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) AS debtorsCount,
+               SUM(CASE WHEN is_sued = 1 THEN 1 ELSE 0 END) AS suedCount,
+               COALESCE(SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END), 0) AS totalReceivables
+        FROM customers
+      `);
+      const total = Number(countRow?.total || 0);
+      return res.json({
+        total,
+        page: pagination.page,
+        limit: pagination.limit,
+        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+        stats: {
+          totalCount: Number(statsRow?.totalCount || 0),
+          debtorsCount: Number(statsRow?.debtorsCount || 0),
+          suedCount: Number(statsRow?.suedCount || 0),
+          totalReceivables: Number(statsRow?.totalReceivables || 0),
+        },
+        customers: mapped,
+      });
     }
+
     return res.json(mapped);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -213,6 +274,7 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
     );
 
     await audit('customer.create', 'customer', id, req.user?.name || 'system', data);
+    broadcastDataChange('customers', 'create', id);
     return res.status(201).json({ id, customerNumber: data.customerNumber });
   } catch (error: any) {
     if (error.message?.includes('UNIQUE')) {
@@ -279,11 +341,12 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       ? (isValidExistingSuedDate(data.suedDate) ? data.suedDate : (isValidExistingSuedDate(existing.sued_date) ? existing.sued_date : now))
       : null;
 
+    // Preserve live financial balance managed atomically by sales & payments
     await db.run(
       `UPDATE customers
        SET customer_number = ?, name = ?, phone = ?, email = ?, address = ?, gender = ?,
            city = ?, governorate = ?, region = ?, date_of_birth = ?, national_id = ?, age = ?,
-           pension_date = ?, balance = ?, balance_type = ?, notes = ?,
+           pension_date = ?, balance_type = ?, notes = ?,
            image = ?, id_card_front = ?, id_card_back = ?, guarantors = ?, is_sued = ?, sued_date = ?, updated_at = ?
        WHERE id = ?`,
       data.customerNumber,
@@ -299,7 +362,6 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
       data.nationalId,
       data.age,
       data.pensionDate,
-      data.balance,
       data.balanceType,
       data.notes || null,
       data.image || null,
@@ -313,6 +375,7 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
     );
 
     await audit('customer.update', 'customer', req.params.id, req.user?.name || 'system', data);
+    broadcastDataChange('customers', 'update', req.params.id);
     return res.json({
       message: 'Customer updated successfully',
       customer: {
@@ -372,6 +435,7 @@ router.patch('/:id/toggle-sued', requirePermission('sales:write'), async (req: A
     );
 
     await audit('customer.toggle_sued', 'customer', req.params.id, req.user?.name || 'system', { isSued, suedDate: finalSuedDate });
+    broadcastDataChange('customers', 'toggle_sued', req.params.id);
 
     return res.json({
       message: 'Legal referral status updated successfully',
@@ -408,6 +472,7 @@ router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (re
 
     await db.run('DELETE FROM customers WHERE id = ?', req.params.id);
     await audit('customer.delete', 'customer', req.params.id, req.user?.name || 'system', { id: req.params.id });
+    broadcastDataChange('customers', 'delete', req.params.id);
     return res.json({ message: 'Customer deleted successfully' });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });

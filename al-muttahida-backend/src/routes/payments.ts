@@ -5,19 +5,20 @@ import { requireAuth, requirePermission, type AuthedRequest } from '../middlewar
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput, comparePassword, isPeriodClosed } from '../utils.js';
 import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
+import { broadcastDataChange } from '../realtime.js';
 
 const router = Router();
 router.use(requireAuth);
 
-async function nextReceiptNumber() {
-  const db = await dbPromise;
-  const row = await db.get<{ receipt_number: string }>(
+async function nextReceiptNumber(txDb?: any) {
+  const executor = txDb || (await dbPromise);
+  const row = (await executor.get(
     `SELECT TOP 1 receipt_number
-     FROM payments
+     FROM payments WITH (UPDLOCK, HOLDLOCK)
      WHERE receipt_number LIKE 'RCPT-%'
        AND TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) IS NOT NULL
      ORDER BY TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) DESC`
-  );
+  )) as { receipt_number: string } | undefined;
   const maxNum = row ? parseInt(row.receipt_number.replace('RCPT-', ''), 10) : 5000;
   return `RCPT-${maxNum + 1}`;
 }
@@ -44,6 +45,62 @@ const paymentSchema = z.object({
   adminPassword: z.string().optional(),
 });
 
+// GET /payments/summary — fast SQL aggregate totals for Treasury KPIs without transferring 10k+ rows
+router.get('/summary', requirePermission('payments:read'), async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const todayDate =
+      typeof req.query.date === 'string' && req.query.date.trim()
+        ? req.query.date.trim().slice(0, 10)
+        : new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Africa/Cairo',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(new Date());
+
+    const payRow = await db.get<any>(
+      `SELECT
+         COUNT(*) AS totalCount,
+         COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') THEN amount ELSE 0 END), 0) AS totalIn,
+         COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') THEN amount ELSE 0 END), 0) AS totalOut,
+         COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayIn,
+         COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayOut
+       FROM payments`,
+      todayDate,
+      todayDate,
+    );
+    const expRow = await db.get<any>(
+      `SELECT
+         COALESCE(SUM(amount), 0) AS totalExpenses,
+         COALESCE(SUM(CASE WHEN CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayExpenses
+       FROM expenses`,
+      todayDate,
+    );
+
+    const totalIn = Number(payRow?.totalIn || 0);
+    const totalOut = Number(payRow?.totalOut || 0);
+    const totalExpenses = Number(expRow?.totalExpenses || 0);
+    const todayIn = Number(payRow?.todayIn || 0);
+    const todayOut = Number(payRow?.todayOut || 0);
+    const todayExpenses = Number(expRow?.todayExpenses || 0);
+
+    return res.json({
+      totalCount: Number(payRow?.totalCount || 0),
+      totalIn,
+      totalOut,
+      totalExpenses,
+      netCash: Number((totalIn - totalOut - totalExpenses).toFixed(2)),
+      todayIn,
+      todayOut,
+      todayExpenses,
+      todayNet: Number((todayIn - todayOut - todayExpenses).toFixed(2)),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 // GET /payments
 router.get('/', requirePermission('payments:read'), async (req, res) => {
   try {
@@ -52,6 +109,7 @@ router.get('/', requirePermission('payments:read'), async (req, res) => {
     // Extract query parameters
     const date = typeof req.query.date === 'string' ? req.query.date.slice(0, 10) : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const includeMeta = req.query.includeMeta === '1' || req.query.includeMeta === 'true';
     const rawPage = typeof req.query.page === 'string' ? Number(req.query.page) : undefined;
     const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
 
@@ -81,12 +139,14 @@ router.get('/', requirePermission('payments:read'), async (req, res) => {
       params.push(like, like, like, like, like);
     }
 
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
     const rows = await db.all<any>(
       `SELECT p.*
          FROM payments p
          LEFT JOIN customers c ON c.id = p.customer_id OR (p.reference_type = 'customer' AND c.id = p.reference_id)
          LEFT JOIN suppliers s ON s.id = p.supplier_id OR (p.reference_type = 'supplier' AND s.id = p.reference_id)
-         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+         ${whereSql}
          ORDER BY p.created_at DESC`,
       params,
       pagination,
@@ -113,6 +173,26 @@ router.get('/', requirePermission('payments:read'), async (req, res) => {
       invoiceNumber: row.invoice_number,
       affectsCustomerBalance: row.affects_customer_balance === 1 || row.affects_customer_balance === true,
     }));
+
+    if (includeMeta && pagination) {
+      const countRow = await db.get<{ total: number }>(
+        `SELECT COUNT(*) AS total
+         FROM payments p
+         LEFT JOIN customers c ON c.id = p.customer_id OR (p.reference_type = 'customer' AND c.id = p.reference_id)
+         LEFT JOIN suppliers s ON s.id = p.supplier_id OR (p.reference_type = 'supplier' AND s.id = p.reference_id)
+         ${whereSql}`,
+        ...params,
+      );
+      const total = Number(countRow?.total || 0);
+      return res.json({
+        total,
+        page: pagination.page,
+        limit: pagination.limit,
+        totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+        payments: mapped,
+      });
+    }
+
     return res.json(mapped);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -481,6 +561,10 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
       );
     }
 
+    broadcastDataChange('payments', 'create', id);
+    broadcastDataChange('sales', 'update', data.saleId || undefined);
+    broadcastDataChange('customers', 'update', data.customerId || undefined);
+    broadcastDataChange('notifications', 'create');
     return res.status(201).json({ id, receiptNumber });
   } catch (error: any) {
     return res.status(error?.statusCode || 500).json({ message: error.message || 'Database error' });
@@ -502,7 +586,7 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
 
   const now = new Date().toISOString();
   const reverseId = uid();
-  const receiptNumber = await nextReceiptNumber();
+  let receiptNumber = '';
   const reverseType = original.type === 'in' ? 'out' : 'in';
 
   try {
@@ -510,6 +594,16 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
       return res.status(400).json({ message: 'لا يمكن عكس حركة مالية في تاريخ مغلق مالياً' });
     }
     await db.withTransaction(async (tx) => {
+      const lockedOriginal = (await tx.get(
+        'SELECT status, void_ref FROM payments WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        req.params.id,
+      )) as { status?: string; void_ref?: string | null } | undefined;
+      if (!lockedOriginal || lockedOriginal.status === 'voided' || lockedOriginal.void_ref) {
+        const conflictErr: any = new Error('Payment is already voided');
+        conflictErr.statusCode = 409;
+        throw conflictErr;
+      }
+      receiptNumber = await nextReceiptNumber(tx);
       // 1. If reversing a sale payment (excluding upfront down-payment treasury record), deduct from paid and add back to remaining
       let isEarlySettlementReversal = false;
       let restoredEarlyRemaining = 0;
