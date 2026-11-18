@@ -336,9 +336,10 @@ export const getMatchingReminderCandidates = (customSettings?: Setting): Whatsap
     const customer = customersById.get(sale.customerId);
     const rawPhone = customer?.phone || '';
     const normalizedPhone = normalizeEgyptPhone(rawPhone);
+    const legacyInstallments = (sale as { installments?: NonNullable<typeof sale.financing>['schedules'] }).installments;
     const schedules =
-      sale.installments && sale.installments.length > 0
-        ? sale.installments
+      legacyInstallments && legacyInstallments.length > 0
+        ? legacyInstallments
         : sale.financing?.schedules || [];
 
     return schedules

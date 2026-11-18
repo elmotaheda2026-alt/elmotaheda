@@ -178,6 +178,7 @@ export default function WhatsappControlCenter({
 
     const apiBridge = (window as unknown as {
       electronAPI?: {
+        checkWhatsappSession?: () => Promise<unknown>;
         onWhatsappSessionUpdated?: (cb: (data: { connected: boolean; windowOpen: boolean }) => void) => () => void;
       };
     }).electronAPI;
