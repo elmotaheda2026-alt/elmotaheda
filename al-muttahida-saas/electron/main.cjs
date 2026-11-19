@@ -7,7 +7,11 @@ const { startBackend, stopBackend, checkHealth, ensureBackendRunning, getAppData
 
 let autoUpdater = null;
 try {
-  ({ autoUpdater } = require('electron-updater'));
+  try {
+    ({ autoUpdater } = require('./electron-updater.bundle.cjs'));
+  } catch (_) {
+    ({ autoUpdater } = require('electron-updater'));
+  }
 } catch (err) {
   console.warn('[AutoUpdater] electron-updater not available:', err.message);
 }
@@ -249,6 +253,21 @@ async function createMainWindow(apiBaseUrl) {
         }
       }
     }, 1000);
+  });
+
+  // Recover automatically if renderer process crashes instead of leaving a white screen
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.warn(`[Main Window] Renderer process gone (${details?.reason}). Reloading...`);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
+        if (fs.existsSync(indexPath)) {
+          mainWindow.loadFile(indexPath);
+        } else {
+          mainWindow.reload();
+        }
+      }
+    }, 800);
   });
 
   const isDev = process.env.NODE_ENV === 'development';
@@ -1212,7 +1231,10 @@ async function initAndLaunch() {
   }
 }
 
+let lastUpdaterStatus = null;
+
 function sendUpdaterStatus(payload) {
+  lastUpdaterStatus = payload;
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
       mainWindow.webContents.send('updater-status', payload);
@@ -1279,6 +1301,8 @@ function setupAutoUpdater() {
 }
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.handle('get-updater-status', () => lastUpdaterStatus);
 
 ipcMain.handle('get-update-url', () => resolveUpdateUrl() || '');
 

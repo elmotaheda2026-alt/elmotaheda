@@ -47,6 +47,7 @@ try {
 
     // 6. Auto-updater
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+    getUpdaterStatus: () => ipcRenderer.invoke('get-updater-status'),
     getUpdateUrl: () => ipcRenderer.invoke('get-update-url'),
     setUpdateUrl: (url) => ipcRenderer.invoke('set-update-url', url),
     checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),

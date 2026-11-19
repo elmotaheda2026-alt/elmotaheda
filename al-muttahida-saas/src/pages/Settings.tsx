@@ -465,9 +465,57 @@ export default function Settings() {
     }
   };
 
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateCheckMsg, setUpdateCheckMsg] = useState<string | null>(null);
+
   useEffect(() => {
-    if (activeTab === 'network') void loadNetworkInfo();
+    if (activeTab === 'network') {
+      void loadNetworkInfo();
+      const apiBridge = (window as any)?.electronAPI;
+      if (apiBridge?.getAppVersion) {
+        void apiBridge.getAppVersion().then((v: string) => setAppVersion(v || '')).catch(() => {});
+      }
+    }
   }, [activeTab]);
+
+  const handleCheckForUpdates = async () => {
+    const apiBridge = (window as any)?.electronAPI;
+    if (!apiBridge?.checkForUpdates) {
+      setUpdateCheckMsg('الفحص التلقائي متاح في تطبيق سطح المكتب المثبت (EXE) فقط.');
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateCheckMsg(null);
+    try {
+      const isNewerVersion = (remote: string, current: string) => {
+        const r = remote.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+        const c = current.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+        for (let i = 0; i < Math.max(r.length, c.length); i++) {
+          const rv = r[i] || 0;
+          const cv = c[i] || 0;
+          if (rv > cv) return true;
+          if (rv < cv) return false;
+        }
+        return false;
+      };
+
+      const res = await apiBridge.checkForUpdates();
+      if (res?.error) {
+        setUpdateCheckMsg(`تعذر الفحص: ${res.error}`);
+      } else if (res?.supported === false) {
+        setUpdateCheckMsg(res?.message || 'الفحص التلقائي يعمل في النسخة المثبتة فقط');
+      } else if (res?.version && appVersion && isNewerVersion(res.version, appVersion)) {
+        setUpdateCheckMsg(`يتوفر إصدار أحدث (${res.version}) — جاري التحميل في الخلفية...`);
+      } else {
+        setUpdateCheckMsg(`النظام محدّث على آخر إصدار (v${appVersion || res?.version || 'الحالي'}).`);
+      }
+    } catch (err: any) {
+      setUpdateCheckMsg(err?.message || 'حدث خطأ أثناء فحص التحديثات');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   const browserLanUrl =
     networkInfo?.frontendUrl || `http://${networkInfo?.localIp || 'localhost'}:4000`;
@@ -1195,6 +1243,36 @@ export default function Settings() {
                 </div>
               </div>
             )}
+
+            {/* System Updates Card */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
+              <div className="space-y-1">
+                <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <RefreshCw size={16} className="text-blue-600" />
+                  <span>تحديثات النظام</span>
+                  {appVersion && (
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                      الإصدار الحالي: v{appVersion}
+                    </span>
+                  )}
+                </h4>
+                <p className="text-xs text-slate-500">
+                  يفحص وجود إصدارات أحدث من الخادم الرسمي عند الاتصال بالإنترنت.
+                </p>
+                {updateCheckMsg && (
+                  <p className="text-xs font-bold text-blue-700 mt-1">{updateCheckMsg}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCheckForUpdates()}
+                disabled={checkingUpdate}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={checkingUpdate ? 'animate-spin' : ''} />
+                <span>{checkingUpdate ? 'جاري الفحص...' : 'فحص التحديثات الآن'}</span>
+              </button>
+            </div>
           </div>
         )}
 

@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
-import UpdateBanner from './UpdateBanner';
 import { useAuth } from '../context/AuthContext';
 import { startRealtimeSync, stopRealtimeSync } from '../lib/realtimeSync';
 
@@ -51,7 +50,6 @@ export default function Layout() {
 
       <div className={`h-[100dvh] max-h-[100dvh] flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-60' : 'lg:mr-16'} print:m-0 overflow-hidden relative`}>
         <div className="print:hidden shrink-0 z-20 sticky top-0">
-          <UpdateBanner />
           <Header onMenuClick={toggleSidebar} />
         </div>
 

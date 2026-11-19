@@ -9,6 +9,7 @@ interface UpdaterStatusPayload {
 }
 
 interface ElectronUpdaterBridge {
+  getUpdaterStatus?: () => Promise<UpdaterStatusPayload | null>;
   onUpdaterStatus?: (cb: (data: UpdaterStatusPayload) => void) => () => void;
   installUpdate?: () => Promise<{ ok?: boolean }>;
 }
@@ -21,8 +22,16 @@ export default function UpdateBanner() {
     const api = (window as unknown as { electronAPI?: ElectronUpdaterBridge }).electronAPI;
     if (!api?.onUpdaterStatus) return;
 
+    if (api.getUpdaterStatus) {
+      void api.getUpdaterStatus().then((last) => {
+        if (last && (last.status === 'available' || last.status === 'downloading' || last.status === 'downloaded')) {
+          setUpdateState(last);
+        }
+      }).catch(() => {});
+    }
+
     const unsubscribe = api.onUpdaterStatus((payload) => {
-      if (payload.status === 'available' || payload.status === 'downloading' || payload.status === 'downloaded') {
+      if (payload.status === 'available' || payload.status === 'downloading' || payload.status === 'downloaded' || payload.status === 'error') {
         setDismissed(false);
         setUpdateState(payload);
       } else if (payload.status === 'up-to-date') {
@@ -57,7 +66,9 @@ export default function UpdateBanner() {
             ? `تم تحميل التحديث الجديد${updateState.version ? ` (v${updateState.version})` : ''} — جاهز للتثبيت الآن`
             : updateState.status === 'downloading'
               ? `جاري تحميل التحديث الجديد... ${updateState.percent ?? 0}%`
-              : `يتوفر تحديث جديد للنظام${updateState.version ? ` (v${updateState.version})` : ''} — جاري التحميل...`}
+              : updateState.status === 'error'
+                ? `تعذر فحص/تحميل التحديث: ${updateState.message || 'خطأ في الاتصال'}`
+                : `يتوفر تحديث جديد للنظام${updateState.version ? ` (v${updateState.version})` : ''} — جاري التحميل...`}
         </span>
       </div>
 

@@ -4,6 +4,8 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DialogProvider } from './context/DialogContext';
 import Layout from './components/Layout';
+import UpdateBanner from './components/UpdateBanner';
+import ServerOfflineOverlay from './components/ServerOfflineOverlay';
 import Login from './pages/Login';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -104,6 +106,7 @@ function AppRoutes() {
 
   return (
     <Suspense fallback={<LoadingState />}>
+      <UpdateBanner />
       <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
       <Routes>
         <Route path="/onboarding" element={<OnboardingWizard />} />
@@ -135,14 +138,15 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <ErrorBoundary>
-      <AuthProvider>
-        <DialogProvider>
-          <HashRouter>
-            <AppRoutes />
-          </HashRouter>
-        </DialogProvider>
-      </AuthProvider>
-    </ErrorBoundary>
+        <AuthProvider>
+          <ServerOfflineOverlay />
+          <ErrorBoundary>
+            <DialogProvider>
+              <HashRouter>
+                <AppRoutes />
+              </HashRouter>
+            </DialogProvider>
+      </ErrorBoundary >
+    </AuthProvider >
   );
 }

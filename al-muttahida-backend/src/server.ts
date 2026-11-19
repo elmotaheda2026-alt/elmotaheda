@@ -86,6 +86,11 @@ async function bootstrap() {
       max: 600, // generous for ERP LAN polling & normal usage while blocking floods
       standardHeaders: true,
       legacyHeaders: false,
+      skip: (req) =>
+        req.path === '/health' ||
+        req.path === '/api/health' ||
+        req.path === '/events' ||
+        req.path === '/api/events',
       message: { error: 'تم إرسال عدد كبير جداً من الطلبات، يرجى الانتظار لحظة ثم المحاولة.' },
     })
   );
