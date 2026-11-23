@@ -5,12 +5,15 @@ import { Request, Response, NextFunction } from 'express';
 export function errorHandler(err: any, _req: Request, res: Response, _next: NextFunction) {
   console.error('Error:', err);
   const status = err.status || 500;
-  const message = err.message || 'Internal Server Error';
+  const isProd = process.env.NODE_ENV === 'production';
+  const message =
+    isProd && status >= 500
+      ? 'حدث خطأ داخلي في الخادم، يرجى المحاولة مرة أخرى.'
+      : err.message || 'Internal Server Error';
   res.status(status).json({
     success: false,
     status,
     message,
-    // In production you may hide stack trace
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
+    ...(!isProd && { stack: err.stack }),
   });
 }

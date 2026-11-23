@@ -124,17 +124,6 @@ function getCandidateConfigs(): any[] {
   addTarget('localhost\\SQLEXPRESS', fallbackUser, fallbackPass, 1433);
   addTarget('.\\SQLEXPRESS', fallbackUser, fallbackPass);
 
-  // 3. Fallbacks with sa user only during initial unconfigured setup
-  const hasExplicitCredentials = Boolean((saved?.dbUser && saved?.dbPassword) || process.env.DB_PASSWORD);
-  if (!hasExplicitCredentials) {
-    addTarget('localhost\\SQLEXPRESS', 'sa', 'Alm@2026#App');
-    addTarget('localhost\\SQLEXPRESS', 'sa', '');
-    addTarget('localhost', 'sa', 'Alm@2026#App', 1433);
-    addTarget('localhost', 'sa', '', 1433);
-    addTarget('127.0.0.1', 'sa', 'Alm@2026#App', 1433);
-    addTarget('127.0.0.1', 'sa', '', 1433);
-  }
-
   return list;
 }
 
@@ -818,6 +807,21 @@ export async function initDb(): Promise<void> {
     invoice_footer NVARCHAR(1000)
   );
 
+  IF COL_LENGTH('settings', 'starting_cash_balance') IS NULL
+    ALTER TABLE settings ADD starting_cash_balance DECIMAL(18,2) NOT NULL DEFAULT 0;
+  IF COL_LENGTH('settings', 'starting_receivables') IS NULL
+    ALTER TABLE settings ADD starting_receivables DECIMAL(18,2) NOT NULL DEFAULT 0;
+  IF COL_LENGTH('settings', 'starting_payables') IS NULL
+    ALTER TABLE settings ADD starting_payables DECIMAL(18,2) NOT NULL DEFAULT 0;
+  IF COL_LENGTH('settings', 'starting_inventory_value') IS NULL
+    ALTER TABLE settings ADD starting_inventory_value DECIMAL(18,2) NOT NULL DEFAULT 0;
+  IF COL_LENGTH('settings', 'whatsapp_config_json') IS NULL
+    ALTER TABLE settings ADD whatsapp_config_json NVARCHAR(MAX) NULL;
+  IF COL_LENGTH('settings', 'role_permissions_json') IS NULL
+    ALTER TABLE settings ADD role_permissions_json NVARCHAR(MAX) NULL;
+  IF COL_LENGTH('settings', 'payment_channels_json') IS NULL
+    ALTER TABLE settings ADD payment_channels_json NVARCHAR(MAX) NULL;
+
   -- 13. Notifications
   IF OBJECT_ID('notifications', 'U') IS NULL
   CREATE TABLE notifications (
@@ -860,6 +864,11 @@ export async function initDb(): Promise<void> {
     current_balance DECIMAL(18,2) NOT NULL DEFAULT 0,
     joined_date NVARCHAR(40) NULL,
     is_founder BIT NOT NULL DEFAULT 0,
+    include_warehouse_profit BIT NOT NULL DEFAULT 0,
+    payout_preference NVARCHAR(20) NOT NULL DEFAULT 'capitalize',
+    payout_cycle_months INT NOT NULL DEFAULT 1,
+    payout_notice_days INT NOT NULL DEFAULT 15,
+    next_payout_date NVARCHAR(40) NULL,
     notes NVARCHAR(1000),
     created_at NVARCHAR(40) NOT NULL,
     updated_at NVARCHAR(40) NOT NULL
@@ -867,6 +876,11 @@ export async function initDb(): Promise<void> {
 
   IF COL_LENGTH('shareholders', 'joined_date') IS NULL ALTER TABLE shareholders ADD joined_date NVARCHAR(40) NULL;
   IF COL_LENGTH('shareholders', 'is_founder') IS NULL ALTER TABLE shareholders ADD is_founder BIT NOT NULL DEFAULT 0;
+  IF COL_LENGTH('shareholders', 'include_warehouse_profit') IS NULL ALTER TABLE shareholders ADD include_warehouse_profit BIT NOT NULL DEFAULT 0;
+  IF COL_LENGTH('shareholders', 'payout_preference') IS NULL ALTER TABLE shareholders ADD payout_preference NVARCHAR(20) NOT NULL DEFAULT 'capitalize';
+  IF COL_LENGTH('shareholders', 'payout_cycle_months') IS NULL ALTER TABLE shareholders ADD payout_cycle_months INT NOT NULL DEFAULT 1;
+  IF COL_LENGTH('shareholders', 'payout_notice_days') IS NULL ALTER TABLE shareholders ADD payout_notice_days INT NOT NULL DEFAULT 15;
+  IF COL_LENGTH('shareholders', 'next_payout_date') IS NULL ALTER TABLE shareholders ADD next_payout_date NVARCHAR(40) NULL;
 
   -- 16. Shareholder Transactions
   IF OBJECT_ID('shareholder_transactions', 'U') IS NULL
@@ -935,11 +949,16 @@ export async function initDb(): Promise<void> {
     status NVARCHAR(20) NOT NULL,
     old_installment_months INT NOT NULL,
     new_installment_months INT NOT NULL,
+    paid_before_reschedule DECIMAL(18,2) NOT NULL DEFAULT 0,
+    extra_interest_amount DECIMAL(18,2) NOT NULL DEFAULT 0,
     requested_by NVARCHAR(200) NOT NULL,
     requested_at NVARCHAR(40) NOT NULL,
     reviewed_by NVARCHAR(200) NULL,
     reviewed_at NVARCHAR(40) NULL
   );
+
+  IF COL_LENGTH('reschedule_requests', 'paid_before_reschedule') IS NULL ALTER TABLE reschedule_requests ADD paid_before_reschedule DECIMAL(18,2) NOT NULL DEFAULT 0;
+  IF COL_LENGTH('reschedule_requests', 'extra_interest_amount') IS NULL ALTER TABLE reschedule_requests ADD extra_interest_amount DECIMAL(18,2) NOT NULL DEFAULT 0;
 
   -- 21. Historical Archives (Day 5 Database Integrity)
   IF OBJECT_ID('collection_tasks_archive', 'U') IS NULL
@@ -1112,7 +1131,8 @@ export async function initDb(): Promise<void> {
     if (totalUsers === 0 || allowSeed) {
       const admin = await db.get<{ id: string }>('SELECT id FROM users WHERE username = ?', 'admin');
       if (!admin?.id) {
-        const passwordHash = await hashPassword('admin123');
+        const initialAdminPass = process.env.ADMIN_INITIAL_PASSWORD || 'admin123';
+        const passwordHash = await hashPassword(initialAdminPass);
         const allPermissions = {
           'sales:read': true,
           'sales:write': true,
@@ -1142,7 +1162,7 @@ export async function initDb(): Promise<void> {
           new Date().toISOString()
         );
         // eslint-disable-next-line no-console
-        console.log('✅ Default admin user created (admin / admin123).');
+        console.log('✅ Default admin user initialized.');
       }
     }
   } catch (err) {
@@ -1226,10 +1246,10 @@ export async function initDb(): Promise<void> {
           @overdue_inst  INT;
 
         SELECT @cash_in = COALESCE(SUM(amount), 0)
-          FROM payments WHERE type = 'in' AND status = 'posted';
+          FROM payments WHERE type = 'in' AND status = 'posted' AND COALESCE(reference_type, '') <> 'internal_transfer';
 
         SELECT @cash_out = COALESCE(SUM(amount), 0)
-          FROM payments WHERE type = 'out' AND status = 'posted';
+          FROM payments WHERE type = 'out' AND status = 'posted' AND COALESCE(reference_type, '') <> 'internal_transfer';
 
         SELECT @inventory = COALESCE(SUM(quantity * purchase_price), 0)
           FROM products;
@@ -1377,6 +1397,47 @@ export async function initDb(): Promise<void> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('Error normalizing negative rounding balances:', err);
+  }
+
+  // Separate batch after DDL so SQL Server compiles newly added columns cleanly
+  try {
+    await db.run(`
+      UPDATE shareholders
+      SET payout_preference = CASE WHEN payout_preference IS NULL OR payout_preference = 'ask' THEN 'capitalize' ELSE payout_preference END,
+          payout_cycle_months = CASE
+            WHEN payout_cycle_months IS NULL
+              OR ((payout_preference IS NULL OR payout_preference <> 'cash')
+                  AND (next_payout_date IS NULL
+                       OR TRY_CONVERT(DATE, next_payout_date) IS NULL
+                       OR TRY_CONVERT(DATE, next_payout_date) <> EOMONTH(TRY_CONVERT(DATE, next_payout_date))))
+              THEN 1
+            ELSE payout_cycle_months
+          END,
+          payout_notice_days = COALESCE(payout_notice_days, 15),
+          next_payout_date = CASE
+            WHEN (payout_preference IS NULL OR payout_preference <> 'cash')
+                 AND (next_payout_date IS NULL OR TRY_CONVERT(DATE, next_payout_date) IS NULL OR TRY_CONVERT(DATE, next_payout_date) <> EOMONTH(TRY_CONVERT(DATE, next_payout_date)))
+              THEN CONVERT(
+                NVARCHAR(10),
+                CASE
+                  WHEN CONVERT(DATE, GETDATE()) < EOMONTH(GETDATE()) THEN EOMONTH(GETDATE())
+                  ELSE EOMONTH(GETDATE(), 1)
+                END,
+                23
+              )
+            ELSE next_payout_date
+          END
+      WHERE payout_preference IS NULL
+         OR payout_preference = 'ask'
+         OR next_payout_date IS NULL
+         OR payout_notice_days IS NULL
+         OR ((payout_preference IS NULL OR payout_preference <> 'cash')
+             AND (TRY_CONVERT(DATE, next_payout_date) IS NULL
+                  OR TRY_CONVERT(DATE, next_payout_date) <> EOMONTH(TRY_CONVERT(DATE, next_payout_date))));
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Error normalizing shareholder rollover defaults:', err);
   }
 
   // Final verification: ensure core schema tables actually exist

@@ -16,10 +16,11 @@ const logger = winston.createLogger({
 export const requestLogger = (req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   const { method, url } = req;
+  const safeUrl = url.replace(/([?&]token=)[^&]+/gi, '$1[REDACTED]');
   res.on('finish', () => {
     const duration = Date.now() - start;
     const { statusCode } = res;
-    logger.info(`${method} ${url} ${statusCode} - ${duration}ms`);
+    logger.info(`${method} ${safeUrl} ${statusCode} - ${duration}ms`);
   });
   next();
 };

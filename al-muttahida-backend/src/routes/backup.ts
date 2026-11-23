@@ -1,13 +1,17 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import sql from 'mssql';
 import { dbPromise, poolPromise } from '../db.js';
 import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { extractApiPermissions, setRolePermissions, setUserAuthSnapshot } from '../permissions.js';
+import { broadcastDataChange } from '../realtime.js';
+import type { UserRole } from '../types.js';
 import { audit } from '../audit.js';
 import { hashPassword, uid } from '../utils.js';
 import { getAutoBackupConfig, updateAutoBackupConfig, performAutoBackup } from '../autoBackupService.js';
 
 const router = Router();
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requirePermission('settings:manage'));
 
 const BACKUP_VERSION = 1;
 const BACKUP_KEY_NAMES = [
@@ -118,6 +122,7 @@ const KEY_ALIASES: Record<string, string> = {
   salesRepName: 'sales_rep_name',
   sharePercentage: 'share_percentage',
   managementFeePercentage: 'management_fee_percentage',
+  includeWarehouseProfit: 'include_warehouse_profit',
   currentBalance: 'current_balance',
   shareholderId: 'shareholder_id',
   shareholderName: 'shareholder_name',
@@ -283,19 +288,55 @@ async function getTableColumns(trx: any, table: string): Promise<Set<string>> {
 function filterRowColumns(row: Record<string, any>, allowedColumns: Set<string>) {
   return Object.fromEntries(Object.entries(row).filter(([key]) => allowedColumns.has(key)));
 }
-async function replaceTable(trx: any, table: string, rows: any[]) {
+
+async function insertFilteredRow(
+  trx: any,
+  table: string,
+  row: Record<string, any>,
+  allowedColumns: Set<string>,
+): Promise<boolean> {
+  const filtered = filterRowColumns(row, allowedColumns);
+  const columns = Object.keys(filtered);
+  if (columns.length === 0) return false;
   const request = new sql.Request(trx);
-  await request.query(`DELETE FROM ${table}`);
-  for (const row of rows) {
-    const cols = Object.keys(row);
-    if (!cols.length) continue;
-    const placeholders = cols.map((_, index) => `@p${index + 1}`).join(', ');
-    const insert = new sql.Request(trx);
-    cols.forEach((col, index) => insert.input(`p${index + 1}`, row[col]));
-    await insert.query(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`);
-  }
+  columns.forEach((column, index) => request.input(`p${index + 1}`, normalizeSqlValue(filtered[column])));
+  const values = columns.map((_, index) => `@p${index + 1}`).join(', ');
+  await request.query(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${values})`);
+  return true;
 }
 
+async function ensureSettingsBackupColumns(db: any) {
+  await db.run(`
+    IF COL_LENGTH('settings', 'starting_cash_balance') IS NULL
+      ALTER TABLE settings ADD starting_cash_balance DECIMAL(18,2) NOT NULL DEFAULT 0;
+    IF COL_LENGTH('settings', 'starting_receivables') IS NULL
+      ALTER TABLE settings ADD starting_receivables DECIMAL(18,2) NOT NULL DEFAULT 0;
+    IF COL_LENGTH('settings', 'starting_payables') IS NULL
+      ALTER TABLE settings ADD starting_payables DECIMAL(18,2) NOT NULL DEFAULT 0;
+    IF COL_LENGTH('settings', 'starting_inventory_value') IS NULL
+      ALTER TABLE settings ADD starting_inventory_value DECIMAL(18,2) NOT NULL DEFAULT 0;
+    IF COL_LENGTH('settings', 'whatsapp_config_json') IS NULL
+      ALTER TABLE settings ADD whatsapp_config_json NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('settings', 'role_permissions_json') IS NULL
+      ALTER TABLE settings ADD role_permissions_json NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('settings', 'payment_channels_json') IS NULL
+      ALTER TABLE settings ADD payment_channels_json NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('shareholders', 'include_warehouse_profit') IS NULL
+      ALTER TABLE shareholders ADD include_warehouse_profit BIT NOT NULL DEFAULT 0;
+    IF COL_LENGTH('shareholders', 'payout_preference') IS NULL
+      ALTER TABLE shareholders ADD payout_preference NVARCHAR(20) NOT NULL DEFAULT 'capitalize';
+    IF COL_LENGTH('shareholders', 'payout_cycle_months') IS NULL
+      ALTER TABLE shareholders ADD payout_cycle_months INT NOT NULL DEFAULT 3;
+    IF COL_LENGTH('shareholders', 'payout_notice_days') IS NULL
+      ALTER TABLE shareholders ADD payout_notice_days INT NOT NULL DEFAULT 15;
+    IF COL_LENGTH('shareholders', 'next_payout_date') IS NULL
+      ALTER TABLE shareholders ADD next_payout_date NVARCHAR(40) NULL;
+    IF COL_LENGTH('reschedule_requests', 'paid_before_reschedule') IS NULL
+      ALTER TABLE reschedule_requests ADD paid_before_reschedule DECIMAL(18,2) NOT NULL DEFAULT 0;
+    IF COL_LENGTH('reschedule_requests', 'extra_interest_amount') IS NULL
+      ALTER TABLE reschedule_requests ADD extra_interest_amount DECIMAL(18,2) NOT NULL DEFAULT 0;
+  `);
+}
 
 export function generateSqlBackup(backup: BackupFile): string {
   const lines: string[] = [
@@ -333,6 +374,7 @@ export function generateSqlBackup(backup: BackupFile): string {
     PAYMENTS_ARCHIVE: 'payments_archive',
     RESCHEDULE_REQUESTS: 'reschedule_requests',
     CLOSING_PERIODS: 'closing_periods',
+    DOCUMENT_TEMPLATES: 'document_templates',
   };
 
   for (const [key, rawRows] of Object.entries(backup.data || {})) {
@@ -364,7 +406,11 @@ export function generateSqlBackup(backup: BackupFile): string {
     lines.push('-- ' + rows.length + ' rows recorded');
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
-      const cols = Object.keys(row);
+      const cols = Object.keys(row).filter((col) => {
+        if (tableName === 'sales' && (col === 'items' || col === 'financing')) return false;
+        if (tableName === 'purchases' && col === 'items') return false;
+        return true;
+      });
       if (cols.length === 0) continue;
 
       const colNames = cols.join(', ');
@@ -430,9 +476,21 @@ router.get('/auto-backup', async (_req, res) => {
   }
 });
 
+const autoBackupUpdateSchema = z.object({
+  enabled: z.boolean().optional(),
+  destinationPath: z.string().max(500).optional(),
+  frequency: z.enum(['daily', 'hourly', 'twice_daily']).optional(),
+  backupTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  retentionDays: z.number().int().min(1).max(365).optional(),
+});
+
 router.put('/auto-backup', async (req: AuthedRequest, res) => {
+  const parsed = autoBackupUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات النسخ الاحتياطي التلقائي غير صالحة', errors: parsed.error.format() });
+  }
   try {
-    const updated = updateAutoBackupConfig(req.body);
+    const updated = updateAutoBackupConfig(parsed.data);
     await audit('settings.auto_backup.update', 'settings', 'auto-backup', req.user?.name || 'system', { config: updated });
     return res.json({ message: 'تم حفظ إعدادات النسخ الاحتياطي التلقائي بنجاح', config: updated });
   } catch (error: any) {
@@ -454,23 +512,288 @@ router.post('/auto-backup/run', async (req: AuthedRequest, res) => {
   }
 });
 
+export async function restoreBackupInTransaction(
+  trx: any,
+  payload: BackupFile,
+  onStep?: (step: string) => void,
+): Promise<{ restoredCounts: Record<string, number> }> {
+  const step = (name: string) => {
+    onStep?.(name);
+  };
+  const restoredCounts: Record<string, number> = {};
+
+  step('validating users');
+  const validRoles = new Set(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']);
+  const rawUsers = parseRows<any>(payload.data.USERS);
+  if (rawUsers.length === 0) {
+    throw new Error('ملف النسخة الاحتياطية لا يحتوي على أي مستخدمين — تم إلغاء الاستعادة لحماية النظام.');
+  }
+
+  const users = rawUsers.map((user) => ({
+    id: user.id || uid(),
+    name: user.name || 'User',
+    username: user.username || `user_${uid().slice(0, 6)}`,
+    password_hash: user.password_hash || '',
+    raw_password: typeof user.password === 'string' ? user.password : '',
+    role: validRoles.has(user.role) ? user.role : 'user',
+    is_active: user.is_active === true || user.is_active === 1 || user.isActive === true ? 1 : 0,
+    phone: user.phone || null,
+    permissions:
+      user.permissions == null
+        ? null
+        : typeof user.permissions === 'string'
+          ? user.permissions
+          : safeStringify(user.permissions),
+    created_at: user.created_at || user.createdAt || new Date().toISOString(),
+  }));
+
+  step('clearing tables');
+  await new sql.Request(trx).query('DELETE FROM sale_items');
+  await new sql.Request(trx).query('DELETE FROM installment_schedules');
+  await new sql.Request(trx).query('DELETE FROM purchase_items');
+  await new sql.Request(trx).query('DELETE FROM payments');
+  await new sql.Request(trx).query('DELETE FROM payments_archive');
+  await new sql.Request(trx).query('DELETE FROM expenses');
+  await new sql.Request(trx).query('DELETE FROM notifications');
+  await new sql.Request(trx).query('DELETE FROM sales_reps');
+  await new sql.Request(trx).query('DELETE FROM shareholder_transactions');
+  await new sql.Request(trx).query('DELETE FROM collection_tasks');
+  await new sql.Request(trx).query('DELETE FROM collection_tasks_archive');
+  await new sql.Request(trx).query('DELETE FROM audit_log');
+  await new sql.Request(trx).query('DELETE FROM closing_periods');
+  await new sql.Request(trx).query('DELETE FROM reschedule_requests');
+  await new sql.Request(trx).query('DELETE FROM document_templates');
+  await new sql.Request(trx).query('DELETE FROM dashboard_metrics_cache');
+  await new sql.Request(trx).query('DELETE FROM sales');
+  await new sql.Request(trx).query('DELETE FROM purchases');
+  await new sql.Request(trx).query('DELETE FROM customers');
+  await new sql.Request(trx).query('DELETE FROM suppliers');
+  await new sql.Request(trx).query('DELETE FROM products');
+  await new sql.Request(trx).query('DELETE FROM shareholders');
+  await new sql.Request(trx).query('DELETE FROM settings');
+  await new sql.Request(trx).query('DELETE FROM users');
+
+  step('users');
+  restoredCounts.users = 0;
+  for (const user of users) {
+    let passwordHash = user.password_hash;
+    if (!passwordHash) {
+      const plain = user.raw_password.trim().length > 0 ? user.raw_password : 'admin123';
+      passwordHash = await hashPassword(plain);
+    }
+    const request = new sql.Request(trx);
+    request.input('id', user.id);
+    request.input('name', user.name);
+    request.input('username', user.username);
+    request.input('password_hash', passwordHash);
+    request.input('role', user.role);
+    request.input('is_active', user.is_active);
+    request.input('phone', user.phone);
+    request.input('permissions', user.permissions);
+    request.input('created_at', user.created_at);
+    await request.query(`INSERT INTO users (id, name, username, password_hash, role, is_active, phone, permissions, created_at)
+      VALUES (@id, @name, @username, @password_hash, @role, @is_active, @phone, @permissions, @created_at)`);
+    restoredCounts.users += 1;
+  }
+
+  step('settings');
+  restoredCounts.settings = 0;
+  const settingsAllowedCols = await getTableColumns(trx, 'settings');
+  const settingsRows = parseRows<any>(payload.data.SETTINGS).slice(0, 1);
+  if (settingsRows.length > 0) {
+    const normalizedSettings = normalizeBackupRow(settingsRows[0]);
+    if (await insertFilteredRow(trx, 'settings', normalizedSettings, settingsAllowedCols)) {
+      restoredCounts.settings += 1;
+    }
+  }
+
+  const directTables: Array<[BackupKey, string]> = [
+    ['CUSTOMERS', 'customers'],
+    ['SUPPLIERS', 'suppliers'],
+    ['PRODUCTS', 'products'],
+    ['EXPENSES', 'expenses'],
+    ['NOTIFICATIONS', 'notifications'],
+    ['SALES_REPS', 'sales_reps'],
+    ['SHAREHOLDERS', 'shareholders'],
+    ['SHAREHOLDER_TRANSACTIONS', 'shareholder_transactions'],
+    ['AUDIT_LOGS', 'audit_log'],
+    ['COLLECTION_TASKS', 'collection_tasks'],
+    ['COLLECTION_TASKS_ARCHIVE', 'collection_tasks_archive'],
+    ['PAYMENTS_ARCHIVE', 'payments_archive'],
+    ['RESCHEDULE_REQUESTS', 'reschedule_requests'],
+    ['CLOSING_PERIODS', 'closing_periods'],
+    ['DOCUMENT_TEMPLATES', 'document_templates'],
+  ];
+
+  for (const [key, table] of directTables) {
+    step(table);
+    restoredCounts[table] = 0;
+    const allowedColumns = await getTableColumns(trx, table);
+    const rows = parseRows<any>(payload.data[key]);
+    for (const rawRow of rows) {
+      const normalized = normalizeBackupRow(rawRow);
+      if (await insertFilteredRow(trx, table, normalized, allowedColumns)) {
+        restoredCounts[table] += 1;
+      }
+    }
+  }
+
+  step('sales');
+  restoredCounts.sales = 0;
+  restoredCounts.sale_items = 0;
+  restoredCounts.installment_schedules = 0;
+  const salesColumns = await getTableColumns(trx, 'sales');
+  const saleItemColumns = await getTableColumns(trx, 'sale_items');
+  const scheduleColumns = await getTableColumns(trx, 'installment_schedules');
+  const sales = parseRows<any>(payload.data.SALES);
+  for (const originalSale of sales) {
+    const sale = filterRowColumns(normalizeBackupRow(originalSale), salesColumns);
+    if (await insertFilteredRow(trx, 'sales', sale, salesColumns)) {
+      restoredCounts.sales += 1;
+    }
+
+    if (Array.isArray(originalSale.items)) {
+      step('sale_items');
+      for (const item of originalSale.items) {
+        const normalizedItem = normalizeBackupRow({
+          ...item,
+          id: item.id || uid(),
+          sale_id: sale.id,
+          product_id: item.product_id || item.productId || '',
+          product_name: item.product_name || item.productName || '',
+          barcode: item.barcode ?? null,
+          quantity: Number(item.quantity || 0),
+          unit_price: Number(item.unit_price ?? item.unitPrice ?? 0),
+          unit_cost: Number(item.unit_cost ?? item.unitCost ?? 0),
+          discount: Number(item.discount || 0),
+          tax: Number(item.tax || 0),
+          total: Number(item.total || 0),
+          fulfillment_type: item.fulfillment_type ?? item.fulfillmentType ?? 'on_demand',
+        });
+        if (await insertFilteredRow(trx, 'sale_items', normalizedItem, saleItemColumns)) {
+          restoredCounts.sale_items += 1;
+        }
+      }
+    }
+
+    const rawSchedules = originalSale.financing?.schedules || [];
+    const schedules = rawSchedules.length > 0 ? rawSchedules : buildFallbackSchedulesForSale(sale);
+    if (schedules.length > 0) {
+      step('installment_schedules');
+      for (const schedule of schedules) {
+        const normalizedSchedule = normalizeBackupRow({
+          ...schedule,
+          id: schedule.id || uid(),
+          sale_id: sale.id,
+          month_index: Number(schedule.month_index ?? schedule.monthIndex ?? 0),
+          due_date: schedule.due_date ?? schedule.dueDate ?? sale.date,
+          amount: Number(schedule.amount || 0),
+          paid_amount: Number(schedule.paid_amount ?? schedule.paidAmount ?? 0),
+          status: schedule.status || 'unpaid',
+          paid_at: schedule.paid_at ?? schedule.paidAt ?? null,
+          deferred: schedule.deferred === true || schedule.deferred === 1 ? 1 : 0,
+          deferred_at: schedule.deferred_at ?? schedule.deferredAt ?? null,
+          notes: schedule.notes ?? null,
+        });
+        if (await insertFilteredRow(trx, 'installment_schedules', normalizedSchedule, scheduleColumns)) {
+          restoredCounts.installment_schedules += 1;
+        }
+      }
+    }
+  }
+
+  step('purchases');
+  restoredCounts.purchases = 0;
+  restoredCounts.purchase_items = 0;
+  const purchaseColumns = await getTableColumns(trx, 'purchases');
+  const purchaseItemColumns = await getTableColumns(trx, 'purchase_items');
+  const purchases = parseRows<any>(payload.data.PURCHASES);
+  for (const originalPurchase of purchases) {
+    const purchase = filterRowColumns(normalizeBackupRow(originalPurchase), purchaseColumns);
+    if (await insertFilteredRow(trx, 'purchases', purchase, purchaseColumns)) {
+      restoredCounts.purchases += 1;
+    }
+
+    if (Array.isArray(originalPurchase.items)) {
+      step('purchase_items');
+      for (const item of originalPurchase.items) {
+        const normalizedItem = normalizeBackupRow({
+          ...item,
+          id: item.id || uid(),
+          purchase_id: purchase.id,
+          product_id: item.product_id || item.productId || '',
+          product_name: item.product_name || item.productName || '',
+          barcode: item.barcode ?? null,
+          quantity: Number(item.quantity || 0),
+          unit_price: Number(item.unit_price ?? item.unitPrice ?? 0),
+          discount: Number(item.discount || 0),
+          tax: Number(item.tax || 0),
+          total: Number(item.total || 0),
+        });
+        if (await insertFilteredRow(trx, 'purchase_items', normalizedItem, purchaseItemColumns)) {
+          restoredCounts.purchase_items += 1;
+        }
+      }
+    }
+  }
+
+  // Insert payments after sales & customers to satisfy FK_payments_sales and FK_payments_customers
+  step('payments');
+  restoredCounts.payments = 0;
+  const paymentColumns = await getTableColumns(trx, 'payments');
+  const paymentRows = parseRows<any>(payload.data.PAYMENTS);
+  for (const rawRow of paymentRows) {
+    const normalized = normalizeBackupRow(rawRow);
+    for (const nullableCol of ['sale_id', 'customer_id', 'supplier_id', 'installment_id']) {
+      if (normalized[nullableCol] === '') {
+        normalized[nullableCol] = null;
+      }
+    }
+    if (await insertFilteredRow(trx, 'payments', normalized, paymentColumns)) {
+      restoredCounts.payments += 1;
+    }
+  }
+
+  return { restoredCounts };
+}
+
 router.post('/restore-backup', requireAdmin, async (req: AuthedRequest, res) => {
   let payload = req.body as BackupFile;
 
-  // Handle raw SQL backup string if sent directly
+  // Handle raw SQL backup or JSON string if sent directly
   if (typeof req.body === 'string' || (req.body && typeof req.body.sql === 'string')) {
     const rawSql = typeof req.body === 'string' ? req.body : req.body.sql;
-    const match = rawSql.match(/\/\*\s*AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_START\s*([\s\S]*?)\s*AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_END\s*\*\//);
-    if (match && match[1]) {
+    const trimmed = rawSql.trim();
+    if (trimmed.startsWith('{')) {
       try {
-        payload = JSON.parse(match[1].trim());
+        payload = JSON.parse(trimmed);
       } catch (_) {}
+    } else {
+      const match = rawSql.match(/\/\*\s*AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_START\s*([\s\S]*?)\s*AL_MUTTAHIDA_SQL_BACKUP_PAYLOAD_END\s*\*\//);
+      if (match && match[1]) {
+        try {
+          payload = JSON.parse(match[1].trim());
+        } catch (_) {}
+      }
     }
   }
 
   if (!payload || payload.app !== 'almuttahida-saas' || !payload.data) {
     return res.status(400).json({ message: 'Invalid backup file' });
   }
+
+  let precheckUsers: any[] = [];
+  try {
+    precheckUsers = parseRows<any>(payload.data.USERS);
+  } catch {
+    return res.status(400).json({ message: 'بيانات المستخدمين في النسخة الاحتياطية غير صالحة' });
+  }
+  if (precheckUsers.length === 0) {
+    return res.status(400).json({ message: 'ملف النسخة الاحتياطية لا يحتوي على أي مستخدمين — تم إلغاء الاستعادة لحماية النظام.' });
+  }
+
+  const db = await dbPromise;
+  await ensureSettingsBackupColumns(db);
 
   const pool = await poolPromise;
   const trx: any = new (sql as any).Transaction(pool);
@@ -479,207 +802,67 @@ router.post('/restore-backup', requireAdmin, async (req: AuthedRequest, res) => 
 
   try {
     await trx.begin();
-
-    await new sql.Request(trx).query('DELETE FROM sale_items');
-    await new sql.Request(trx).query('DELETE FROM installment_schedules');
-    await new sql.Request(trx).query('DELETE FROM purchase_items');
-    await new sql.Request(trx).query('DELETE FROM payments');
-    await new sql.Request(trx).query('DELETE FROM payments_archive');
-    await new sql.Request(trx).query('DELETE FROM expenses');
-    await new sql.Request(trx).query('DELETE FROM notifications');
-    await new sql.Request(trx).query('DELETE FROM sales_reps');
-    await new sql.Request(trx).query('DELETE FROM shareholder_transactions');
-    await new sql.Request(trx).query('DELETE FROM collection_tasks');
-    await new sql.Request(trx).query('DELETE FROM collection_tasks_archive');
-    await new sql.Request(trx).query('DELETE FROM audit_log');
-    await new sql.Request(trx).query('DELETE FROM closing_periods');
-    await new sql.Request(trx).query('DELETE FROM reschedule_requests');
-    await new sql.Request(trx).query('DELETE FROM document_templates');
-    await new sql.Request(trx).query('DELETE FROM dashboard_metrics_cache');
-    await new sql.Request(trx).query('DELETE FROM sales');
-    await new sql.Request(trx).query('DELETE FROM purchases');
-    await new sql.Request(trx).query('DELETE FROM customers');
-    await new sql.Request(trx).query('DELETE FROM suppliers');
-    await new sql.Request(trx).query('DELETE FROM products');
-    await new sql.Request(trx).query('DELETE FROM shareholders');
-    await new sql.Request(trx).query('DELETE FROM settings');
-    await new sql.Request(trx).query('DELETE FROM users');
-
-    restoreStep = 'users';
-    const validRoles = new Set(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']);
-    const users = parseRows<any>(payload.data.USERS).map((user) => ({
-      id: user.id || uid(),
-      name: user.name || 'User',
-      username: user.username || `user_${uid().slice(0, 6)}`,
-      password_hash: user.password_hash || '',
-      raw_password: typeof user.password === 'string' ? user.password : '',
-      role: validRoles.has(user.role) ? user.role : 'user',
-      is_active: user.is_active === true || user.is_active === 1 || user.isActive === true ? 1 : 0,
-      phone: user.phone || null,
-      permissions: safeStringify(user.permissions) || null,
-      created_at: user.created_at || user.createdAt || new Date().toISOString(),
-    }));
-
-    for (const user of users) {
-      let passwordHash = user.password_hash;
-      if (!passwordHash) {
-        const plain = user.raw_password.trim().length > 0 ? user.raw_password : 'admin123';
-        passwordHash = await hashPassword(plain);
-      }
-      const request = new sql.Request(trx);
-      request.input('id', user.id);
-      request.input('name', user.name);
-      request.input('username', user.username);
-      request.input('password_hash', passwordHash);
-      request.input('role', user.role);
-      request.input('is_active', user.is_active);
-      request.input('phone', user.phone);
-      request.input('permissions', user.permissions);
-      request.input('created_at', user.created_at);
-      await request.query(`INSERT INTO users (id, name, username, password_hash, role, is_active, phone, permissions, created_at)
-        VALUES (@id, @name, @username, @password_hash, @role, @is_active, @phone, @permissions, @created_at)`);
-    }
-
-    restoreStep = 'settings';
-    const settingsAllowedCols = await getTableColumns(trx, 'settings');
-    const settingsRows = parseRows<any>(payload.data.SETTINGS);
-    if (settingsRows.length > 0) {
-      const normalizedSettings = filterRowColumns(normalizeBackupRow(settingsRows[0]), settingsAllowedCols);
-      const cols = Object.keys(normalizedSettings);
-      if (cols.length > 0) {
-        const request = new sql.Request(trx);
-        cols.forEach((col, index) => request.input(`p${index + 1}`, normalizeSqlValue(normalizedSettings[col])));
-        const vals = cols.map((_, index) => `@p${index + 1}`).join(', ');
-        await request.query(`INSERT INTO settings (${cols.join(', ')}) VALUES (${vals})`);
-      }
-    }
-
-    const directTables: Array<[string, string, string?]> = [
-      ['CUSTOMERS', 'customers'],
-      ['SUPPLIERS', 'suppliers'],
-      ['PRODUCTS', 'products'],
-      ['EXPENSES', 'expenses'],
-      ['NOTIFICATIONS', 'notifications'],
-      ['SALES_REPS', 'sales_reps'],
-      ['SHAREHOLDERS', 'shareholders'],
-      ['SHAREHOLDER_TRANSACTIONS', 'shareholder_transactions'],
-      ['AUDIT_LOGS', 'audit_log'],
-      ['COLLECTION_TASKS', 'collection_tasks'],
-      ['COLLECTION_TASKS_ARCHIVE', 'collection_tasks_archive'],
-      ['PAYMENTS_ARCHIVE', 'payments_archive'],
-      ['RESCHEDULE_REQUESTS', 'reschedule_requests'],
-      ['CLOSING_PERIODS', 'closing_periods'],
-      ['DOCUMENT_TEMPLATES', 'document_templates'],
-    ];
-
-    for (const [key, table] of directTables) {
-      restoreStep = table;
-      const allowedColumns = await getTableColumns(trx, table);
-      const rows = parseRows<any>(payload.data[key as keyof BackupFile['data']]).map((row) => filterRowColumns(normalizeBackupRow(row), allowedColumns));
-      for (const row of rows) {
-        const columns = Object.keys(row);
-        if (columns.length === 0) continue;
-        const request = new sql.Request(trx);
-        columns.forEach((column, index) => request.input(`p${index + 1}`, normalizeSqlValue(row[column])));
-        const values = columns.map((_, index) => `@p${index + 1}`).join(', ');
-        await request.query(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${values})`);
-      }
-    }
-
-    restoreStep = 'sales';
-    const salesColumns = await getTableColumns(trx, 'sales');
-    const sales = parseRows<any>(payload.data.SALES);
-    for (const originalSale of sales) {
-      const sale = filterRowColumns(normalizeBackupRow(originalSale), salesColumns);
-      const saleRequest = new sql.Request(trx);
-      const columns = Object.keys(sale);
-      columns.forEach((column, index) => saleRequest.input(`p${index + 1}`, normalizeSqlValue(sale[column])));
-      const values = columns.map((_, index) => `@p${index + 1}`).join(', ');
-      await saleRequest.query(`INSERT INTO sales (${columns.join(', ')}) VALUES (${values})`);
-
-      if (Array.isArray(originalSale.items)) {
-        for (const item of originalSale.items) {
-          const req = new sql.Request(trx);
-          req.input('id', normalizeSqlValue(item.id || uid()));
-          req.input('sale_id', normalizeSqlValue(sale.id));
-          req.input('product_id', normalizeSqlValue(item.product_id || item.productId));
-          req.input('product_name', normalizeSqlValue(item.product_name || item.productName));
-          req.input('barcode', normalizeSqlValue(item.barcode || null));
-          req.input('quantity', Number(item.quantity || 0));
-          req.input('unit_price', Number(item.unit_price || item.unitPrice || 0));
-          req.input('unit_cost', Number(item.unit_cost || item.unitCost || 0));
-          req.input('discount', Number(item.discount || 0));
-          req.input('tax', Number(item.tax || 0));
-          req.input('total', Number(item.total || 0));
-          await req.query(`INSERT INTO sale_items (id, sale_id, product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total)
-            VALUES (@id, @sale_id, @product_id, @product_name, @barcode, @quantity, @unit_price, @unit_cost, @discount, @tax, @total)`);
-        }
-      }
-
-      const rawSchedules = originalSale.financing?.schedules || [];
-      const schedules = rawSchedules.length > 0 ? rawSchedules : buildFallbackSchedulesForSale(sale);
-      for (const schedule of schedules) {
-        const req = new sql.Request(trx);
-        req.input('id', normalizeSqlValue(schedule.id || uid()));
-        req.input('sale_id', normalizeSqlValue(sale.id));
-        req.input('month_index', Number(schedule.month_index || schedule.monthIndex || 0));
-        req.input('due_date', normalizeSqlValue(schedule.due_date || schedule.dueDate || sale.date));
-        req.input('amount', Number(schedule.amount || 0));
-        req.input('paid_amount', Number(schedule.paid_amount || schedule.paidAmount || 0));
-        req.input('status', normalizeSqlValue(schedule.status || 'unpaid')); 
-        req.input('paid_at', normalizeSqlValue(schedule.paid_at || schedule.paidAt || null));
-        await req.query(`INSERT INTO installment_schedules (id, sale_id, month_index, due_date, amount, paid_amount, status, paid_at)
-          VALUES (@id, @sale_id, @month_index, @due_date, @amount, @paid_amount, @status, @paid_at)`);
-      }
-    }
-
-    restoreStep = 'purchases';
-    const purchaseColumns = await getTableColumns(trx, 'purchases');
-    const purchases = parseRows<any>(payload.data.PURCHASES);
-    for (const originalPurchase of purchases) {
-      const purchase = filterRowColumns(normalizeBackupRow(originalPurchase), purchaseColumns);
-      const purchaseRequest = new sql.Request(trx);
-      const columns = Object.keys(purchase);
-      columns.forEach((column, index) => purchaseRequest.input(`p${index + 1}`, normalizeSqlValue(purchase[column])));
-      const values = columns.map((_, index) => `@p${index + 1}`).join(', ');
-      await purchaseRequest.query(`INSERT INTO purchases (${columns.join(', ')}) VALUES (${values})`);
-
-      if (Array.isArray(originalPurchase.items)) {
-        for (const item of originalPurchase.items) {
-          const req = new sql.Request(trx);
-          req.input('id', normalizeSqlValue(item.id || uid()));
-          req.input('purchase_id', normalizeSqlValue(purchase.id));
-          req.input('product_id', normalizeSqlValue(item.product_id || item.productId));
-          req.input('product_name', normalizeSqlValue(item.product_name || item.productName));
-          req.input('barcode', normalizeSqlValue(item.barcode || null));
-          req.input('quantity', Number(item.quantity || 0));
-          req.input('unit_price', Number(item.unit_price || item.unitPrice || 0));
-          req.input('unit_cost', Number(item.unit_cost || item.unitCost || 0));
-          req.input('discount', Number(item.discount || 0));
-          req.input('tax', Number(item.tax || 0));
-          req.input('total', Number(item.total || 0));
-          await req.query(`INSERT INTO purchase_items (id, purchase_id, product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total)
-            VALUES (@id, @purchase_id, @product_id, @product_name, @barcode, @quantity, @unit_price, @unit_cost, @discount, @tax, @total)`);
-        }
-      }
-    }
-
-    // Insert payments after sales & customers to satisfy FK_payments_sales and FK_payments_customers
-    restoreStep = 'payments';
-    const paymentColumns = await getTableColumns(trx, 'payments');
-    const paymentRows = parseRows<any>(payload.data.PAYMENTS).map((row) => filterRowColumns(normalizeBackupRow(row), paymentColumns));
-    for (const row of paymentRows) {
-      const columns = Object.keys(row);
-      if (columns.length === 0) continue;
-      const request = new sql.Request(trx);
-      columns.forEach((column, index) => request.input(`p${index + 1}`, normalizeSqlValue(row[column])));
-      const values = columns.map((_, index) => `@p${index + 1}`).join(', ');
-      await request.query(`INSERT INTO payments (${columns.join(', ')}) VALUES (${values})`);
-    }
-
+    const { restoredCounts } = await restoreBackupInTransaction(trx, payload, (step) => {
+      restoreStep = step;
+    });
     await trx.commit();
-    await audit('backup.restore', 'database', 'global', req.user?.name || 'system', { version: payload.version, exportedAt: payload.exportedAt });
-    return res.json({ message: 'Backup restored successfully' });
+
+    try {
+      await db.run('EXEC sp_refresh_dashboard_metrics');
+    } catch {
+      // Ignore post-restore dashboard cache refresh errors
+    }
+
+    try {
+      const col = await db.get<any>(`SELECT COL_LENGTH('settings', 'role_permissions_json') AS len`);
+      if (col?.len) {
+        const settingsRow = await db.get<{ role_permissions_json?: string | null }>('SELECT TOP 1 role_permissions_json FROM settings');
+        setRolePermissions(settingsRow?.role_permissions_json ? JSON.parse(settingsRow.role_permissions_json) : null);
+      } else {
+        setRolePermissions(null);
+      }
+      const restoredUsers = await db.all<{
+        id: string;
+        name: string;
+        role: UserRole;
+        is_active: number | boolean;
+        permissions: string | null;
+      }>('SELECT id, name, role, is_active, permissions FROM users');
+      setUserAuthSnapshot(
+        restoredUsers.map((u) => ({
+          id: u.id,
+          name: u.name,
+          role: u.role,
+          isActive: u.is_active === 1 || u.is_active === true,
+          permissions: u.role === 'admin' ? undefined : extractApiPermissions(u.permissions),
+        }))
+      );
+    } catch {
+      // Ignore post-restore snapshot refresh errors
+    }
+
+    for (const topic of [
+      'settings',
+      'users',
+      'customers',
+      'suppliers',
+      'products',
+      'sales',
+      'payments',
+      'expenses',
+      'shareholders',
+      'sales-reps',
+      'notifications',
+    ]) {
+      broadcastDataChange(topic, 'restore');
+    }
+
+    await audit('backup.restore', 'database', 'global', req.user?.name || 'system', {
+      version: payload.version,
+      exportedAt: payload.exportedAt,
+      restoredCounts,
+    });
+    return res.json({ message: 'Backup restored successfully', restoredCounts });
   } catch (error: any) {
     try {
       await trx.rollback();

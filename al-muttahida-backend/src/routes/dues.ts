@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAnyPermission, requireAuth } from '../middleware/auth.js';
 import { formatDate } from '../utils.js';
 
 const router = Router();
@@ -21,6 +21,7 @@ export interface DueCollectionRow {
   installment_id: string;
   month_index: number;
   installment_label: string;
+  total_installments?: number;
   due_date: string;
   parsed_due_date?: Date | null;
   installment_amount: number;
@@ -203,6 +204,7 @@ export async function getCollectionDues(params: {
         sch.id AS installment_id,
         sch.month_index,
         N'القسط ' + CAST(sch.month_index AS NVARCHAR(10)) AS installment_label,
+        COUNT(*) OVER (PARTITION BY sch.sale_id) AS total_installments,
         sch.due_date,
         TRY_CONVERT(date, sch.due_date) AS parsed_due_date,
         sch.amount AS installment_amount,
@@ -277,6 +279,7 @@ export async function getCollectionDues(params: {
         s.id + N'-single' AS installment_id,
         1 AS month_index,
         N'القسط الشهري' AS installment_label,
+        COALESCE(s.installment_months, 1) AS total_installments,
         COALESCE(s.installment_start_date, s.date, s.created_at) AS due_date,
         COALESCE(
           TRY_CONVERT(date, s.installment_start_date),
@@ -373,6 +376,7 @@ export async function getCollectionDues(params: {
       customerNumber: row.customer_number || '',
       installmentId: row.installment_id,
       installmentLabel: row.installment_label,
+      totalInstallments: Number(row.total_installments || 0),
       dueDate: isoDueDate,
       installmentAmount: Number(row.installment_amount),
       paidAmount: Number(row.paid_amount || (row.status === 'paid' ? row.installment_amount : (row.installment_amount - row.remaining_amount))),
@@ -391,7 +395,7 @@ export async function getCollectionDues(params: {
   });
 }
 
-router.get('/', requirePermission('sales:read'), async (req, res) => {
+router.get('/', requireAnyPermission('payments:read', 'sales:read'), async (req, res) => {
   try {
     const data = await getCollectionDues({
       from: typeof req.query.from === 'string' ? req.query.from : undefined,

@@ -22,6 +22,8 @@ import {
   Play,
   ExternalLink
 } from 'lucide-react';
+import { scanLanForServer } from '../lib/lanDiscovery';
+import { setServerApiUrl, testServerUrl } from '../lib/apiClient';
 
 interface SqlEnvStatus {
   sqlInstalled: boolean;
@@ -108,7 +110,7 @@ export default function OnboardingWizard() {
   const [customInstance, setCustomInstance] = useState<string>('SQLEXPRESS');
   const [customPort, setCustomPort] = useState<string>('1433');
   const [customUser, setCustomUser] = useState<string>('alm_app');
-  const [customPassword, setCustomPassword] = useState<string>('Alm@2026#App');
+  const [customPassword, setCustomPassword] = useState<string>('');
   const [customDbName, setCustomDbName] = useState<string>('AlMuttahida_New');
   const [isSavingCustomSql, setIsSavingCustomSql] = useState<boolean>(false);
   const [customSqlMsg, setCustomSqlMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -419,12 +421,23 @@ export default function OnboardingWizard() {
     setClientFeedback('جاري فحص الشبكة المحلية للعثور على السيرفر الرئيسي تلقائياً...');
 
     if (!window.electronAPI || !window.electronAPI.scanNetwork) {
-      setTimeout(() => {
-        setServerIp('192.168.1.100');
-        setClientStatus('success');
-        setClientFeedback('تم العثور على السيرفر (بيئة تجريبية).');
+      try {
+        const foundUrl = await scanLanForServer();
+        if (foundUrl) {
+          const cleanIp = foundUrl.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+          setServerIp(cleanIp);
+          setClientStatus('success');
+          setClientFeedback(`تم اكتشاف السيرفر الرئيسي على العنوان: ${cleanIp}`);
+        } else {
+          setClientStatus('error');
+          setClientFeedback('لم يتم العثور على السيرفر تلقائياً. اكتب عنوان IP السيرفر يدوياً.');
+        }
+      } catch {
+        setClientStatus('error');
+        setClientFeedback('تعذر المسح التلقائي للشبكة. اكتب عنوان السيرفر يدوياً.');
+      } finally {
         setClientChecking(false);
-      }, 1000);
+      }
       return;
     }
 
@@ -458,11 +471,21 @@ export default function OnboardingWizard() {
     setClientFeedback('جاري الاتصال بالسيرفر...');
 
     if (!window.electronAPI || !window.electronAPI.testServerIp) {
-      setTimeout(() => {
-        setClientStatus('success');
-        setClientFeedback('الاتصال ناجح بالسيرفر!');
+      try {
+        const res = await testServerUrl(serverIp.trim());
+        if (res.ok) {
+          setClientStatus('success');
+          setClientFeedback(`الاتصال ناجح بالسيرفر على (${serverIp.trim()}) والنظام مستعد.`);
+        } else {
+          setClientStatus('error');
+          setClientFeedback(res.message || `تعذر الاتصال بـ (${serverIp.trim()}).`);
+        }
+      } catch (err: any) {
+        setClientStatus('error');
+        setClientFeedback('فشل الاتصال: ' + (err?.message || 'خطأ غير معروف'));
+      } finally {
         setClientChecking(false);
-      }, 600);
+      }
       return;
     }
 
@@ -503,7 +526,7 @@ export default function OnboardingWizard() {
     setLaunchStatusText('جاري بدء تشغيل النظام...');
 
     if (selectedMode === 'client' && serverIp.trim()) {
-      localStorage.setItem('server_api_url', `http://${serverIp.trim()}:4000`);
+      setServerApiUrl(serverIp.trim());
     } else if (selectedMode === 'server') {
       localStorage.removeItem('server_api_url');
     }

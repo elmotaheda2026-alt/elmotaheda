@@ -8,22 +8,24 @@ import UpdateBanner from './components/UpdateBanner';
 import ServerOfflineOverlay from './components/ServerOfflineOverlay';
 import Login from './pages/Login';
 
-const Dashboard = lazy(() => import('./pages/Dashboard'));
-const Users = lazy(() => import('./pages/Users'));
-const Customers = lazy(() => import('./pages/Customers'));
-const Suppliers = lazy(() => import('./pages/Suppliers'));
-const Sales = lazy(() => import('./pages/Sales'));
-const Invoices = lazy(() => import('./pages/Invoices'));
-const Payments = lazy(() => import('./pages/Payments'));
-const Expenses = lazy(() => import('./pages/Expenses'));
-const Accounts = lazy(() => import('./pages/Accounts'));
-const Settings = lazy(() => import('./pages/Settings'));
-const Notifications = lazy(() => import('./pages/Notifications'));
-const SalesReps = lazy(() => import('./pages/SalesReps'));
-const CollectionStatement = lazy(() => import('./pages/CollectionStatement'));
-const Shareholders = lazy(() => import('./pages/Shareholders'));
-const ProductsInventory = lazy(() => import('./pages/ProductsInventory'));
-const OnboardingWizard = lazy(() => import('./pages/OnboardingWizard'));
+import { routeImporters } from './lib/routePreloader';
+
+const Dashboard = lazy(routeImporters['/']);
+const Users = lazy(routeImporters['/users']);
+const Customers = lazy(routeImporters['/customers']);
+const Suppliers = lazy(routeImporters['/suppliers']);
+const Sales = lazy(routeImporters['/sales']);
+const Invoices = lazy(routeImporters['/invoices']);
+const Payments = lazy(routeImporters['/payments']);
+const Expenses = lazy(routeImporters['/expenses']);
+const Accounts = lazy(routeImporters['/accounts']);
+const Settings = lazy(routeImporters['/settings']);
+const Notifications = lazy(routeImporters['/notifications']);
+const SalesReps = lazy(routeImporters['/sales-reps']);
+const CollectionStatement = lazy(routeImporters['/collection-statement']);
+const Shareholders = lazy(routeImporters['/shareholders']);
+const ProductsInventory = lazy(routeImporters['/products-inventory']);
+const OnboardingWizard = lazy(routeImporters['/onboarding']);
 
 import ProtectedRoute from './components/ProtectedRoute';
 import { isAdmin } from './lib/permissions';
@@ -106,22 +108,22 @@ function AppRoutes() {
 
   return (
     <Suspense fallback={<LoadingState />}>
-      <UpdateBanner />
+      {!isAuthenticated && <UpdateBanner />}
       <WhatsappReminderRunner enabled={isAuthenticated && settings.whatsappRemindersEnabled} />
       <Routes>
         <Route path="/onboarding" element={<OnboardingWizard />} />
         <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <Login />} />
 
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route index element={<ProtectedRoute permission="dashboard:view"><Dashboard /></ProtectedRoute>} />
+          <Route index element={<ProtectedRoute permission="dashboard:view" fallbackToDefault><Dashboard /></ProtectedRoute>} />
           <Route path="users" element={<ProtectedRoute permission="users:manage"><Users /></ProtectedRoute>} />
           <Route path="customers" element={<ProtectedRoute permission="sales:read"><Customers /></ProtectedRoute>} />
-          <Route path="suppliers" element={<ProtectedRoute permission="sales:read"><Suppliers /></ProtectedRoute>} />
+          <Route path="suppliers" element={<ProtectedRoute anyPermissions={['sales:read', 'purchases:manage']}><Suppliers /></ProtectedRoute>} />
           <Route path="products-inventory" element={<ProtectedRoute permission="inventory:manage"><ProductsInventory /></ProtectedRoute>} />
           <Route path="sales" element={<ProtectedRoute permission="reports:read"><Sales /></ProtectedRoute>} />
           <Route path="invoices" element={<ProtectedRoute permission="sales:read"><Invoices /></ProtectedRoute>} />
           <Route path="payments" element={<ProtectedRoute permission="payments:read"><Payments /></ProtectedRoute>} />
-          <Route path="expenses" element={<ProtectedRoute permission="payments:write"><Expenses /></ProtectedRoute>} />
+          <Route path="expenses" element={<ProtectedRoute permission="payments:read"><Expenses /></ProtectedRoute>} />
           <Route path="accounts" element={<ProtectedRoute permission="reports:read"><Accounts /></ProtectedRoute>} />
           <Route path="reports" element={<Navigate to="/accounts" replace />} />
 

@@ -5,12 +5,16 @@ import {
   Banknote,
   Calculator,
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   Coins,
   CreditCard,
+  Landmark,
   Lock,
   Plus,
   Printer,
   Search,
+  Smartphone,
   CheckCircle2,
   RotateCcw,
   Pencil,
@@ -18,19 +22,25 @@ import {
   Save,
   Trash2,
   AlertCircle,
+  Zap,
 } from 'lucide-react';
 import { ClosingPeriod, Customer, Expense, InstallmentSchedule, Payment, Sale, Supplier } from '../types';
 import { createPayment, reversePayment, getPayments, getCustomers, getSales, getSuppliers, getExpenses, syncCustomers, syncPayments, syncSales, syncSuppliers, syncExpenses, getClosingPeriods, isDateClosed, syncClosingPeriods, closePeriodApi, reopenPeriodApi, getOpeningBalances } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
 import { useRealtimeSync } from '../lib/realtimeSync';
 import { useAuth } from '../context/AuthContext';
+import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { calculateTotalCashBalance } from '../lib/accounting';
 import LoadingState from '../components/LoadingState';
+import CurrencyText from '../components/CurrencyText';
 import { printHtmlDocument } from '../lib/printHelper';
+import PaymentChannelSelector from '../components/PaymentChannelSelector';
+import { getDynamicPaymentChannels, getPaymentChannelMeta, normalizePaymentChannel, type TreasuryChannel } from '../lib/paymentChannels';
+import { escapeHtml } from '../lib/htmlUtils';
 
 type PaymentType = 'in' | 'out';
 type IncomingSubmitMode = 'save' | 'save_print';
@@ -42,6 +52,7 @@ interface IncomingPaymentForm {
   amount: number;
   date: string;
   description: string;
+  channel: TreasuryChannel;
 }
 
 interface OutgoingPaymentForm {
@@ -49,6 +60,7 @@ interface OutgoingPaymentForm {
   amount: number;
   date: string;
   description: string;
+  channel: TreasuryChannel;
 }
 
 const today = () => new Intl.DateTimeFormat('en-CA', {
@@ -100,6 +112,7 @@ const displayArabic = (value?: string | null): string => {
 
 export default function Payments() {
   const { settings, user } = useAuth();
+  const { confirmDialog } = useDialog();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [dailyPayments, setDailyPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -119,6 +132,8 @@ export default function Payments() {
   const [reversingPaymentId, setReversingPaymentId] = useState<string | null>(null);
   const [autoSuggestedSaleId, setAutoSuggestedSaleId] = useState<string | null>(null);
   const [historyDateFilter, setHistoryDateFilter] = useState<string>(today());
+  const [channelFilter, setChannelFilter] = useState<TreasuryChannel | ''>('');
+  const [showChannelsBreakdown, setShowChannelsBreakdown] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
   const [debouncedHistorySearch, setDebouncedHistorySearch] = useState('');
   const [paymentPage, setPaymentPage] = useState(1);
@@ -126,14 +141,19 @@ export default function Payments() {
   const [paymentTotalCount, setPaymentTotalCount] = useState(0);
   const [paymentSummary, setPaymentSummary] = useState<{
     totalCount: number;
-    totalIn: number;
-    totalOut: number;
-    totalExpenses: number;
-    netCash: number;
+    todayCount?: number;
+    totalIn: number | null;
+    totalOut: number | null;
+    totalExpenses: number | null;
+    netCash: number | null;
     todayIn: number;
     todayOut: number;
     todayExpenses: number;
     todayNet: number;
+    channels?: Record<
+      TreasuryChannel,
+      { balance: number | null; totalIn: number | null; totalOut: number | null; todayIn: number; todayOut: number; todayNet: number }
+    >;
   } | null>(null);
   const [showVoidedPayments, setShowVoidedPayments] = useState(false);
   const [reopeningPeriodKey, setReopeningPeriodKey] = useState<string | null>(null);
@@ -144,7 +164,7 @@ export default function Payments() {
   const [settlementAdminPassword, setSettlementAdminPassword] = useState('');
 
   useEffect(() => {
-    if (isApiMode() && paymentMode === 'early_settlement' && !isAdmin(user)) {
+    if (isApiMode() && paymentMode === 'early_settlement' && !hasPermission(user, 'payments:early_settlement')) {
       api.listAdmins().then((admins) => {
         setSettlementAdminList(admins);
         if (admins.length > 0 && !settlementAdminUsername) {
@@ -179,6 +199,7 @@ export default function Payments() {
     amount: 0,
     date: today(),
     description: '',
+    channel: 'cash',
   });
 
   // Autocomplete for customer payment selection
@@ -209,6 +230,7 @@ export default function Payments() {
     amount: 0,
     date: today(),
     description: '',
+    channel: 'cash',
   });
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -225,6 +247,7 @@ export default function Payments() {
     targetPage = paymentPage,
     targetDate = toYYYYMMDD(historyDateFilter),
     targetSearch = debouncedHistorySearch,
+    targetChannel = channelFilter,
   ) => {
     if (!isApiMode()) return;
     try {
@@ -234,8 +257,9 @@ export default function Payments() {
           limit: 150,
           date: targetDate || undefined,
           search: targetSearch || undefined,
+          channel: targetChannel || undefined,
         }),
-        api.getPaymentsSummary(today()),
+        api.getPaymentsSummary(targetDate || today()),
       ]);
       setPayments(pagedRes.payments || []);
       setDailyPayments(pagedRes.payments || []);
@@ -247,8 +271,10 @@ export default function Payments() {
     }
   };
 
-  const loadData = async (targetPage = paymentPage) => {
-    setLoading(true);
+  const loadData = async (targetPage = paymentPage, silent = false) => {
+    if (!silent) {
+      setLoading(true);
+    }
     const nextSales = getSales().slice().reverse();
     const nextCustomers = getCustomers();
     const nextSuppliers = getSuppliers();
@@ -269,8 +295,12 @@ export default function Payments() {
             limit: 150,
             date: toYYYYMMDD(historyDateFilter) || undefined,
             search: debouncedHistorySearch || undefined,
+            channel: channelFilter || undefined,
           }),
-          api.getPaymentsSummary(today()),
+          api.getPaymentsSummary(toYYYYMMDD(historyDateFilter) || today()),
+        ]);
+
+        await Promise.allSettled([
           syncCustomers(),
           syncSuppliers(),
           syncSales(),
@@ -311,16 +341,16 @@ export default function Payments() {
 
   useEffect(() => {
     setPaymentPage(1);
-  }, [historyDateFilter]);
+  }, [historyDateFilter, channelFilter]);
 
   useEffect(() => {
     if (!isApiMode()) return;
-    void loadPaymentsPage(paymentPage, toYYYYMMDD(historyDateFilter), debouncedHistorySearch);
+    void loadPaymentsPage(paymentPage, toYYYYMMDD(historyDateFilter), debouncedHistorySearch, channelFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paymentPage, historyDateFilter, debouncedHistorySearch]);
+  }, [paymentPage, historyDateFilter, debouncedHistorySearch, channelFilter]);
 
   useRealtimeSync(['payments', 'sales', 'expenses', 'customers', 'suppliers'], () => {
-    void loadData(paymentPage);
+    void loadData(paymentPage, true);
   });
 
   const toYYYYMMDD = (dateStr: string) => {
@@ -346,8 +376,9 @@ export default function Payments() {
 
   const closingDateYYYYMMDD = toYYYYMMDD(closingDate);
   const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD && p.status !== 'voided');
-  const closingTotalIn = closingDatePayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
-  const closingTotalOut = closingDatePayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+  const closingOperationalPayments = closingDatePayments.filter((p) => p.referenceType !== 'internal_transfer');
+  const closingTotalIn = closingOperationalPayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+  const closingTotalOut = closingOperationalPayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
   const closingNet = closingTotalIn - closingTotalOut;
 
   // Calculate cumulative treasury cash balance up to and including the closing date:
@@ -401,7 +432,13 @@ export default function Payments() {
 
   const handleReopenPeriod = async (period: ClosingPeriod) => {
     const label = period.periodType === 'monthly' ? `شهر ${period.periodDate}` : `يوم ${formatDateDisplay(period.periodDate)}`;
-    if (!window.confirm(`هل أنت متأكد من إعادة فتح ${label}؟ سيسمح ذلك بإضافة أو تعديل الحركات المالية في هذا التاريخ.`)) {
+    const confirmed = await confirmDialog({
+      title: 'إعادة فتح الفترة المالية',
+      message: `هل أنت متأكد من إعادة فتح ${label}؟ سيسمح ذلك بإضافة أو تعديل الحركات المالية في هذا التاريخ.`,
+      type: 'warning',
+      confirmText: 'نعم، إعادة الفتح',
+    });
+    if (!confirmed) {
       return;
     }
     const key = `${period.periodType}:${period.periodDate}`;
@@ -419,7 +456,7 @@ export default function Payments() {
 
     // Automatic daily closing (at 23:59 / midnight, and catch up all unclosed days since the last closed day)
   useEffect(() => {
-    if (loading || !isAdmin(user)) return;
+    if (loading || !hasPermission(user, 'closing:write')) return;
 
     const checkAndAutoClose = async () => {
       try {
@@ -677,30 +714,33 @@ export default function Payments() {
   });
 
   const todayYYYYMMDD = today();
+  const summaryDate = toYYYYMMDD(historyDateFilter) || todayYYYYMMDD;
+  const summaryDayLabel = summaryDate === todayYYYYMMDD ? 'اليوم' : formatDateDisplay(summaryDate);
 
-  // Historical cumulative cash balance calculation across all ledger entries:
+  // Historical cumulative cash balance calculation (shown to admins only):
   const totalCashBalance = isApiMode() && paymentSummary
-    ? paymentSummary.netCash
+    ? Number(paymentSummary.netCash ?? 0)
     : calculateTotalCashBalance(payments, expenses);
 
-  // Today's cash activity filtering:
+  // Selected day's cash activity filtering:
   const todayPaymentsList = payments.filter(
-    (p) => toYYYYMMDD(p.date) === todayYYYYMMDD && p.status !== 'voided'
+    (p) => toYYYYMMDD(p.date) === summaryDate && p.status !== 'voided'
   );
+  const todayOperationalList = todayPaymentsList.filter((p) => p.referenceType !== 'internal_transfer');
   const todayInflow = isApiMode() && paymentSummary
     ? paymentSummary.todayIn
-    : todayPaymentsList
+    : todayOperationalList
         .filter((p) => p.type === 'in')
         .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
-  const todayPaymentOutflow = todayPaymentsList
+  const todayPaymentOutflow = todayOperationalList
     .filter((p) => p.type === 'out')
     .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
   const todayExpenseOutflow = expenses
     .filter(
       (exp) =>
-        toYYYYMMDD(exp.date) === todayYYYYMMDD &&
+        toYYYYMMDD(exp.date) === summaryDate &&
         !todayPaymentsList.some((p) => p.referenceId === exp.id || p.description?.includes(exp.id))
     )
     .reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);
@@ -711,7 +751,117 @@ export default function Payments() {
   const todayNetMovement = isApiMode() && paymentSummary
     ? paymentSummary.todayNet
     : todayInflow - todayOutflow;
+  const dayTransactionsCount = isApiMode() && paymentSummary?.todayCount != null
+    ? paymentSummary.todayCount
+    : todayOperationalList.length;
   const todayPayments = todayPaymentsList;
+
+  const configuredChannels = useMemo(
+    () => getDynamicPaymentChannels(settings?.paymentChannels),
+    [settings?.paymentChannels],
+  );
+
+  const channelStats = useMemo(() => {
+    const empty = () => ({ todayIn: 0, todayOut: 0, todayNet: 0 });
+    const stats: Record<TreasuryChannel, ReturnType<typeof empty>> = {};
+
+    for (const ch of configuredChannels) {
+      stats[ch.id] = empty();
+    }
+
+    if (isApiMode() && paymentSummary?.channels) {
+      for (const [key, s] of Object.entries(paymentSummary.channels)) {
+        if (!s) continue;
+        stats[key] = {
+          todayIn: Number(s.todayIn || 0),
+          todayOut: Number(s.todayOut || 0),
+          todayNet: Number(s.todayNet || 0),
+        };
+      }
+      return stats;
+    }
+
+    for (const p of payments) {
+      if (p.status === 'voided' || toYYYYMMDD(p.date) !== summaryDate) continue;
+      const key = normalizePaymentChannel(p.channel);
+      if (!stats[key]) stats[key] = empty();
+      const amt = Number(p.amount) || 0;
+      if (p.type === 'in') {
+        stats[key].todayIn += amt;
+      } else {
+        stats[key].todayOut += amt;
+      }
+    }
+
+    for (const exp of expenses) {
+      if (toYYYYMMDD(exp.date) !== summaryDate) continue;
+      if (exp.id && payments.some((p) => p.status !== 'voided' && (p.referenceId === exp.id || p.description?.includes(exp.id)))) {
+        continue;
+      }
+      const key = normalizePaymentChannel(exp.channel);
+      if (!stats[key]) stats[key] = empty();
+      stats[key].todayOut += Number(exp.amount) || 0;
+    }
+
+    for (const s of Object.values(stats)) {
+      s.todayIn = Number(s.todayIn.toFixed(2));
+      s.todayOut = Number(s.todayOut.toFixed(2));
+      s.todayNet = Number((s.todayIn - s.todayOut).toFixed(2));
+    }
+
+    return stats;
+  }, [configuredChannels, paymentSummary, payments, expenses, summaryDate]);
+
+  const displaySummaryChannels = useMemo(() => {
+    const configuredIds = new Set(configuredChannels.map((c) => c.id));
+    const extras = Object.entries(channelStats)
+      .filter(([id, stat]) => !configuredIds.has(id) && (stat.todayIn !== 0 || stat.todayOut !== 0))
+      .map(([id]) => getPaymentChannelMeta(id, settings?.paymentChannels));
+    return [...configuredChannels, ...extras];
+  }, [configuredChannels, channelStats, settings?.paymentChannels]);
+
+  const closingChannelBreakdown = useMemo(() => {
+    const map: Record<TreasuryChannel, { todayIn: number; todayOut: number; todayNet: number }> = {};
+    for (const ch of configuredChannels) {
+      map[ch.id] = { todayIn: 0, todayOut: 0, todayNet: 0 };
+    }
+
+    for (const p of closingOperationalPayments) {
+      const key = normalizePaymentChannel(p.channel);
+      if (!map[key]) map[key] = { todayIn: 0, todayOut: 0, todayNet: 0 };
+      const amt = Number(p.amount) || 0;
+      if (p.type === 'in') {
+        map[key].todayIn += amt;
+      } else {
+        map[key].todayOut += amt;
+      }
+    }
+
+    for (const exp of expenses) {
+      if (toYYYYMMDD(exp.date) !== closingDateYYYYMMDD) continue;
+      if (exp.id && closingDatePayments.some((p) => p.referenceId === exp.id || p.description?.includes(exp.id))) {
+        continue;
+      }
+      const key = normalizePaymentChannel(exp.channel);
+      if (!map[key]) map[key] = { todayIn: 0, todayOut: 0, todayNet: 0 };
+      map[key].todayOut += Number(exp.amount) || 0;
+    }
+
+    for (const entry of Object.values(map)) {
+      entry.todayIn = Number(entry.todayIn.toFixed(2));
+      entry.todayOut = Number(entry.todayOut.toFixed(2));
+      entry.todayNet = Number((entry.todayIn - entry.todayOut).toFixed(2));
+    }
+    return map;
+  }, [configuredChannels, closingOperationalPayments, closingDatePayments, closingDateYYYYMMDD, expenses]);
+
+  const displayClosingChannels = useMemo(() => {
+    const configuredIds = new Set(configuredChannels.map((c) => c.id));
+    const extras = Object.entries(closingChannelBreakdown)
+      .filter(([id, stat]) => !configuredIds.has(id) && (stat.todayIn !== 0 || stat.todayOut !== 0))
+      .map(([id]) => getPaymentChannelMeta(id, settings?.paymentChannels));
+    return [...configuredChannels, ...extras];
+  }, [configuredChannels, closingChannelBreakdown, settings?.paymentChannels]);
 
   const filteredPayments = useMemo(() => {
     const normSearch = normalizeArabic(historySearch.trim());
@@ -720,21 +870,26 @@ export default function Payments() {
     return payments.filter((payment) => {
       if (!showVoidedPayments && payment.status === 'voided') return false;
       if (targetDate && toYYYYMMDD(payment.date) !== targetDate) return false;
+      if (channelFilter && normalizePaymentChannel(payment.channel) !== channelFilter) return false;
       if (!normSearch) return true;
 
       const customerName =
         customers.find((customer) => customer.id === (payment.customerId || payment.referenceId))?.name || '';
       const supplierName =
         suppliers.find((supplier) => supplier.id === (payment.supplierId || payment.referenceId))?.name || '';
+      const channelLabel = getPaymentChannelMeta(payment.channel).label;
+      const transferLabel = payment.referenceType === 'internal_transfer' ? 'تحويل داخلي بين الخزائن' : '';
       const haystack = normalizeArabic(
-        `${customerName} ${supplierName} ${payment.invoiceNumber || ''} ${payment.receiptNumber || ''} ${payment.description || ''} ${payment.amount || ''}`
+        `${customerName} ${supplierName} ${channelLabel} ${transferLabel} ${payment.invoiceNumber || ''} ${payment.receiptNumber || ''} ${payment.description || ''} ${payment.amount || ''}`
       );
       return haystack.includes(normSearch);
     });
-  }, [payments, historySearch, historyDateFilter, showVoidedPayments, customers, suppliers]);
+  }, [payments, historySearch, historyDateFilter, channelFilter, showVoidedPayments, customers, suppliers]);
 
   const openModal = (type: PaymentType) => {
     setPaymentType(type);
+    setIncomingForm((current) => ({ ...current, channel: 'cash' }));
+    setOutgoingForm((current) => ({ ...current, channel: 'cash' }));
     setShowModal(true);
     setPaymentMode('normal');
     setSettlementDiscountValue(0);
@@ -855,19 +1010,20 @@ export default function Payments() {
       <body>
         <main class="receipt">
           <header class="head">
-            <div class="company">${companyName}</div>
+            <div class="company">${escapeHtml(companyName)}</div>
             <div class="title">إيصال سداد قسط</div>
-            <div class="meta">رقم الإيصال: ${receiptNo}</div>
-            <div class="meta">تاريخ الإصدار: ${formatDate(paymentDate)}</div>
-            ${companyPhone ? `<div class="meta">هاتف الشركة: ${companyPhone}</div>` : ''}
+            <div class="meta">رقم الإيصال: ${escapeHtml(receiptNo)}</div>
+            <div class="meta">تاريخ الإصدار: ${escapeHtml(formatDate(paymentDate))}</div>
+            ${companyPhone ? `<div class="meta">هاتف الشركة: ${escapeHtml(companyPhone)}</div>` : ''}
           </header>
 
           <section class="box">
-            <div class="row"><div class="label">اسم العميل</div><div class="value">${customerName}</div></div>
-            <div class="row"><div class="label">رقم الفاتورة</div><div class="value">${sale.invoiceNumber}</div></div>
-            <div class="row"><div class="label">رقم القسط</div><div class="value">${installmentLabel}</div></div>
+            <div class="row"><div class="label">اسم العميل</div><div class="value">${escapeHtml(customerName)}</div></div>
+            <div class="row"><div class="label">رقم الفاتورة</div><div class="value">${escapeHtml(sale.invoiceNumber)}</div></div>
+            <div class="row"><div class="label">رقم القسط</div><div class="value">${escapeHtml(installmentLabel)}</div></div>
             <div class="row amount-row"><div class="label">قيمة القسط</div><div class="value">${formatCurrency(installmentAmount)}</div></div>
             <div class="row"><div class="label">المبلغ المسدد</div><div class="value">${formatCurrency(payment.amount)}</div></div>
+            <div class="row"><div class="label">طريقة الدفع</div><div class="value">${getPaymentChannelMeta(payment.channel).label}</div></div>
             <div class="row"><div class="label">الاستحقاق</div><div class="value">${formatDate(dueDate)}</div></div>
             <div class="row"><div class="label">تاريخ السداد</div><div class="value">${formatDate(paymentDate)}</div></div>
             <div class="row"><div class="label">تاريخ التعاقد</div><div class="value">${formatDate(contractDate)}</div></div>
@@ -1088,28 +1244,29 @@ export default function Payments() {
       <body>
         <main class="receipt">
           <header class="head">
-            <div class="company">${companyName}</div>
+            <div class="company">${escapeHtml(companyName)}</div>
             <div class="title">إيصال تكييش وتسوية نهائية</div>
             <div class="badge">مخالصة مالية نهائية</div>
             <div class="meta-grid">
-              <div>رقم السند: <strong>${receiptNo}</strong></div>
-              <div>تاريخ السداد: <strong>${formatDate(paymentDate)}</strong></div>
-              ${companyPhone ? `<div>هاتف الشركة: <strong>${companyPhone}</strong></div>` : ''}
+              <div>رقم السند: <strong>${escapeHtml(receiptNo)}</strong></div>
+              <div>تاريخ السداد: <strong>${escapeHtml(formatDate(paymentDate))}</strong></div>
+              ${companyPhone ? `<div>هاتف الشركة: <strong>${escapeHtml(companyPhone)}</strong></div>` : ''}
             </div>
           </header>
 
           <table class="table-box">
             <tbody>
-              <tr><td class="label">اسم العميل</td><td class="value">${customerName}</td></tr>
-              ${customerPhone ? `<tr><td class="label">هاتف العميل</td><td class="value">${customerPhone}</td></tr>` : ''}
-              <tr><td class="label">رقم الفاتورة / العقد</td><td class="value">${sale.invoiceNumber}</td></tr>
+              <tr><td class="label">اسم العميل</td><td class="value">${escapeHtml(customerName)}</td></tr>
+              ${customerPhone ? `<tr><td class="label">هاتف العميل</td><td class="value">${escapeHtml(customerPhone)}</td></tr>` : ''}
+              <tr><td class="label">رقم الفاتورة / العقد</td><td class="value">${escapeHtml(sale.invoiceNumber)}</td></tr>
               <tr><td class="label">تاريخ التعاقد</td><td class="value">${formatDate(contractDate)}</td></tr>
               <tr><td class="label">إجمالي قيمة الفاتورة</td><td class="value">${formatCurrency(sale.total)}</td></tr>
               <tr><td class="label">الرصيد المتبقي قبل التسوية</td><td class="value">${formatCurrency(totalRemainingBefore)}</td></tr>
               <tr><td class="label">خصم التعجيل / التكييش الممنوح</td><td class="value">${discountLabel}</td></tr>
               <tr class="amount-row highlight-row"><td class="label">المبلغ النقدي المسدد فعلياً</td><td class="value">${formatCurrency(paidAmount)}</td></tr>
+              <tr><td class="label">طريقة السداد / الخزنة</td><td class="value">${getPaymentChannelMeta(payment?.channel || incomingForm.channel).label}</td></tr>
               <tr class="highlight-row"><td class="label">الرصيد المتبقي بعد التسوية</td><td class="value zero-balance">0.00 ج.م (خالص بالكامل)</td></tr>
-              <tr><td class="label">المسؤول المعتمد للتسوية</td><td class="value">${approvedBy}</td></tr>
+              <tr><td class="label">المسؤول المعتمد للتسوية</td><td class="value">${escapeHtml(approvedBy)}</td></tr>
             </tbody>
           </table>
 
@@ -1298,10 +1455,13 @@ export default function Payments() {
       return;
     }
 
-    const ok = window.confirm(
-      `هل أنت متأكد من عكس وإلغاء هذا الإيصال (${payment.receiptNumber || payment.id}) بمبلغ (${formatCurrency(payment.amount)})؟\n\n` +
-      `سيتم إعادة فتح القسط/الفاتورة المرتبطة به تلقائياً وتحديث أرصدة الحسابات.`
-    );
+    const ok = await confirmDialog({
+      title: 'عكس وإلغاء حركة مالية',
+      message: `هل أنت متأكد من عكس وإلغاء هذا الإيصال (${payment.receiptNumber || payment.id}) بمبلغ (${formatCurrency(payment.amount)})؟`,
+      subMessage: 'سيتم إعادة فتح القسط/الفاتورة المرتبطة به تلقائياً وتحديث أرصدة الحسابات.',
+      type: 'danger',
+      confirmText: 'نعم، عكس الحركة',
+    });
     if (!ok) return;
 
     setReversingPaymentId(paymentId);
@@ -1386,19 +1546,20 @@ export default function Payments() {
       <body>
         <main class="receipt">
           <header class="head">
-            <div class="company">${companyName}</div>
-            ${companyPhone ? `<div class="meta">هاتف: ${companyPhone}</div>` : ''}
-            <div class="title">${docTitle}</div>
-            <div class="meta">رقم السند: ${receiptNo}</div>
+            <div class="company">${escapeHtml(companyName)}</div>
+            ${companyPhone ? `<div class="meta">هاتف: ${escapeHtml(companyPhone)}</div>` : ''}
+            <div class="title">${escapeHtml(docTitle)}</div>
+            <div class="meta">رقم السند: ${escapeHtml(receiptNo)}</div>
           </header>
 
           <section class="box">
-            <div class="row"><div class="label">${isSupplier ? 'اسم المورد' : 'الطرف المستفيد'}</div><div class="value">${partyName}</div></div>
-            <div class="row"><div class="label">تاريخ الحركة</div><div class="value">${formatDate(payment.date)}</div></div>
-            <div class="row amount-row"><div class="label">المبلغ ${isOutflow ? 'المنصرف' : 'المستلم'}</div><div class="value">${formatCurrency(payment.amount)}</div></div>
-            ${isSupplier && typeof supplierBalanceAfter === 'number' ? `<div class="row"><div class="label">${supplierBalanceAfter < 0 ? 'رصيد دائن لنا عند المورد' : 'الرصيد المتبقي للمورد'}</div><div class="value">${formatCurrency(Math.abs(supplierBalanceAfter))}</div></div>` : ''}
-            <div class="row"><div class="label">البيان</div><div class="value">${payment.description || '-'}</div></div>
-            <div class="row"><div class="label">المسؤول</div><div class="value">${payment.createdBy || '-'}</div></div>
+            <div class="row"><div class="label">${isSupplier ? 'اسم المورد' : 'الطرف المستفيد'}</div><div class="value">${escapeHtml(partyName)}</div></div>
+            <div class="row"><div class="label">تاريخ الحركة</div><div class="value">${escapeHtml(formatDate(payment.date))}</div></div>
+            <div class="row"><div class="label">الخزنة / القناة</div><div class="value">${escapeHtml(getPaymentChannelMeta(payment.channel).label)}</div></div>
+            <div class="row amount-row"><div class="label">المبلغ ${isOutflow ? 'المنصرف' : 'المستلم'}</div><div class="value">${escapeHtml(formatCurrency(payment.amount))}</div></div>
+            ${isSupplier && typeof supplierBalanceAfter === 'number' ? `<div class="row"><div class="label">${supplierBalanceAfter < 0 ? 'رصيد دائن لنا عند المورد' : 'الرصيد المتبقي للمورد'}</div><div class="value">${escapeHtml(formatCurrency(Math.abs(supplierBalanceAfter)))}</div></div>` : ''}
+            <div class="row"><div class="label">البيان</div><div class="value">${escapeHtml(payment.description || '-')}</div></div>
+            <div class="row"><div class="label">المسؤول</div><div class="value">${escapeHtml(payment.createdBy || '-')}</div></div>
           </section>
 
           <div class="note">${isOutflow ? 'تم صرف المبلغ المذكور نقداً من الخزينة.' : 'تم استلام المبلغ المذكور نقداً في الخزينة.'}</div>
@@ -1439,6 +1600,12 @@ export default function Payments() {
         customerName,
         installment,
         remainingInstallments: remainingSchedules,
+      });
+    } else if (payment.referenceType === 'internal_transfer') {
+      printCashVoucherReceipt({
+        payment,
+        partyName: 'تحويل داخلي بين الخزائن',
+        isSupplier: false,
       });
     } else {
       const isSupplierPayment = Boolean(supplier || payment.supplierId || payment.referenceType === 'supplier');
@@ -1482,7 +1649,8 @@ export default function Payments() {
       }
 
       if (isApiMode()) {
-        if (!isAdmin(user)) {
+        const canSettleDirectly = hasPermission(user, 'payments:early_settlement');
+        if (!canSettleDirectly) {
           if (!settlementAdminUsername || !settlementAdminPassword) {
             setMessage({ type: 'error', text: 'يرجى اختيار الآدمن وإدخال كلمة المرور للموافقة على التسوية المبكرة.' });
             return;
@@ -1500,11 +1668,11 @@ export default function Payments() {
               incomingForm.description.trim() ||
               `تكييش وتصفية الفاتورة ${selectedSale.invoiceNumber}${settlementDiscountAmount > 0 ? ` (خصم تسوية ${formatCurrency(settlementDiscountAmount)})` : ''}`,
             date: incomingForm.date,
-            channel: 'cash',
+            channel: incomingForm.channel,
             invoiceNumber: selectedSale.invoiceNumber,
             isEarlySettlement: true,
             settlementDiscount: settlementDiscountAmount,
-            ...(!isAdmin(user) ? { adminUsername: settlementAdminUsername, adminPassword: settlementAdminPassword } : {}),
+            ...(!hasPermission(user, 'payments:early_settlement') ? { adminUsername: settlementAdminUsername, adminPassword: settlementAdminPassword } : {}),
           });
 
           await loadData();
@@ -1512,7 +1680,7 @@ export default function Payments() {
 
           if (incomingSubmitMode === 'save_print') {
             printSettlementReceipt({
-              payment: created,
+              payment: { ...created, channel: incomingForm.channel },
               sale: selectedSale,
               customerName: selectedCustomer?.name || selectedSale.customerName,
               customerPhone: selectedCustomer?.phone || (selectedSale as any).customerPhone,
@@ -1532,6 +1700,7 @@ export default function Payments() {
             amount: 0,
             date: today(),
             description: '',
+            channel: 'cash',
           }));
           setPaymentMode('normal');
           setSettlementDiscountValue(0);
@@ -1562,7 +1731,7 @@ export default function Payments() {
         installmentId: undefined,
         invoiceNumber: selectedSale.invoiceNumber,
         affectsCustomerBalance: true,
-        channel: 'cash',
+        channel: incomingForm.channel,
         isEarlySettlement: true,
         settlementDiscount: settlementDiscountAmount,
       });
@@ -1592,6 +1761,7 @@ export default function Payments() {
         amount: 0,
         date: today(),
         description: '',
+        channel: 'cash',
       }));
       setPaymentMode('normal');
       setSettlementDiscountValue(0);
@@ -1635,7 +1805,7 @@ export default function Payments() {
             incomingForm.description.trim() ||
             `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
           date: incomingForm.date,
-          channel: 'cash',
+          channel: incomingForm.channel,
         });
 
         const willFullyPayInstallment = incomingForm.amount >= selectedInstallmentRemaining - 0.01;
@@ -1659,6 +1829,7 @@ export default function Payments() {
                 incomingForm.description.trim() ||
                 `سداد ${selectedInstallment.label} من الفاتورة ${selectedSale.invoiceNumber}`,
               date: incomingForm.date,
+              channel: incomingForm.channel,
               createdBy: user?.name || 'مدير النظام',
               customerId: incomingForm.customerId,
               saleId: selectedSale.id,
@@ -1680,6 +1851,7 @@ export default function Payments() {
           amount: 0,
           date: today(),
           description: '',
+          channel: 'cash',
         }));
         setIncomingSubmitMode('save');
         setMessage({ type: 'success', text: `تم تسجيل السداد برقم إيصال ${created.receiptNumber}.` });
@@ -1707,7 +1879,7 @@ export default function Payments() {
       installmentId: selectedInstallment.id,
       invoiceNumber: selectedSale.invoiceNumber,
       affectsCustomerBalance: true,
-      channel: 'cash',
+      channel: incomingForm.channel,
     });
 
     const updatedSale = getSales().find((sale) => sale.id === selectedSale.id) || selectedSale;
@@ -1726,6 +1898,7 @@ export default function Payments() {
       amount: 0,
       date: today(),
       description: '',
+      channel: 'cash',
     }));
 
     if (incomingSubmitMode === 'save_print') {
@@ -1771,7 +1944,7 @@ export default function Payments() {
           amount: outgoingForm.amount,
           description: outgoingForm.description.trim() || 'دفعة للمورد',
           date: outgoingForm.date,
-          channel: 'cash',
+          channel: outgoingForm.channel,
         });
 
         await loadData();
@@ -1788,6 +1961,7 @@ export default function Payments() {
               referenceType: 'supplier',
               description: outgoingForm.description.trim() || 'دفعة للمورد',
               date: outgoingForm.date,
+              channel: outgoingForm.channel,
               createdBy: user?.name || 'مدير النظام',
               supplierId: outgoingForm.supplierId,
               createdAt: new Date().toISOString(),
@@ -1803,6 +1977,7 @@ export default function Payments() {
           amount: 0,
           date: today(),
           description: '',
+          channel: 'cash',
         }));
         setOutgoingSubmitMode('save');
         setMessage({
@@ -1830,7 +2005,7 @@ export default function Payments() {
       date: outgoingForm.date,
       createdBy: user?.name || 'مدير النظام',
       supplierId: outgoingForm.supplierId,
-      channel: 'cash',
+      channel: outgoingForm.channel,
     });
 
     loadData();
@@ -1850,6 +2025,7 @@ export default function Payments() {
       amount: 0,
       date: today(),
       description: '',
+      channel: 'cash',
     }));
     setOutgoingSubmitMode('save');
 
@@ -1862,8 +2038,6 @@ export default function Payments() {
     });
   };
 
-
-
   return (
     <div className="desktop-view-container">
       {/* Unified Compact Header Strip */}
@@ -1871,10 +2045,10 @@ export default function Payments() {
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-black text-slate-900 shrink-0">الخزينة والتحصيل</h2>
           <span className="text-xs bg-slate-100 px-2.5 py-1 rounded-md font-bold text-slate-600">
-            حركة اليوم: {todayPayments.length} معاملة
+            حركة {summaryDayLabel}: {dayTransactionsCount} معاملة
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {hasPermission(user, 'payments:write') && (
             <>
               <button
@@ -1893,7 +2067,7 @@ export default function Payments() {
               </button>
             </>
           )}
-          {isAdmin(user) && hasPermission(user, 'closing:write') && (
+          {hasPermission(user, 'closing:write') && (
             <button
               onClick={() => {
                 setClosingDate(today());
@@ -1923,31 +2097,141 @@ export default function Payments() {
       )}
 
       {/* Tier 2: Fixed Height KPI Cards Bar */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 shrink-0">
-        <StatCard
-          icon={<Banknote size={20} className="text-indigo-600" />}
-          label="إجمالي النقدية بالخزينة (الرصيد الكلي)"
-          value={formatCurrency(totalCashBalance)}
-          tone="indigo"
-        />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(220px,1fr))] shrink-0">
+        {isAdmin(user) ? (
+          <StatCard
+            icon={<Banknote size={20} className="text-indigo-600" />}
+            label="إجمالي النقدية بالخزينة (الرصيد الكلي)"
+            value={formatCurrency(totalCashBalance)}
+            tone="indigo"
+          />
+        ) : (
+          <StatCard
+            icon={<Banknote size={20} className="text-indigo-600" />}
+            label={`عدد حركات (${summaryDayLabel})`}
+            value={`${dayTransactionsCount} معاملة`}
+            tone="indigo"
+          />
+        )}
         <StatCard
           icon={<ArrowDownLeft size={20} className="text-emerald-600" />}
-          label="إجمالي الوارد (اليوم)"
+          label={`إجمالي الوارد (${summaryDayLabel})`}
           value={formatCurrency(todayInflow)}
           tone="emerald"
         />
         <StatCard
           icon={<ArrowUpRight size={20} className="text-rose-600" />}
-          label="إجمالي الصادر (اليوم)"
+          label={`إجمالي الصادر (${summaryDayLabel})`}
           value={formatCurrency(todayOutflow)}
           tone="rose"
         />
         <StatCard
           icon={<CreditCard size={20} className="text-sky-600" />}
-          label="صافي حركة اليوم"
+          label={`صافي حركة ${summaryDayLabel}`}
           value={formatCurrency(todayNetMovement)}
           tone={todayNetMovement >= 0 ? 'sky' : 'rose'}
         />
+      </div>
+
+      {/* Collapsible Live Daily Treasury Channel Breakdown Strip */}
+      <div className="space-y-2 shrink-0">
+        <div className="flex items-center justify-between gap-2 px-0.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs font-extrabold text-slate-600 truncate">
+              توزيعة حركة ({summaryDayLabel}) حسب الخزنة ووسائل الدفع
+            </span>
+            {channelFilter && !showChannelsBreakdown && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-900 text-white shrink-0">
+                مُصفّى: {getPaymentChannelMeta(channelFilter).label}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowChannelsBreakdown((prev) => !prev)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors cursor-pointer shadow-2xs shrink-0"
+          >
+            {showChannelsBreakdown ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            <span>
+              {showChannelsBreakdown ? 'إخفاء وسائل الدفع' : `عرض وسائل الدفع (${displaySummaryChannels.length})`}
+            </span>
+          </button>
+        </div>
+        {showChannelsBreakdown && (
+          <div
+            className={`grid gap-2.5 ${
+              displaySummaryChannels.length === 1
+                ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                : displaySummaryChannels.length === 2
+                  ? 'grid-cols-1 sm:grid-cols-2'
+                  : displaySummaryChannels.length === 3
+                    ? 'grid-cols-1 sm:grid-cols-3'
+                    : 'grid-cols-2 lg:grid-cols-4'
+            }`}
+          >
+            {displaySummaryChannels.map((ch) => {
+              const stat = channelStats[ch.id] || { todayIn: 0, todayOut: 0, todayNet: 0 };
+              const isSelected = channelFilter === ch.id;
+              const icon =
+                ch.icon === 'cash' ? (
+                  <Banknote size={17} className={ch.iconColorClass} />
+                ) : ch.icon === 'bank' ? (
+                  <Landmark size={17} className={ch.iconColorClass} />
+                ) : ch.icon === 'instapay' ? (
+                  <Zap size={17} className={ch.iconColorClass} />
+                ) : ch.icon === 'card' ? (
+                  <CreditCard size={17} className={ch.iconColorClass} />
+                ) : (
+                  <Smartphone size={17} className={ch.iconColorClass} />
+                );
+
+              return (
+                <button
+                  key={ch.id}
+                  type="button"
+                  onClick={() => setChannelFilter((prev) => (prev === ch.id ? '' : ch.id))}
+                  title="اضغط لتصفية الحركات حسب هذه القناة"
+                  className={`text-right rounded-xl border px-3.5 py-2.5 transition-all cursor-pointer flex items-center justify-between gap-2.5 shadow-2xs ${
+                    isSelected
+                      ? ch.activeCardClass
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/80'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${ch.iconBgClass}`}>
+                      {icon}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-extrabold text-slate-800 truncate">{ch.label}</span>
+                        {isSelected && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-slate-900 text-white">
+                            مُصفّى
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        className={`text-sm font-black tabular-nums truncate ${
+                          stat.todayNet > 0
+                            ? 'text-emerald-700'
+                            : stat.todayNet < 0
+                              ? 'text-rose-700'
+                              : 'text-slate-900'
+                        }`}
+                      >
+                        {stat.todayNet > 0 ? `+${formatCurrency(stat.todayNet)}` : formatCurrency(stat.todayNet)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-left shrink-0 space-y-0.5 text-[10px] font-bold tabular-nums">
+                    <div className="text-emerald-700">+{formatCurrency(stat.todayIn)}</div>
+                    <div className="text-rose-600">-{formatCurrency(stat.todayOut)}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Tier 3: Flexible & Scrollable Data Table Card */}
@@ -1999,6 +2283,16 @@ export default function Payments() {
             />
             <span>عرض الملغاة</span>
           </label>
+          {channelFilter && (
+            <button
+              type="button"
+              onClick={() => setChannelFilter('')}
+              className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 cursor-pointer"
+            >
+              <span>الخزنة: {getPaymentChannelMeta(channelFilter).label}</span>
+              <X size={13} />
+            </button>
+          )}
         </div>
 
         {/* Mobile Cards View (< md) */}
@@ -2023,14 +2317,38 @@ export default function Payments() {
                     .find((sale) => sale.id === payment.saleId)
                     ?.financing?.schedules?.find((schedule) => schedule.id === payment.installmentId)
                 : null;
+              const isTransfer = payment.referenceType === 'internal_transfer';
+              const channelMeta = getPaymentChannelMeta(payment.channel);
+              const partyDisplay = isTransfer
+                ? 'تحويل بين الخزائن'
+                : payment.type === 'in'
+                  ? customerName
+                  : supplierName;
 
               return (
                 <div key={`mob-pay-${payment.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${payment.type === 'in' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
-                          {payment.type === 'in' ? 'قبض وارد' : 'صرف صادرات'}
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold border ${
+                            isTransfer
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              : payment.type === 'in'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}
+                        >
+                          {isTransfer
+                            ? payment.type === 'in'
+                              ? 'تحويل وارد'
+                              : 'تحويل صادر'
+                            : payment.type === 'in'
+                              ? 'قبض وارد'
+                              : 'صرف صادرات'}
+                        </span>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${channelMeta.badgeClass}`}>
+                          {channelMeta.label}
                         </span>
                         {payment.invoiceNumber && (
                           <span className="text-[11px] font-mono font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
@@ -2039,7 +2357,7 @@ export default function Payments() {
                         )}
                       </div>
                       <p className="font-black text-slate-900 text-sm break-words">
-                        {displayArabic(payment.type === 'in' ? customerName : supplierName)}
+                        {displayArabic(partyDisplay)}
                       </p>
                       {linkedSchedule?.label && (
                         <p className="text-[11px] text-slate-500 font-semibold">{displayArabic(linkedSchedule.label)}</p>
@@ -2097,6 +2415,7 @@ export default function Payments() {
             <thead className="desktop-sticky-header">
               <tr>
                 <th className="py-2.5 px-4 text-right">نوع الحركة</th>
+                <th className="py-2.5 px-4 text-right">الخزنة</th>
                 <th className="py-2.5 px-4 text-right">اسم الطرف الآخر</th>
                 <th className="py-2.5 px-4 text-right">رقم الفاتورة / القسط</th>
                 <th className="py-2.5 px-4 text-right">البيان / الوصف</th>
@@ -2107,16 +2426,16 @@ export default function Payments() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <LoadingState variant="table" colSpan={7} />
+                <LoadingState variant="table" colSpan={8} />
               ) : filteredPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 px-4 text-center text-slate-400">
+                  <td colSpan={8} className="py-16 px-4 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2.5 min-h-[220px]">
                       <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                         <Banknote size={24} />
                       </div>
                       <p className="text-sm font-bold text-slate-700">
-                        {historyDateFilter || historySearch ? 'لا توجد معاملات مطابقة للفلتر المحدد' : 'لا توجد معاملات مضافة بعد'}
+                        {historyDateFilter || historySearch || channelFilter ? 'لا توجد معاملات مطابقة للفلتر المحدد' : 'لا توجد معاملات مضافة بعد'}
                       </p>
                       <p className="text-xs text-slate-400">سجل سداد عميل جديد أو اختر «كل الأيام» لاستعراض السجل الكامل</p>
                     </div>
@@ -2134,16 +2453,42 @@ export default function Payments() {
                       .find((sale) => sale.id === payment.saleId)
                       ?.financing?.schedules?.find((schedule) => schedule.id === payment.installmentId)
                   : null;
+                const isTransfer = payment.referenceType === 'internal_transfer';
+                const channelMeta = getPaymentChannelMeta(payment.channel);
+                const partyDisplay = isTransfer
+                  ? 'تحويل بين الخزائن'
+                  : payment.type === 'in'
+                    ? customerName
+                    : supplierName;
 
                 return (
                   <tr key={payment.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-2.5 px-4">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold ${payment.type === 'in' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
-                        {payment.type === 'in' ? 'قبض وارد' : 'صرف صادرات'}
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border ${
+                          isTransfer
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            : payment.type === 'in'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-rose-50 text-rose-700 border-rose-200'
+                        }`}
+                      >
+                        {isTransfer
+                          ? payment.type === 'in'
+                            ? 'تحويل وارد'
+                            : 'تحويل صادر'
+                          : payment.type === 'in'
+                            ? 'قبض وارد'
+                            : 'صرف صادرات'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4 whitespace-nowrap">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${channelMeta.badgeClass}`}>
+                        {channelMeta.label}
                       </span>
                     </td>
                     <td className="py-2.5 px-4 font-bold text-slate-800 text-xs md:text-sm">
-                      {displayArabic(payment.type === 'in' ? customerName : supplierName)}
+                      {displayArabic(partyDisplay)}
                     </td>
                     <td className="py-2.5 px-4">
                       <div className="flex items-center gap-1.5 text-xs font-mono">
@@ -2389,7 +2734,7 @@ export default function Payments() {
                             <span className="text-lg font-black text-emerald-700">{formatCurrency(netSettlementRequired)}</span>
                           </div>
                         )}
-                        {isApiMode() && !isAdmin(user) && (
+                        {isApiMode() && !hasPermission(user, 'payments:early_settlement') && (
                           <div className="rounded-xl border border-amber-300 bg-amber-50/70 p-4 space-y-3">
                             <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
                               <Lock size={16} />
@@ -2590,6 +2935,15 @@ export default function Payments() {
                           </div>
                         </div>
 
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5">
+                          <PaymentChannelSelector
+                            compact
+                            label="طريقة التحصيل / الخزنة المستلمة"
+                            value={incomingForm.channel}
+                            onChange={(channel) => setIncomingForm((current) => ({ ...current, channel }))}
+                          />
+                        </div>
+
                         <Field label="الوصف">
                           <input
                             type="text"
@@ -2780,6 +3134,15 @@ export default function Payments() {
                       </Field>
                     </div>
 
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5">
+                      <PaymentChannelSelector
+                        compact
+                        label="الخزنة المصروف منها"
+                        value={outgoingForm.channel}
+                        onChange={(channel) => setOutgoingForm((current) => ({ ...current, channel }))}
+                      />
+                    </div>
+
                     {(() => {
                       const selectedSup = suppliers.find((s) => s.id === outgoingForm.supplierId);
                       if (!selectedSup) return null;
@@ -2894,7 +3257,7 @@ export default function Payments() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
+                  <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isAdmin(user) ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
                     <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                       <p className="text-xs text-slate-500 font-bold">إجمالي الوارد (مقبوضات اليوم)</p>
                       <p className="mt-1 text-lg font-extrabold text-emerald-600">{formatCurrency(closingTotalIn)}</p>
@@ -2907,9 +3270,50 @@ export default function Payments() {
                       <p className="text-xs text-slate-500 font-bold">صافي حركة اليوم</p>
                       <p className="mt-1 text-lg font-extrabold text-slate-800">{formatCurrency(closingNet)}</p>
                     </div>
-                    <div className="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
-                      <p className="text-xs text-sky-800 font-bold">إجمالي النقدية المتوقعة بالخزينة</p>
-                      <p className="mt-1 text-lg font-black text-sky-700">{formatCurrency(expectedTreasuryClosingBalance)}</p>
+                    {isAdmin(user) && (
+                      <div className="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
+                        <p className="text-xs text-sky-800 font-bold">إجمالي النقدية المتوقعة بالخزينة</p>
+                        <p className="mt-1 text-lg font-black text-sky-700">{formatCurrency(expectedTreasuryClosingBalance)}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 space-y-2.5">
+                    <p className="text-xs font-black text-slate-700">توزيعة فلوس اليوم حسب الخزنة</p>
+                    <div
+                      className={`grid gap-2.5 ${
+                        displayClosingChannels.length <= 2
+                          ? 'grid-cols-1 sm:grid-cols-2'
+                          : displayClosingChannels.length === 3
+                            ? 'grid-cols-1 sm:grid-cols-3'
+                            : 'grid-cols-2 md:grid-cols-4'
+                      }`}
+                    >
+                      {displayClosingChannels.map((ch) => {
+                        const chStat = closingChannelBreakdown[ch.id] || { todayIn: 0, todayOut: 0, todayNet: 0 };
+                        return (
+                          <div key={ch.id} className="rounded-xl border border-slate-200 bg-white p-3">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold border ${ch.badgeClass}`}>
+                              {ch.label}
+                            </span>
+                            <p
+                              className={`mt-1.5 text-sm font-black tabular-nums ${
+                                chStat.todayNet > 0
+                                  ? 'text-emerald-700'
+                                  : chStat.todayNet < 0
+                                    ? 'text-rose-700'
+                                    : 'text-slate-800'
+                              }`}
+                            >
+                              {chStat.todayNet > 0 ? `+${formatCurrency(chStat.todayNet)}` : formatCurrency(chStat.todayNet)}
+                            </p>
+                            <div className="mt-1 flex items-center justify-between text-[10px] font-bold tabular-nums text-slate-500">
+                              <span className="text-emerald-700">+{formatCurrency(chStat.todayIn)}</span>
+                              <span className="text-rose-600">-{formatCurrency(chStat.todayOut)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -2983,10 +3387,10 @@ export default function Payments() {
                             <th className="px-3 py-2.5 text-center font-bold text-emerald-700">إجمالي الوارد</th>
                             <th className="px-3 py-2.5 text-center font-bold text-rose-700">إجمالي المنصرف</th>
                             <th className="px-3 py-2.5 text-center font-bold text-slate-800">صافي اليومية</th>
-                            <th className="px-3 py-2.5 text-center font-bold text-sky-800">رصيد الإغلاق</th>
+                            {isAdmin(user) && <th className="px-3 py-2.5 text-center font-bold text-sky-800">رصيد الإغلاق</th>}
                             <th className="px-3 py-2.5 text-right font-bold">بواسطة</th>
                             <th className="px-3 py-2.5 text-right font-bold">الملاحظات</th>
-                            {isAdmin(user) && <th className="px-3 py-2.5 text-center font-bold">إجراء</th>}
+                            {hasPermission(user, 'closing:write') && <th className="px-3 py-2.5 text-center font-bold">إجراء</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700 text-xs">
@@ -3006,12 +3410,14 @@ export default function Payments() {
                                 <td className="px-3 py-2.5 text-center font-bold text-emerald-600 font-mono">{formatCurrency(computedIn)}</td>
                                 <td className="px-3 py-2.5 text-center font-bold text-rose-600 font-mono">{formatCurrency(computedOut)}</td>
                                 <td className="px-3 py-2.5 text-center font-black font-mono text-slate-800">{formatCurrency(computedNet)}</td>
-                                <td className="px-3 py-2.5 text-center font-extrabold font-mono text-sky-700">
-                                  {computedBalance !== undefined ? formatCurrency(computedBalance) : '-'}
-                                </td>
+                                {isAdmin(user) && (
+                                  <td className="px-3 py-2.5 text-center font-extrabold font-mono text-sky-700">
+                                    {computedBalance !== undefined ? formatCurrency(computedBalance) : '-'}
+                                  </td>
+                                )}
                                 <td className="px-3 py-2.5 text-slate-600 font-medium whitespace-nowrap">{period.closedBy || 'مدير النظام'}</td>
                                 <td className="px-3 py-2.5 text-xs text-slate-500 max-w-[180px] truncate">{period.notes || '-'}</td>
-                                {isAdmin(user) && (
+                                {hasPermission(user, 'closing:write') && (
                                   <td className="px-3 py-2.5 text-center whitespace-nowrap">
                                     <button
                                       type="button"
@@ -3206,7 +3612,7 @@ function StatCard({
         <div className="rounded-lg bg-white p-2.5 shadow-none shrink-0 border border-slate-100">{icon}</div>
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold text-slate-500 truncate">{label}</p>
-          <p className="mt-0.5 text-lg font-black text-slate-900 tabular-nums truncate">{value}</p>
+          <p className="mt-0.5 text-lg font-black text-slate-900 tabular-nums"><CurrencyText value={value} /></p>
         </div>
       </div>
     </div>

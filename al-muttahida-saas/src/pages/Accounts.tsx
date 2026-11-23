@@ -14,13 +14,16 @@ import {
   CalendarDays,
   RefreshCw,
   Package,
+  Warehouse,
 } from 'lucide-react';
 import { api, isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { calculateTotalCashBalance } from '../lib/accounting';
 import { getSettings, getPayments, getExpenses, getOpeningBalances } from '../lib/storage';
 import LoadingState from '../components/LoadingState';
+import CurrencyText from '../components/CurrencyText';
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -34,6 +37,8 @@ type DashboardMetrics = {
   periodSales: number;
   periodCostOfGoodsSold: number;
   periodGrossProfit: number;
+  periodWarehouseProfit: number;
+  periodFinancingProfit: number;
   periodOperatingNetProfit: number;
   warehouseProfit: number;
   realizedCashCollections: number;
@@ -114,6 +119,8 @@ function normalizeMetrics(
     periodSales: toNumber(data?.periodSales),
     periodCostOfGoodsSold: toNumber(data?.periodCostOfGoodsSold),
     periodGrossProfit: toNumber(data?.periodGrossProfit ?? data?.warehouseProfit),
+    periodWarehouseProfit: toNumber(data?.periodWarehouseProfit),
+    periodFinancingProfit: toNumber(data?.periodFinancingProfit),
     periodOperatingNetProfit: toNumber(data?.periodOperatingNetProfit),
     warehouseProfit: toNumber(data?.warehouseProfit),
     realizedCashCollections: toNumber(data?.realizedCashCollections),
@@ -163,6 +170,11 @@ export default function Accounts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [syncTick, setSyncTick] = useState(0);
+
+  useRealtimeSync(['sales', 'payments', 'expenses', 'customers', 'suppliers', 'shareholders'], () => {
+    setSyncTick((t) => t + 1);
+  });
 
   // Fetch metrics whenever dates change
   React.useEffect(() => {
@@ -198,7 +210,7 @@ export default function Accounts() {
     }
     loadMetrics();
     return () => { active = false; };
-  }, [startDate, endDate]);
+  }, [startDate, endDate, syncTick]);
 
   const handlePresetClick = useCallback((key: PresetKey) => {
     setActivePreset(key);
@@ -223,6 +235,8 @@ export default function Accounts() {
   const earlySettlementDiscounts = m ? toNumber(m.periodEarlySettlementDiscounts) : 0;
   const cogs = m ? toNumber(m.periodCostOfGoodsSold) : 0;
   const warehouseProfit = m ? toNumber(m.periodGrossProfit || m.warehouseProfit) : 0;
+  const trueWarehouseProfit = m ? toNumber(m.periodWarehouseProfit) : 0;
+  const financingProfit = m ? toNumber(m.periodFinancingProfit ?? Math.max(0, warehouseProfit - trueWarehouseProfit)) : 0;
   const expenses = m ? toNumber(m.periodExpenses) : 0;
   const rawRealizedProfits = m ? toNumber(m.realizedProfits) : 0;
   const realizedCashCollections = m ? toNumber(m.realizedCashCollections) : 0;
@@ -247,9 +261,10 @@ export default function Accounts() {
   // ═══════════════════════════════════════════════════════════════
   // PERIOD BREAKDOWN BAR — used for the visual summary at bottom
   // ═══════════════════════════════════════════════════════════════
-  const barTotal = Math.max(sales, expenses, warehouseProfit, 1); // prevent division by zero
+  const barTotal = Math.max(sales, expenses, warehouseProfit, trueWarehouseProfit, 1); // prevent division by zero
   const salesPct = Math.min((sales / barTotal) * 100, 100);
   const warehouseProfitPct = Math.min((warehouseProfit / barTotal) * 100, 100);
+  const trueWarehouseProfitPct = Math.min((trueWarehouseProfit / barTotal) * 100, 100);
   const expensesPct = Math.min((expenses / barTotal) * 100, 100);
 
   // ───── Loading State ─────
@@ -356,7 +371,7 @@ export default function Accounts() {
               <h3 className="text-sm font-black text-slate-600">موقف السيولة والأرصدة</h3>
               <span className="mr-auto text-[10px] font-semibold text-slate-400">(أرصدة تراكمية)</span>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
               <KPICard
                 title="النقدية بالخزينة"
                 formula="إجمالي المقبوضات (الوارد) − إجمالي المدفوعات والمصروفات (الصادر)"
@@ -406,7 +421,7 @@ export default function Accounts() {
                 الأداء المالي للفترة {periodLabel}
               </h3>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
               <KPICard
                 title="صافي مبيعات الفترة"
                 formula={
@@ -427,6 +442,15 @@ export default function Accounts() {
                 icon={Package}
                 iconTone="bg-teal-50 text-teal-600 border-teal-100"
                 valueColor="text-teal-700"
+                onClick={() => navigate('/sales')}
+              />
+              <KPICard
+                title="أرباح المخزن"
+                formula={`هامش البيع النقدي − التكلفة (تقسيط: ${formatCurrency(financingProfit)})`}
+                value={formatCurrency(trueWarehouseProfit)}
+                icon={Warehouse}
+                iconTone="bg-amber-50 text-amber-600 border-amber-100"
+                valueColor="text-amber-700"
                 onClick={() => navigate('/sales')}
               />
               <KPICard
@@ -490,6 +514,22 @@ export default function Accounts() {
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3">
                     <span className="text-xs font-black tabular-nums text-teal-700">
                       {formatCurrency(warehouseProfit)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* True Warehouse Margin Row */}
+              <div className="flex items-center gap-4">
+                <span className="w-36 shrink-0 text-xs font-bold text-slate-500">أرباح المخزن</span>
+                <div className="relative h-7 flex-1 overflow-hidden rounded-lg bg-slate-100">
+                  <div
+                    className="absolute inset-y-0 right-0 rounded-lg bg-amber-500/20 transition-all duration-500"
+                    style={{ width: `${trueWarehouseProfitPct}%` }}
+                  />
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                    <span className="text-xs font-black tabular-nums text-amber-700">
+                      {formatCurrency(trueWarehouseProfit)}
                     </span>
                   </div>
                 </div>
@@ -578,26 +618,24 @@ function KPICard({
         onClick ? 'cursor-pointer' : ''
       }`}
     >
-      <div className="flex justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-black text-slate-500">{title}</p>
-          <h4 className={`mt-2 text-2xl font-black tabular-nums leading-tight ${valueColor}`}>
-            {value}
-          </h4>
-          <p className="mt-1.5 text-[10px] font-semibold leading-4 text-slate-400">{formula}</p>
-        </div>
-        <div className="flex flex-col items-center gap-2">
-          <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border ${iconTone}`}>
-            <Icon size={20} />
-          </div>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-black text-slate-500 leading-snug">{title}</p>
+        <div className="flex items-center gap-1.5 shrink-0">
           {onClick && (
             <ArrowLeft
               size={13}
               className="text-slate-300 transition-all group-hover:text-blue-500 group-hover:-translate-x-1"
             />
           )}
+          <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${iconTone}`}>
+            <Icon size={17} />
+          </div>
         </div>
       </div>
+      <h4 className={`mt-2.5 text-2xl font-black tabular-nums leading-tight ${valueColor}`}>
+        <CurrencyText value={value} />
+      </h4>
+      <p className="mt-1.5 text-[10px] font-semibold leading-4 text-slate-400">{formula}</p>
     </div>
   );
 }

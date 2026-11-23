@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Plus, Trash2, Search, AlertCircle, RefreshCw, Printer, Pencil } from 'lucide-react';
 import { Expense } from '../types';
 import { api, isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
@@ -11,6 +12,10 @@ import { formatWholeCurrency } from '../lib/utils';
 import { getExpenses, createExpense, updateExpense, deleteExpense } from '../lib/storage';
 import { printHtmlDocument } from '../lib/printHelper';
 import LoadingState from '../components/LoadingState';
+import CurrencyText from '../components/CurrencyText';
+import PaymentChannelSelector from '../components/PaymentChannelSelector';
+import { getPaymentChannelMeta, type TreasuryChannel } from '../lib/paymentChannels';
+import { escapeHtml } from '../lib/htmlUtils';
 
 type PresetKey = 'all' | 'year' | 'quarter' | 'month' | 'today' | 'custom';
 
@@ -86,16 +91,25 @@ export default function Expenses() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    category: string;
+    description: string;
+    amount: number;
+    date: string;
+    channel: TreasuryChannel;
+  }>({
     category: '',
     description: '',
     amount: 0,
     date: new Date().toISOString().split('T')[0],
+    channel: 'cash',
   });
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     if (isApiMode()) {
-      setIsLoading(true);
+      if (!silent) {
+        setIsLoading(true);
+      }
       setError(null);
       try {
         const data = await api.listExpenses();
@@ -120,6 +134,10 @@ export default function Expenses() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useRealtimeSync(['expenses', 'payments'], () => {
+    void loadData(true);
+  });
 
   useEffect(() => {
     searchInputRef.current?.focus();
@@ -165,7 +183,7 @@ export default function Expenses() {
 
   const openAddModal = () => {
     setEditingExpense(null);
-    setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+    setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0], channel: 'cash' });
     setShowModal(true);
   };
 
@@ -176,6 +194,7 @@ export default function Expenses() {
       description: expense.description || '',
       amount: Number(expense.amount || 0),
       date: toYMD(expense.date) || new Date().toISOString().split('T')[0],
+      channel: getPaymentChannelMeta(expense.channel).id,
     });
     setShowModal(true);
   };
@@ -183,11 +202,12 @@ export default function Expenses() {
   const closeExpenseModal = () => {
     setShowModal(false);
     setEditingExpense(null);
-    setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+    setFormData({ category: '', description: '', amount: 0, date: new Date().toISOString().split('T')[0], channel: 'cash' });
   };
 
   const handlePrintVoucher = async (expense: Expense) => {
     const voucherNo = `EXP-${String(expense.id).slice(-6).toUpperCase()}`;
+    const channelMeta = getPaymentChannelMeta(expense.channel);
     const html = `
       <!DOCTYPE html>
       <html lang="ar" dir="rtl">
@@ -210,20 +230,21 @@ export default function Expenses() {
         <div class="voucher">
           <div class="header">
             <div>
-              <div style="font-weight:800;font-size:18px;">${settings.companyName || 'شركة المتحدة'}</div>
+              <div style="font-weight:800;font-size:18px;">${escapeHtml(settings.companyName || 'شركة المتحدة')}</div>
               <div style="font-size:12px;color:#64748b;">سند صرف مصروفات تشغيلية</div>
             </div>
-            <div class="title">سند صرف رقم #${voucherNo}</div>
+            <div class="title">سند صرف رقم #${escapeHtml(voucherNo)}</div>
           </div>
           <div class="grid">
-            <div class="box"><div class="label">التاريخ</div><div class="val">${formatDateDisplay(expense.date)}</div></div>
-            <div class="box"><div class="label">التصنيف</div><div class="val">${expense.category}</div></div>
-            <div class="box"><div class="label">المبلغ المصروف</div><div class="val" style="color:#b91c1c;">${formatCurrency(expense.amount)}</div></div>
-            <div class="box"><div class="label">سُجل بواسطة</div><div class="val">${expense.createdBy || user?.name || '-'}</div></div>
+            <div class="box"><div class="label">التاريخ</div><div class="val">${escapeHtml(formatDateDisplay(expense.date))}</div></div>
+            <div class="box"><div class="label">التصنيف</div><div class="val">${escapeHtml(expense.category)}</div></div>
+            <div class="box"><div class="label">المبلغ المصروف</div><div class="val" style="color:#b91c1c;">${escapeHtml(formatCurrency(expense.amount))}</div></div>
+            <div class="box"><div class="label">طريقة الصرف / الخزنة</div><div class="val">${escapeHtml(channelMeta.label)}</div></div>
+            <div class="box" style="grid-column: span 2;"><div class="label">سُجل بواسطة</div><div class="val">${escapeHtml(expense.createdBy || user?.name || '-')}</div></div>
           </div>
           <div class="box" style="margin-bottom:18px;">
             <div class="label">البيان / الوصف</div>
-            <div class="val">${expense.description}</div>
+            <div class="val">${escapeHtml(expense.description)}</div>
           </div>
           <div class="signs">
             <div>توقيع المستلم: ___________________</div>
@@ -251,6 +272,7 @@ export default function Expenses() {
         description: formData.description,
         amount: formData.amount,
         date: formData.date,
+        channel: formData.channel,
       };
       if (editingExpense) {
         await updateExpense(editingExpense.id, payload);
@@ -543,13 +565,20 @@ export default function Expenses() {
               {error ? 'تعذر جلب البيانات بسبب انقطاع الاتصال بقاعدة البيانات' : 'لا توجد سندات صرف مطابِقة للبحث والفترة المحددة'}
             </div>
           ) : (
-            filteredExpenses.map((expense) => (
+            filteredExpenses.map((expense) => {
+              const channelMeta = getPaymentChannelMeta(expense.channel);
+              return (
               <div key={`mob-exp-${expense.id}`} className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <span className="inline-block px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[11px] font-bold mb-1">
-                      {expense.category}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                      <span className="inline-block px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[11px] font-bold">
+                        {expense.category}
+                      </span>
+                      <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-bold border ${channelMeta.badgeClass}`}>
+                        {channelMeta.label}
+                      </span>
+                    </div>
                     <p className="text-sm text-slate-800 font-bold break-words">{expense.description}</p>
                   </div>
                   <span className="text-sm font-black text-rose-700 font-mono shrink-0">{formatCurrency(expense.amount)}</span>
@@ -588,7 +617,8 @@ export default function Expenses() {
                   </div>
                 </div>
               </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -599,27 +629,35 @@ export default function Expenses() {
                 <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">التاريخ</th>
                 <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">التصنيف</th>
                 <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">البيان / الوصف</th>
+                <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">طريقة الصرف</th>
                 <th className="py-2.5 px-4 text-right text-xs font-black text-slate-700 tracking-wider">المبلغ</th>
                 <th className="py-2.5 px-4 text-center text-xs font-black text-slate-700 tracking-wider w-20 no-print print:hidden">إجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-200">
               {isLoading ? (
-                <LoadingState variant="table" colSpan={5} />
+                <LoadingState variant="table" colSpan={6} />
               ) : filteredExpenses.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
+                  <td colSpan={6} className="py-12 px-4 text-center text-slate-400 text-xs font-bold">
                     {error ? 'تعذر جلب البيانات بسبب انقطاع الاتصال بقاعدة البيانات' : 'لا توجد سندات صرف مطابِقة للبحث والفترة المحددة'}
                   </td>
                 </tr>
               ) : (
-                filteredExpenses.map(expense => (
+                filteredExpenses.map(expense => {
+                  const channelMeta = getPaymentChannelMeta(expense.channel);
+                  return (
                   <tr key={expense.id} className="hover:bg-slate-50 transition-colors print:hover:bg-transparent print:break-inside-avoid">
                     <td className="py-2.5 px-4 text-xs md:text-sm text-slate-600 font-mono">{formatDateDisplay(expense.date)}</td>
                     <td className="py-2.5 px-4">
                       <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-md text-xs font-semibold">{expense.category}</span>
                     </td>
                     <td className="py-2.5 px-4 text-xs md:text-sm text-slate-800 font-bold">{expense.description}</td>
+                    <td className="py-2.5 px-4">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${channelMeta.badgeClass}`}>
+                        {channelMeta.label}
+                      </span>
+                    </td>
                     <td className="py-2.5 px-4 text-xs md:text-sm font-bold text-rose-700 font-mono">{formatCurrency(expense.amount)}</td>
                     <td className="py-2.5 px-4 text-center no-print print:hidden">
                       <div className="inline-flex items-center justify-center gap-1">
@@ -654,7 +692,8 @@ export default function Expenses() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -740,6 +779,12 @@ export default function Expenses() {
                   className="w-full h-10 rounded-xl border-slate-200 px-3 text-xs md:text-sm font-bold"
                 />
               </div>
+              <PaymentChannelSelector
+                compact
+                label="خزنة الصرف"
+                value={formData.channel}
+                onChange={(channel) => setFormData({ ...formData, channel })}
+              />
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
@@ -783,7 +828,7 @@ function ExpensesMetric({
   return (
     <div className={`rounded-xl border p-3 shadow-2xs ${toneClass}`}>
       <p className="text-xs font-bold opacity-75">{label}</p>
-      <p className="mt-0.5 text-xl font-black tabular-nums">{value}</p>
+      <p className="mt-0.5 text-xl font-black tabular-nums"><CurrencyText value={value} /></p>
     </div>
   );
 }

@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { hasPermission } from '../permissions.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput, comparePassword, isPeriodClosed } from '../utils.js';
 import { createSystemNotification, financialMovementLabel, formatMoney } from '../financialNotifications.js';
 import { broadcastDataChange } from '../realtime.js';
+import { parsePaymentChannelsJson } from './settings.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -25,6 +27,11 @@ async function nextReceiptNumber(txDb?: any) {
 
 const roundMoney = (value: number) => Number(Number(value || 0).toFixed(2));
 
+const NORMALIZED_CHANNEL_SQL = `CASE
+  WHEN channel IS NULL OR LTRIM(RTRIM(channel)) = '' OR channel = 'other' THEN 'cash'
+  ELSE channel
+END`;
+
 const paymentSchema = z.object({
   type: z.enum(['in', 'out']),
   amount: z.number().positive(),
@@ -33,10 +40,10 @@ const paymentSchema = z.object({
   customerId: z.string().optional().nullable(),
   supplierId: z.string().optional().nullable(),
   referenceId: z.string().optional().nullable(),
-  referenceType: z.enum(['customer', 'supplier', 'sale', 'purchase', 'other']).default('other'),
+  referenceType: z.enum(['customer', 'supplier', 'sale', 'purchase', 'expense', 'internal_transfer', 'other']).default('other'),
   description: z.string().min(1),
   date: z.string().min(8),
-  channel: z.enum(['cash', 'card', 'transfer', 'wallet', 'other']).default('cash'),
+  channel: z.string().trim().min(1).max(64).default('cash'),
   invoiceNumber: z.string().optional().nullable(),
   affectsCustomerBalance: z.boolean().default(true),
   isEarlySettlement: z.boolean().optional().default(false),
@@ -45,10 +52,11 @@ const paymentSchema = z.object({
   adminPassword: z.string().optional(),
 });
 
-// GET /payments/summary — fast SQL aggregate totals for Treasury KPIs without transferring 10k+ rows
-router.get('/summary', requirePermission('payments:read'), async (req, res) => {
+// GET /payments/summary — daily breakdown + admin-only cumulative totals
+router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
+    const isAdminUser = req.user?.role === 'admin';
     const todayDate =
       typeof req.query.date === 'string' && req.query.date.trim()
         ? req.query.date.trim().slice(0, 10)
@@ -62,19 +70,41 @@ router.get('/summary', requirePermission('payments:read'), async (req, res) => {
     const payRow = await db.get<any>(
       `SELECT
          COUNT(*) AS totalCount,
-         COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') THEN amount ELSE 0 END), 0) AS totalIn,
-         COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') THEN amount ELSE 0 END), 0) AS totalOut,
-         COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayIn,
-         COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayOut
+         COUNT(CASE WHEN (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' AND CONVERT(date, date) = CONVERT(date, ?) THEN 1 END) AS todayCount,
+         COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' THEN amount ELSE 0 END), 0) AS totalIn,
+         COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' THEN amount ELSE 0 END), 0) AS totalOut,
+         COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayIn,
+         COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayOut
        FROM payments`,
+      todayDate,
       todayDate,
       todayDate,
     );
     const expRow = await db.get<any>(
       `SELECT
-         COALESCE(SUM(amount), 0) AS totalExpenses,
-         COALESCE(SUM(CASE WHEN CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayExpenses
-       FROM expenses`,
+         COALESCE(SUM(e.amount), 0) AS totalExpenses,
+         COALESCE(SUM(CASE WHEN CONVERT(date, e.date) = CONVERT(date, ?) THEN e.amount ELSE 0 END), 0) AS todayExpenses
+       FROM expenses e
+       WHERE NOT EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.reference_type = 'expense'
+           AND p.reference_id = e.id
+           AND (p.status IS NULL OR p.status != 'voided')
+       )`,
+      todayDate,
+    );
+
+    const channelRows = await db.all<any>(
+      `SELECT
+         ${NORMALIZED_CHANNEL_SQL} AS normChannel,
+         COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE 0 END), 0) AS totalIn,
+         COALESCE(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS totalOut,
+         COALESCE(SUM(CASE WHEN type = 'in' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayIn,
+         COALESCE(SUM(CASE WHEN type = 'out' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayOut
+       FROM payments
+       WHERE (status IS NULL OR status != 'voided')
+       GROUP BY ${NORMALIZED_CHANNEL_SQL}`,
+      todayDate,
       todayDate,
     );
 
@@ -85,16 +115,69 @@ router.get('/summary', requirePermission('payments:read'), async (req, res) => {
     const todayOut = Number(payRow?.todayOut || 0);
     const todayExpenses = Number(expRow?.todayExpenses || 0);
 
+    const configuredRow = await db.get<{ payment_channels_json?: string | null }>(
+      'SELECT TOP 1 payment_channels_json FROM settings',
+    ).catch(() => null);
+    const configuredChannels = parsePaymentChannelsJson(configuredRow?.payment_channels_json);
+
+    const makeEmptyChannel = () => ({
+      balance: isAdminUser ? 0 : null,
+      totalIn: isAdminUser ? 0 : null,
+      totalOut: isAdminUser ? 0 : null,
+      todayIn: 0,
+      todayOut: 0,
+      todayNet: 0,
+    });
+    const channels: Record<
+      string,
+      { balance: number | null; totalIn: number | null; totalOut: number | null; todayIn: number; todayOut: number; todayNet: number }
+    > = {};
+
+    for (const ch of configuredChannels) {
+      channels[ch.id] = makeEmptyChannel();
+    }
+
+    for (const r of channelRows) {
+      const key = String(r.normChannel || 'cash').trim() || 'cash';
+      if (!channels[key]) {
+        channels[key] = makeEmptyChannel();
+      }
+      const chIn = roundMoney(r.totalIn);
+      const chOut = roundMoney(r.totalOut);
+      const chTodayIn = roundMoney(r.todayIn);
+      const chTodayOut = roundMoney(r.todayOut);
+      channels[key] = {
+        totalIn: isAdminUser ? chIn : null,
+        totalOut: isAdminUser ? chOut : null,
+        balance: isAdminUser ? roundMoney(chIn - chOut) : null,
+        todayIn: chTodayIn,
+        todayOut: chTodayOut,
+        todayNet: roundMoney(chTodayIn - chTodayOut),
+      };
+    }
+
+    if (totalExpenses !== 0 || todayExpenses !== 0) {
+      if (!channels.cash) channels.cash = makeEmptyChannel();
+      if (isAdminUser && channels.cash.totalOut !== null && channels.cash.totalIn !== null) {
+        channels.cash.totalOut = roundMoney(channels.cash.totalOut + totalExpenses);
+        channels.cash.balance = roundMoney(channels.cash.totalIn - channels.cash.totalOut);
+      }
+      channels.cash.todayOut = roundMoney(channels.cash.todayOut + todayExpenses);
+      channels.cash.todayNet = roundMoney(channels.cash.todayIn - channels.cash.todayOut);
+    }
+
     return res.json({
       totalCount: Number(payRow?.totalCount || 0),
-      totalIn,
-      totalOut,
-      totalExpenses,
-      netCash: Number((totalIn - totalOut - totalExpenses).toFixed(2)),
+      todayCount: Number(payRow?.todayCount || 0),
+      totalIn: isAdminUser ? totalIn : null,
+      totalOut: isAdminUser ? totalOut : null,
+      totalExpenses: isAdminUser ? totalExpenses : null,
+      netCash: isAdminUser ? roundMoney(totalIn - totalOut - totalExpenses) : null,
       todayIn,
       todayOut,
       todayExpenses,
-      todayNet: Number((todayIn - todayOut - todayExpenses).toFixed(2)),
+      todayNet: roundMoney(todayIn - todayOut - todayExpenses),
+      channels,
     });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -102,13 +185,14 @@ router.get('/summary', requirePermission('payments:read'), async (req, res) => {
 });
 
 // GET /payments
-router.get('/', requirePermission('payments:read'), async (req, res) => {
+router.get('/', requireAnyPermission('payments:read', 'reports:read'), async (req, res) => {
   try {
     const db = await dbPromise;
 
     // Extract query parameters
     const date = typeof req.query.date === 'string' ? req.query.date.slice(0, 10) : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const channel = typeof req.query.channel === 'string' ? req.query.channel.trim() : '';
     const includeMeta = req.query.includeMeta === '1' || req.query.includeMeta === 'true';
     const rawPage = typeof req.query.page === 'string' ? Number(req.query.page) : undefined;
     const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
@@ -125,6 +209,15 @@ router.get('/', requirePermission('payments:read'), async (req, res) => {
     if (date) {
       where.push('CONVERT(date, p.date) = CONVERT(date, ?)');
       params.push(date);
+    }
+
+    if (channel) {
+      if (channel === 'cash') {
+        where.push("(p.channel IS NULL OR LTRIM(RTRIM(p.channel)) = '' OR p.channel IN ('cash', 'other'))");
+      } else {
+        where.push('p.channel = ?');
+        params.push(channel);
+      }
     }
 
     if (search) {
@@ -147,7 +240,7 @@ router.get('/', requirePermission('payments:read'), async (req, res) => {
          LEFT JOIN customers c ON c.id = p.customer_id OR (p.reference_type = 'customer' AND c.id = p.reference_id)
          LEFT JOIN suppliers s ON s.id = p.supplier_id OR (p.reference_type = 'supplier' AND s.id = p.reference_id)
          ${whereSql}
-         ORDER BY p.created_at DESC`,
+         ORDER BY COALESCE(TRY_CONVERT(datetime2, p.created_at), TRY_CONVERT(datetime2, p.date), TRY_CONVERT(datetime2, '1900-01-01')) DESC, p.id DESC`,
       params,
       pagination,
     );
@@ -216,7 +309,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
   const db = await dbPromise;
   const now = new Date().toISOString();
   const id = uid();
-  const receiptNumber = await nextReceiptNumber();
+  let receiptNumber = '';
 
   try {
     if (req.user?.role !== 'admin' && await isPeriodClosed(db, data.date)) {
@@ -226,7 +319,8 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     let authorizingAdminName: string | null = null;
 
     if (data.isEarlySettlement) {
-      if (req.user?.role !== 'admin') {
+      const canSettleDirectly = hasPermission(req.user!.role, 'payments:early_settlement', req.user!.permissions);
+      if (req.user?.role !== 'admin' && !canSettleDirectly) {
         const { adminUsername, adminPassword } = data;
         if (!adminUsername || !adminPassword) {
           return res.status(403).json({
@@ -293,6 +387,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
     // Run all DB mutations inside a single transaction with row-level locks to prevent double-payment races
     await db.withTransaction(async (tx) => {
+      receiptNumber = await nextReceiptNumber(tx);
       // 1. If paying installments/balance for a sale (not a down-payment treasury record), lock sale row & update installments
       if (data.type === 'in' && data.saleId && !isDownPayment) {
         const lockedSale = await tx.get(
@@ -603,6 +698,51 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
         conflictErr.statusCode = 409;
         throw conflictErr;
       }
+
+      if (original.reference_type === 'internal_transfer' && original.reference_id) {
+        const pairedLegs = (await tx.all(
+          `SELECT * FROM payments WITH (UPDLOCK, ROWLOCK)
+           WHERE reference_type = 'internal_transfer'
+             AND reference_id = ?
+             AND (status IS NULL OR status != 'voided')`,
+          original.reference_id,
+        )) as any[];
+        for (const leg of pairedLegs) {
+          const contraId = leg.id === original.id ? reverseId : uid();
+          const contraReceipt = await nextReceiptNumber(tx);
+          if (leg.id === original.id) {
+            receiptNumber = contraReceipt;
+          }
+          const legReverseType = leg.type === 'in' ? 'out' : 'in';
+          await tx.run(
+            `INSERT INTO payments (
+              id, type, amount, sale_id, installment_id, description, date, receipt_number, status, void_ref, approved_by, channel,
+              reference_id, reference_type, customer_id, supplier_id, invoice_number, affects_customer_balance,
+              created_by, created_at
+            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, 'voided', ?, ?, ?, ?, 'internal_transfer', NULL, NULL, NULL, 0, ?, ?)`,
+            contraId,
+            legReverseType,
+            leg.amount,
+            `Reverse of ${leg.description}`,
+            now.slice(0, 10),
+            contraReceipt,
+            leg.id,
+            req.user?.name || 'system',
+            leg.channel || 'cash',
+            leg.reference_id,
+            req.user?.name || 'system',
+            now,
+          );
+          await tx.run(
+            "UPDATE payments SET status = 'voided', void_ref = ?, approved_by = ? WHERE id = ?",
+            contraId,
+            req.user?.name || 'system',
+            leg.id,
+          );
+        }
+        return;
+      }
+
       receiptNumber = await nextReceiptNumber(tx);
       // 1. If reversing a sale payment (excluding upfront down-payment treasury record), deduct from paid and add back to remaining
       let isEarlySettlementReversal = false;
@@ -886,7 +1026,7 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
 
   try {
     await db.withTransaction(async (tx: any) => {
-      const sale = await tx.get('SELECT * FROM sales WHERE id = ?', original.sale_id);
+      const sale = await tx.get('SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?', original.sale_id);
       if (!sale) throw new Error('الفاتورة المرتبطة غير موجودة.');
 
       if (delta !== 0) {
@@ -917,7 +1057,7 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
 
         if (original.installment_id) {
           const schedule = await tx.get(
-            'SELECT * FROM installment_schedules WHERE id = ?',
+            'SELECT * FROM installment_schedules WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
             original.installment_id
           );
           if (schedule) {

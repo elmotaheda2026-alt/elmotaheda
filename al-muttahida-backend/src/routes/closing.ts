@@ -1,84 +1,92 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { uid } from '../utils.js';
 import { audit } from '../audit.js';
 
 const router = Router();
 router.use(requireAuth);
 
-router.post('/close', requirePermission('closing:write'), requireAdmin, async (req: AuthedRequest, res) => {
-  const schema = z.object({
-    periodType: z.enum(['daily', 'monthly']),
-    periodDate: z.string().min(7),
-    notes: z.string().optional(),
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });
+router.post('/close', requirePermission('closing:write'), async (req: AuthedRequest, res, next) => {
+  try {
+    const schema = z.object({
+      periodType: z.enum(['daily', 'monthly']),
+      periodDate: z.string().min(7),
+      notes: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: 'Invalid payload' });
 
-  const db = await dbPromise;
-  const existing = await db.get<{ id: string; status: string }>('SELECT id, status FROM closing_periods WHERE period_type = ? AND period_date = ?', parsed.data.periodType, parsed.data.periodDate);
-  if (existing?.status === 'closed') return res.status(409).json({ message: 'Period already closed' });
+    const db = await dbPromise;
+    const existing = await db.get<{ id: string; status: string }>('SELECT id, status FROM closing_periods WHERE period_type = ? AND period_date = ?', parsed.data.periodType, parsed.data.periodDate);
+    if (existing?.status === 'closed') return res.status(409).json({ message: 'Period already closed' });
 
-  if (!existing) {
-    await db.run(
-      `INSERT INTO closing_periods (id, period_type, period_date, status, closed_by, closed_at, notes)
-       VALUES (?, ?, ?, 'closed', ?, ?, ?)`,
-      uid(),
+    if (!existing) {
+      await db.run(
+        `INSERT INTO closing_periods (id, period_type, period_date, status, closed_by, closed_at, notes)
+         VALUES (?, ?, ?, 'closed', ?, ?, ?)`,
+        uid(),
+        parsed.data.periodType,
+        parsed.data.periodDate,
+        req.user?.name || 'system',
+        new Date().toISOString(),
+        parsed.data.notes || null,
+      );
+    } else {
+      await db.run(
+        `UPDATE closing_periods
+         SET status = 'closed', closed_by = ?, closed_at = ?, notes = ?
+         WHERE id = ?`,
+        req.user?.name || 'system',
+        new Date().toISOString(),
+        parsed.data.notes || null,
+        existing.id,
+      );
+    }
+    await audit('period.close', 'closing_period', existing?.id || 'new', req.user?.name || 'system', parsed.data);
+    return res.json({ message: 'Closed' });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/reopen', requireAdmin, async (req: AuthedRequest, res, next) => {
+  try {
+    const schema = z.object({
+      periodType: z.enum(['daily', 'monthly']),
+      periodDate: z.string().min(7),
+      reason: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: 'بيانات غير صالحة' });
+
+    const db = await dbPromise;
+    const existing = await db.get<{ id: string; status: string }>(
+      'SELECT id, status FROM closing_periods WHERE period_type = ? AND period_date = ?',
       parsed.data.periodType,
       parsed.data.periodDate,
-      req.user?.name || 'system',
-      new Date().toISOString(),
-      parsed.data.notes || null,
     );
-  } else {
+    if (!existing || existing.status !== 'closed') {
+      return res.status(404).json({ message: 'هذه الفترة غير مغلقة حالياً' });
+    }
+
     await db.run(
       `UPDATE closing_periods
-       SET status = 'closed', closed_by = ?, closed_at = ?, notes = ?
+       SET status = 'open', closed_by = NULL, closed_at = NULL, notes = ?
        WHERE id = ?`,
-      req.user?.name || 'system',
-      new Date().toISOString(),
-      parsed.data.notes || null,
+      parsed.data.reason ? `تم إعادة الفتح بواسطة المدير: ${parsed.data.reason}` : 'تم إعادة الفتح بواسطة المدير العام',
       existing.id,
     );
+
+    await audit('period.reopen', 'closing_period', existing.id, req.user?.name || 'system', parsed.data);
+    return res.json({ message: 'تم إعادة فتح الفترة المالية بنجاح' });
+  } catch (err) {
+    return next(err);
   }
-  await audit('period.close', 'closing_period', existing?.id || 'new', req.user?.name || 'system', parsed.data);
-  return res.json({ message: 'Closed' });
 });
 
-router.post('/reopen', requirePermission('closing:write'), requireAdmin, async (req: AuthedRequest, res) => {
-  const schema = z.object({
-    periodType: z.enum(['daily', 'monthly']),
-    periodDate: z.string().min(7),
-    reason: z.string().optional(),
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ message: 'بيانات غير صالحة' });
-
-  const db = await dbPromise;
-  const existing = await db.get<{ id: string; status: string }>(
-    'SELECT id, status FROM closing_periods WHERE period_type = ? AND period_date = ?',
-    parsed.data.periodType,
-    parsed.data.periodDate,
-  );
-  if (!existing || existing.status !== 'closed') {
-    return res.status(404).json({ message: 'هذه الفترة غير مغلقة حالياً' });
-  }
-
-  await db.run(
-    `UPDATE closing_periods
-     SET status = 'open', closed_by = NULL, closed_at = NULL, notes = ?
-     WHERE id = ?`,
-    parsed.data.reason ? `تم إعادة الفتح بواسطة المدير: ${parsed.data.reason}` : 'تم إعادة الفتح بواسطة المدير العام',
-    existing.id,
-  );
-
-  await audit('period.reopen', 'closing_period', existing.id, req.user?.name || 'system', parsed.data);
-  return res.json({ message: 'تم إعادة فتح الفترة المالية بنجاح' });
-});
-
-router.get('/', requirePermission('reports:read'), async (_req, res) => {
+router.get('/', requireAnyPermission('reports:read', 'payments:read', 'closing:write'), async (_req, res) => {
   try {
     const db = await dbPromise;
     const rows = await db.all('SELECT * FROM closing_periods ORDER BY period_date DESC');

@@ -44,14 +44,11 @@ async function syncBackupCache(): Promise<void> {
 
 export async function createDatabaseBackup(): Promise<DatabaseBackupFile> {
   if (isApiMode()) {
-    try {
-      const serverBackup = await api.exportBackup();
-      if (serverBackup && serverBackup.data) {
-        return serverBackup;
-      }
-    } catch (e) {
-      console.warn('API backup export failed, falling back to cached local storage:', e);
+    const serverBackup = await api.exportBackup();
+    if (!serverBackup || !serverBackup.data) {
+      throw new Error('تعذر تصدير النسخة الاحتياطية الكاملة من الخادم. يرجى التحقق من اتصال السيرفر والمحاولة مجدداً.');
     }
+    return serverBackup;
   }
 
   await syncBackupCache();
@@ -60,7 +57,7 @@ export async function createDatabaseBackup(): Promise<DatabaseBackupFile> {
     app: 'almuttahida-saas',
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    dataMode: isApiMode() ? 'api' : 'local',
+    dataMode: 'local',
     data: Object.fromEntries(BACKUP_KEY_NAMES.map(([name, key]) => [name, localStorage.getItem(key)])),
   };
 }
@@ -98,8 +95,11 @@ export function generateSqlBackup(backup: DatabaseBackupFile): string {
     SHAREHOLDER_TRANSACTIONS: 'shareholder_transactions',
     AUDIT_LOGS: 'audit_log',
     COLLECTION_TASKS: 'collection_tasks',
+    COLLECTION_TASKS_ARCHIVE: 'collection_tasks_archive',
+    PAYMENTS_ARCHIVE: 'payments_archive',
     RESCHEDULE_REQUESTS: 'reschedule_requests',
     CLOSING_PERIODS: 'closing_periods',
+    DOCUMENT_TEMPLATES: 'document_templates',
   };
 
   for (const [key, rawRows] of Object.entries(backup.data || {})) {
@@ -133,7 +133,11 @@ export function generateSqlBackup(backup: DatabaseBackupFile): string {
     lines.push(`-- ${rows.length} rows recorded`);
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
-      const cols = Object.keys(row);
+      const cols = Object.keys(row).filter((col) => {
+        if (tableName === 'sales' && (col === 'items' || col === 'financing')) return false;
+        if (tableName === 'purchases' && col === 'items') return false;
+        return true;
+      });
       if (cols.length === 0) continue;
 
       const colNames = cols.join(', ');

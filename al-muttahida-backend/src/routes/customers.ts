@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
 import { broadcastDataChange } from '../realtime.js';
@@ -43,7 +43,7 @@ const customerSchema = z.object({
 });
 
 // GET /customers (lightweight list: omits heavy base64 images; supports optional server-side pagination)
-router.get('/', requirePermission('sales:read'), async (req, res) => {
+router.get('/', requireAnyPermission('sales:read', 'payments:read'), async (req, res) => {
   try {
     const db = await dbPromise;
     const rawPage = typeof req.query.page === 'string' ? Number(req.query.page) : undefined;
@@ -72,20 +72,33 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
         ? { page: Math.max(1, Math.trunc(rawPage)), limit: Math.min(200, Math.max(1, Math.trunc(rawLimit))) }
         : undefined;
 
-    const rows = await db.all<any>(
-      `SELECT id, customer_number, name, phone, email, address, gender,
+    const baseColumns = `id, customer_number, name, phone, email, address, gender,
               city, governorate, region, date_of_birth, national_id, age,
               pension_date, balance, balance_type, notes, guarantors,
-              is_sued, sued_date, created_at, updated_at,
-              CASE WHEN image IS NOT NULL AND LEN(image) > 0 THEN 1 ELSE 0 END AS has_image,
-              CASE WHEN id_card_front IS NOT NULL AND LEN(id_card_front) > 0 THEN 1 ELSE 0 END AS has_id_card_front,
-              CASE WHEN id_card_back IS NOT NULL AND LEN(id_card_back) > 0 THEN 1 ELSE 0 END AS has_id_card_back
+              is_sued, sued_date, created_at, updated_at`;
+    const listSql = `SELECT ${baseColumns}
        FROM customers
        ${whereSql}
-       ORDER BY created_at DESC`,
-      params,
-      pagination,
-    );
+       ORDER BY created_at DESC, id DESC`;
+
+    const [rows, countRow, statsRow] = pagination
+      ? await Promise.all([
+          db.all<any>(listSql, params, pagination),
+          db.get<{ total: number }>(`SELECT COUNT(*) AS total FROM customers ${whereSql}`, ...params),
+          db.get<{
+            totalCount: number;
+            debtorsCount: number;
+            suedCount: number;
+            totalReceivables: number;
+          }>(`
+            SELECT COUNT(*) AS totalCount,
+                   SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) AS debtorsCount,
+                   SUM(CASE WHEN is_sued = 1 THEN 1 ELSE 0 END) AS suedCount,
+                   COALESCE(SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END), 0) AS totalReceivables
+            FROM customers
+          `),
+        ])
+      : [await db.all<any>(listSql, params), null, null];
 
     const mapped = rows.map((row: any) => ({
       id: row.id,
@@ -101,9 +114,9 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
       image: null,
       idCardFront: null,
       idCardBack: null,
-      hasImage: row.has_image === 1 || row.has_image === true,
-      hasIdCardFront: row.has_id_card_front === 1 || row.has_id_card_front === true,
-      hasIdCardBack: row.has_id_card_back === 1 || row.has_id_card_back === true,
+      hasImage: false,
+      hasIdCardFront: false,
+      hasIdCardBack: false,
       age: Number(row.age || 0),
       balance: Number(row.balance || 0),
       isSued: row.is_sued === 1 || row.is_sued === true,
@@ -119,22 +132,6 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
     }));
 
     if (pagination) {
-      const countRow = await db.get<{ total: number }>(
-        `SELECT COUNT(*) AS total FROM customers ${whereSql}`,
-        ...params,
-      );
-      const statsRow = await db.get<{
-        totalCount: number;
-        debtorsCount: number;
-        suedCount: number;
-        totalReceivables: number;
-      }>(`
-        SELECT COUNT(*) AS totalCount,
-               SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) AS debtorsCount,
-               SUM(CASE WHEN is_sued = 1 THEN 1 ELSE 0 END) AS suedCount,
-               COALESCE(SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END), 0) AS totalReceivables
-        FROM customers
-      `);
       const total = Number(countRow?.total || 0);
       return res.json({
         total,
@@ -158,7 +155,7 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
 });
 
 // GET /customers/:id
-router.get('/:id', requirePermission('sales:read'), async (req, res) => {
+router.get('/:id', requireAnyPermission('sales:read', 'payments:read'), async (req, res) => {
   try {
     const db = await dbPromise;
     const row = await db.get<any>('SELECT * FROM customers WHERE id = ?', req.params.id);

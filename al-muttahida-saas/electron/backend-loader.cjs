@@ -94,9 +94,13 @@ function checkHealth(url) {
  * Start the backend server
  * @returns {Promise<number>} The port the backend is listening on
  */
+let startBackendPromise = null;
+let consecutiveCrashRestarts = 0;
+
 function startBackend() {
+  if (startBackendPromise) return startBackendPromise;
   isStopping = false;
-  return new Promise(async (resolve, reject) => {
+  startBackendPromise = new Promise(async (resolve, reject) => {
     // Check if backend is ALREADY running on port 4000
     try {
       await checkHealth('http://127.0.0.1:4000/health');
@@ -237,14 +241,20 @@ function startBackend() {
         const details = stderrLogs.slice(-5).join(' ').trim();
         reject(new Error(`Backend process exited with code ${code}${details ? `: ${details}` : ''}`));
       } else if (!isStopping) {
-        appendLog('WARN: Backend exited unexpectedly after startup; scheduling auto-restart in 1.5s');
-        setTimeout(() => {
-          if (!isStopping) {
-            startBackend().catch((restartErr) => {
-              appendLog(`ERROR: Auto-restart failed: ${restartErr.message}`);
-            });
-          }
-        }, 1500);
+        consecutiveCrashRestarts += 1;
+        if (consecutiveCrashRestarts <= 5) {
+          const delayMs = Math.min(10000, 1500 * consecutiveCrashRestarts);
+          appendLog(`WARN: Backend exited unexpectedly after startup; scheduling auto-restart (${consecutiveCrashRestarts}/5) in ${delayMs}ms`);
+          setTimeout(() => {
+            if (!isStopping) {
+              startBackend().catch((restartErr) => {
+                appendLog(`ERROR: Auto-restart failed: ${restartErr.message}`);
+              });
+            }
+          }, delayMs);
+        } else {
+          appendLog('ERROR: Max backend auto-restart attempts (5) reached; manual intervention required.');
+        }
       }
     });
 
@@ -269,6 +279,7 @@ function startBackend() {
         await checkHealth(`http://127.0.0.1:${port}/health`);
         if (!started) {
           started = true;
+          consecutiveCrashRestarts = 0;
           clearInterval(interval);
           resolve(port);
         }
@@ -276,6 +287,8 @@ function startBackend() {
         // Still initializing, keep waiting
       }
     }, 400);
+  }).finally(() => {
+    startBackendPromise = null;
   });
 }
 

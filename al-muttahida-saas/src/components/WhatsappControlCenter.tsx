@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Play,
   Plus,
+  Power,
   QrCode,
   RefreshCw,
   Save,
@@ -21,6 +22,7 @@ import {
   UserX,
 } from 'lucide-react';
 import { Setting } from '../types';
+import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { formatWholeCurrency } from '../lib/utils';
 import {
@@ -70,18 +72,24 @@ export default function WhatsappControlCenter({
   saved,
   canManage,
 }: WhatsappControlCenterProps) {
+  const { updateSettings } = useAuth();
   const { showToast } = useDialog();
-  const [subTab, setSubTab] = useState<'queue' | 'failed' | 'safety' | 'logs'>('queue');
 
-  const [whatsappSession, setWhatsappSession] = useState<{ connected: boolean; windowOpen: boolean }>(() => ({
-    connected: typeof window !== 'undefined' && localStorage.getItem('almuttahida_wa_web_connected') === 'true',
+  const isEnabled = Boolean(formData.whatsappRemindersEnabled);
+  const [subTab, setSubTab] = useState<'send' | 'config' | 'history'>('send');
+  const [historyView, setHistoryView] = useState<'logs' | 'failed'>('logs');
+  const [toggling, setToggling] = useState(false);
+
+  const [whatsappSession, setWhatsappSession] = useState<{ connected: boolean; windowOpen: boolean }>({
+    connected: false,
     windowOpen: false,
-  }));
+  });
   const waPopupRef = useRef<Window | null>(null);
   const [waOpenedInBrowser, setWaOpenedInBrowser] = useState(false);
 
   const [customOffsetInput, setCustomOffsetInput] = useState('');
   const [customOffsetDir, setCustomOffsetDir] = useState<'before' | 'after'>('before');
+  const [queueSearch, setQueueSearch] = useState('');
 
   const [failedSearch, setFailedSearch] = useState('');
   const [manualExcludeName, setManualExcludeName] = useState('');
@@ -111,27 +119,33 @@ export default function WhatsappControlCenter({
     [formData.whatsappReminderOffsets],
   );
 
+  // Zero idle scanning or localStorage reads when WhatsApp reminders are disabled
   const candidates: WhatsappCandidatePreview[] = useMemo(() => {
+    if (!isEnabled) return [];
     void refreshTick;
     return getMatchingReminderCandidates(formData);
-  }, [formData, refreshTick]);
+  }, [isEnabled, formData, refreshTick]);
 
   const failedContacts: WhatsappFailedContact[] = useMemo(() => {
+    if (!isEnabled) return [];
     void refreshTick;
     return getFailedContacts();
-  }, [refreshTick]);
+  }, [isEnabled, refreshTick]);
 
   const deliveryLogs: WhatsappDeliveryLog[] = useMemo(() => {
+    if (!isEnabled) return [];
     void refreshTick;
     return getDeliveryLogs();
-  }, [refreshTick]);
+  }, [isEnabled, refreshTick]);
 
   const todaySentCount = useMemo(() => {
+    if (!isEnabled) return 0;
     void refreshTick;
     return getTodaySentCount();
-  }, [refreshTick]);
+  }, [isEnabled, refreshTick]);
 
   const refreshWhatsappSessionStatus = async (manualClick = false) => {
+    if (!isEnabled) return;
     const apiBridge = (window as unknown as {
       electronAPI?: {
         checkWhatsappSession?: () => Promise<{ connected: boolean; windowOpen: boolean }>;
@@ -174,6 +188,8 @@ export default function WhatsappControlCenter({
   };
 
   useEffect(() => {
+    if (!isEnabled) return;
+
     void refreshWhatsappSessionStatus(false);
 
     const apiBridge = (window as unknown as {
@@ -209,7 +225,33 @@ export default function WhatsappControlCenter({
       window.removeEventListener('focus', handleFocus);
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [waOpenedInBrowser, showToast]);
+  }, [isEnabled, waOpenedInBrowser, showToast]);
+
+  const handleToggleEnabled = async (nextEnabled: boolean) => {
+    if (!canManage || toggling) return;
+    if (!nextEnabled && queueProgress.running) {
+      stopQueueRef.current = true;
+    }
+    const nextSettings: Setting = {
+      ...formData,
+      whatsappRemindersEnabled: nextEnabled,
+      taxRate: 0,
+    };
+    setFormData(nextSettings);
+    setToggling(true);
+    try {
+      await updateSettings(nextSettings);
+      showToast(
+        nextEnabled ? 'تم تفعيل خدمة رسائل الواتساب بنجاح' : 'تم إيقاف خدمة رسائل الواتساب ولن تعمل في الخلفية',
+        nextEnabled ? 'success' : 'info',
+      );
+    } catch (err: any) {
+      setFormData(formData);
+      showToast(err?.message || 'تعذر تحديث حالة رسائل الواتساب', 'error');
+    } finally {
+      setToggling(false);
+    }
+  };
 
   const toggleOffset = (offset: number) => {
     const exists = activeOffsets.includes(offset);
@@ -275,6 +317,7 @@ export default function WhatsappControlCenter({
   };
 
   const handleStartQueue = async (ignoreHours = false) => {
+    if (!isEnabled) return;
     stopQueueRef.current = false;
     const result = await runWhatsappQueue({
       forceAll: false,
@@ -299,6 +342,7 @@ export default function WhatsappControlCenter({
   };
 
   const handleSendSingleRow = async (item: WhatsappCandidatePreview) => {
+    if (!isEnabled) return;
     setSendingRowKey(item.key);
     try {
       const amountText = formatWholeCurrency(item.amount, formData.currency);
@@ -326,6 +370,17 @@ export default function WhatsappControlCenter({
   const dailyLimit = Math.max(Number(formData.whatsappDailyLimit || 80), 1);
   const inHours = isWithinSendingHours(formData);
 
+  const visibleCandidates = useMemo(() => {
+    if (!queueSearch.trim()) return candidates;
+    const q = queueSearch.trim().toLowerCase();
+    return candidates.filter(
+      (c) =>
+        c.customerName.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        c.invoiceNumber.toLowerCase().includes(q),
+    );
+  }, [candidates, queueSearch]);
+
   const filteredFailed = failedContacts.filter((entry) => {
     if (!failedSearch.trim()) return true;
     const q = failedSearch.trim().toLowerCase();
@@ -339,9 +394,9 @@ export default function WhatsappControlCenter({
   const reasonMeta = (reason: WhatsappFailedContact['reason']) => {
     switch (reason) {
       case 'no_whatsapp':
-        return { label: 'لا يملك حساب واتساب', badge: 'bg-rose-50 text-rose-700 border-rose-200' };
+        return { label: 'لا يملك واتساب', badge: 'bg-rose-50 text-rose-700 border-rose-200' };
       case 'invalid_phone':
-        return { label: 'رقم هاتف غير صالح', badge: 'bg-amber-50 text-amber-700 border-amber-200' };
+        return { label: 'رقم غير صالح', badge: 'bg-amber-50 text-amber-700 border-amber-200' };
       case 'excluded':
         return { label: 'مستبعد يدوياً', badge: 'bg-slate-100 text-slate-700 border-slate-300' };
       default:
@@ -349,57 +404,155 @@ export default function WhatsappControlCenter({
     }
   };
 
+  // ── DISABLED / IDLE VIEW (Zero scanning, zero session checks, clean empty state) ────
+  if (!isEnabled) {
+    return (
+      <div className="p-6 md:p-10">
+        <div className="max-w-2xl mx-auto rounded-2xl border border-slate-200 bg-slate-50/70 p-6 md:p-8 text-center space-y-5">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center text-slate-400">
+            <MessageCircle size={28} />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-200/70 text-slate-700 text-xs font-bold mb-1">
+              <span className="w-2 h-2 rounded-full bg-slate-500" />
+              <span>رسائل الواتساب متوقفة حالياً</span>
+            </div>
+            <h3 className="text-lg font-black text-slate-900">تذكيرات الأقساط عبر الواتساب غير مفعّلة</h3>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-lg mx-auto">
+              لن يقوم النظام بفحص الأقساط أو فتح أي جلسة واتساب أو عرض أي طابور إرسال في الخلفية إلا بعد قيامك بتفعيل الخدمة بنفسك.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-right text-xs">
+            <div className="rounded-xl bg-white border border-slate-200/80 p-3">
+              <span className="font-black text-slate-800 block">تذكير بالمواعيد</span>
+              <span className="text-[11px] text-slate-500">قبل الاستحقاق ويوم السداد والمتأخرين تلقائياً.</span>
+            </div>
+            <div className="rounded-xl bg-white border border-slate-200/80 p-3">
+              <span className="font-black text-slate-800 block">حماية ذكية من الحظر</span>
+              <span className="text-[11px] text-slate-500">فواصل عشوائية واستراحات وساعات إرسال محددة.</span>
+            </div>
+            <div className="rounded-xl bg-white border border-slate-200/80 p-3">
+              <span className="font-black text-slate-800 block">تصفية الأرقام المتعذرة</span>
+              <span className="text-[11px] text-slate-500">استبعاد تلقائي للأرقام التي لا تملك واتساب.</span>
+            </div>
+          </div>
+
+          <div className="pt-1">
+            {canManage ? (
+              <button
+                type="button"
+                disabled={toggling}
+                onClick={() => void handleToggleEnabled(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 text-sm font-black shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Power size={17} />
+                <span>{toggling ? 'جاري التفعيل...' : 'تفعيل رسائل الواتساب الآن'}</span>
+              </button>
+            ) : (
+              <span className="inline-block text-xs font-bold text-amber-700 bg-amber-50 px-4 py-2 rounded-xl border border-amber-200">
+                تفعيل الخدمة متاح لمن لديه صلاحية إدارة الإعدادات فقط
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={onSave} className="p-5 md:p-6 space-y-5">
-      {/* Top Bar: Title, Daily Quota, Session Status & Master Switch */}
+      {/* Compact Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0">
             <MessageCircle size={20} />
           </div>
           <div>
-            <h3 className="font-black text-base text-slate-900">مركز التحكم في رسائل الواتساب والحماية من الحظر</h3>
-            <p className="text-xs text-slate-500">
-              إرسال صامت في الخلفية بفترات تأخير عشوائية وتحديد مواعيد الأقساط وإدارة الأرقام المتعذرة
-            </p>
+            <h3 className="font-black text-base text-slate-900">رسائل تذكير الواتساب</h3>
+            <p className="text-xs text-slate-500">اختر مواعيد الأقساط وأرسل التذكيرات بأمان وبضغطة زر</p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs flex items-center gap-1.5">
             <Shield size={14} className="text-blue-600" />
-            <span className="text-slate-600 font-bold">استهلاك اليوم:</span>
-            <span className="font-black text-slate-900" dir="ltr">
+            <span className="text-slate-600 font-bold">إرسال اليوم:</span>
+            <span className="font-black text-slate-900 tabular-nums" dir="ltr">
               {todaySentCount} / {dailyLimit}
             </span>
           </div>
 
-          <label className="inline-flex items-center gap-2 cursor-pointer bg-emerald-50/70 border border-emerald-200 rounded-xl px-3.5 py-1.5">
-            <input
-              type="checkbox"
-              checked={Boolean(formData.whatsappRemindersEnabled)}
-              onChange={(e) => setFormData({ ...formData, whatsappRemindersEnabled: e.target.checked })}
-              className="w-4 h-4 accent-emerald-600 rounded"
-            />
-            <span className="text-xs font-extrabold text-emerald-900">تفعيل التذكيرات التلقائية</span>
-          </label>
+          {(formData.whatsappMode || 'web_session') === 'web_session' && (
+            <>
+              <span
+                className={`inline-flex items-center gap-1.5 text-xs font-extrabold px-3 py-1.5 rounded-xl border ${
+                  whatsappSession.connected
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${whatsappSession.connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                {whatsappSession.connected ? 'واتساب متصل' : 'غير متصل'}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleOpenQrSession()}
+                className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-xl text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+              >
+                <QrCode size={14} />
+                <span>{whatsappSession.connected ? 'فتح واتساب' : 'ربط QR'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void refreshWhatsappSessionStatus(true)}
+                className="inline-flex items-center justify-center bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 p-2 rounded-xl text-xs font-bold cursor-pointer"
+                title="فحص الاتصال"
+              >
+                <RefreshCw size={13} />
+              </button>
+              {whatsappSession.connected && (
+                <button
+                  type="button"
+                  onClick={() => void handleLogoutSession()}
+                  className="inline-flex items-center justify-center bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 p-2 rounded-xl text-xs font-bold cursor-pointer"
+                  title="تسجيل خروج واتساب"
+                >
+                  <LogOut size={13} />
+                </button>
+              )}
+            </>
+          )}
+
+          {canManage && (
+            <button
+              type="button"
+              disabled={toggling}
+              onClick={() => void handleToggleEnabled(false)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-700 transition-colors cursor-pointer disabled:opacity-50"
+              title="إيقاف الخدمة بالكامل"
+            >
+              <Power size={13} />
+              <span>إيقاف الخدمة</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Sub-navigation Pills */}
+      {/* 3 Focused Navigation Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex flex-wrap gap-1.5 bg-slate-100/80 border border-slate-200 rounded-xl p-1">
+        <div className="inline-flex flex-wrap gap-1.5 bg-slate-100/90 border border-slate-200 rounded-xl p-1">
           {[
-            { id: 'queue' as const, label: 'الفترات وطابور الخلفية', badge: candidates.length, icon: <Play size={14} /> },
-            { id: 'failed' as const, label: 'بدون واتساب ومستبعدون', badge: failedContacts.length, icon: <UserX size={14} /> },
-            { id: 'safety' as const, label: 'أمان الحظر والقالب', icon: <ShieldAlert size={14} /> },
-            { id: 'logs' as const, label: 'سجل الإرسال', badge: deliveryLogs.length, icon: <History size={14} /> },
+            { id: 'send' as const, label: 'الإرسال والمواعيد', badge: readyToSendCount, icon: <Play size={14} /> },
+            { id: 'config' as const, label: 'القالب والحماية', icon: <ShieldAlert size={14} /> },
+            { id: 'history' as const, label: 'السجل والمستبعدون', badge: failedContacts.length + deliveryLogs.length, icon: <History size={14} /> },
           ].map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setSubTab(tab.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 subTab === tab.id
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -416,64 +569,29 @@ export default function WhatsappControlCenter({
           ))}
         </div>
 
-        {/* Session Control Pill */}
-        {(formData.whatsappMode || 'web_session') === 'web_session' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`inline-flex items-center gap-1.5 text-xs font-extrabold px-3 py-1.5 rounded-full border ${
-                whatsappSession.connected
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}
-            >
-              <span className={`w-2 h-2 rounded-full ${whatsappSession.connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-              {whatsappSession.connected ? 'متصل — يعمل بالخلفية الصامتة' : 'غير متصل — امسح QR'}
-            </span>
-            <button
-              type="button"
-              onClick={() => void handleOpenQrSession()}
-              className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-2xs transition-colors cursor-pointer"
-            >
-              <QrCode size={14} />
-              <span>{whatsappSession.connected ? 'فتح جلسة واتساب' : 'تسجيل دخول QR Code'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void refreshWhatsappSessionStatus(true)}
-              className="inline-flex items-center gap-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
-              title="فحص الاتصال"
-            >
-              <RefreshCw size={13} />
-            </button>
-            {whatsappSession.connected && (
-              <button
-                type="button"
-                onClick={() => void handleLogoutSession()}
-                className="inline-flex items-center gap-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
-                title="تسجيل خروج"
-              >
-                <LogOut size={13} />
-              </button>
-            )}
-          </div>
+        {saved && (
+          <span className="inline-flex items-center gap-1 text-emerald-600 font-bold text-xs">
+            <CheckCircle2 size={15} />
+            تم حفظ الإعدادات
+          </span>
         )}
       </div>
 
-      {/* SUB-TAB 1: Queue & Reminder Timing Periods */}
-      {subTab === 'queue' && (
+      {/* TAB 1: Queue & Reminder Timing */}
+      {subTab === 'send' && (
         <div className="space-y-4">
-          {/* Timing Period Selector Card */}
+          {/* Timing Period Selector */}
           <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
               <div>
-                <h4 className="text-sm font-black text-slate-900">مواعيد وفترات التذكير المختارة</h4>
-                <p className="text-xs text-slate-500">اختر الأيام التي يُرسل فيها التذكير تلقائياً (قبل أو يوم أو بعد استحقاق القسط)</p>
+                <h4 className="text-sm font-black text-slate-900">مواعيد التذكير</h4>
+                <p className="text-xs text-slate-500">اختر الأيام التي يظهر فيها القسط جاهزاً للإرسال</p>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <select
                   value={customOffsetDir}
                   onChange={(e) => setCustomOffsetDir(e.target.value as 'before' | 'after')}
-                  className="input-ui h-8 text-xs px-2 w-24"
+                  className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-500"
                 >
                   <option value="before">قبل الموعد</option>
                   <option value="after">متأخر بعد</option>
@@ -485,12 +603,12 @@ export default function WhatsappControlCenter({
                   value={customOffsetInput}
                   onChange={(e) => setCustomOffsetInput(e.target.value)}
                   placeholder="أيام"
-                  className="input-ui h-8 w-16 text-xs text-center"
+                  className="h-9 w-16 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-center outline-none focus:border-blue-500"
                 />
                 <button
                   type="button"
                   onClick={handleAddCustomOffset}
-                  className="h-8 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                  className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
                 >
                   <Plus size={13} />
                   <span>إضافة</span>
@@ -506,7 +624,7 @@ export default function WhatsappControlCenter({
                     key={preset.offset}
                     type="button"
                     onClick={() => toggleOffset(preset.offset)}
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                       selected
                         ? preset.offset > 0
                           ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
@@ -528,7 +646,7 @@ export default function WhatsappControlCenter({
                     key={customOff}
                     type="button"
                     onClick={() => toggleOffset(customOff)}
-                    className="px-3 py-1.5 rounded-lg border bg-indigo-600 text-white border-indigo-600 text-xs font-bold cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg border bg-indigo-600 text-white border-indigo-600 text-xs font-bold cursor-pointer whitespace-nowrap"
                     title="اضغط لإلغاء الفترة"
                   >
                     {customOff < 0 ? `قبل ${Math.abs(customOff)} أيام` : `متأخر ${customOff} أيام`} ×
@@ -537,25 +655,36 @@ export default function WhatsappControlCenter({
             </div>
           </div>
 
-          {/* Live Queue Action & Status Banner */}
+          {/* Live Queue Card */}
           <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-0.5">
                 <div className="text-sm font-black text-slate-900">
-                  طابور الإرسال الآمن في الخلفية ({readyToSendCount} قسط جاهز من أصل {candidates.length})
+                  جاهز للإرسال ({readyToSendCount} من أصل {candidates.length})
                 </div>
-                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-3">
-                  <span>تأخير عشوائي: {formData.whatsappMinDelaySec ?? 15}–{formData.whatsappMaxDelaySec ?? 45} ثانية</span>
+                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2.5">
+                  <span>تأخير آمن: {formData.whatsappMinDelaySec ?? 15}–{formData.whatsappMaxDelaySec ?? 45} ث</span>
                   <span>•</span>
                   <span className={inHours ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>
                     {inHours
-                      ? `داخل ساعات الإرسال (${formData.whatsappSendStartHour || '10:00'} - ${formData.whatsappSendEndHour || '21:00'})`
-                      : `خارج ساعات الإرسال (${formData.whatsappSendStartHour || '10:00'} - ${formData.whatsappSendEndHour || '21:00'})`}
+                      ? `داخل أوقات الإرسال (${formData.whatsappSendStartHour || '10:00'} - ${formData.whatsappSendEndHour || '21:00'})`
+                      : `خارج أوقات الإرسال (${formData.whatsappSendStartHour || '10:00'} - ${formData.whatsappSendEndHour || '21:00'})`}
                   </span>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <div className="relative w-48 sm:w-56">
+                  <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={queueSearch}
+                    onChange={(e) => setQueueSearch(e.target.value)}
+                    placeholder="بحث بالعميل أو الهاتف أو العقد..."
+                    className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50/70 pr-8 pl-2.5 text-xs font-medium outline-none focus:bg-white focus:border-blue-500"
+                  />
+                </div>
+
                 {queueProgress.running ? (
                   <button
                     type="button"
@@ -565,7 +694,7 @@ export default function WhatsappControlCenter({
                     className="inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-xs cursor-pointer"
                   >
                     <Square size={13} />
-                    <span>إيقاف الطابور الآن</span>
+                    <span>إيقاف الطابور</span>
                   </button>
                 ) : (
                   <>
@@ -573,19 +702,19 @@ export default function WhatsappControlCenter({
                       type="button"
                       disabled={readyToSendCount === 0}
                       onClick={() => void handleStartQueue(false)}
-                      className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                      className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer whitespace-nowrap"
                     >
                       <Play size={14} />
-                      <span>بدء الإرسال الآمن في الخلفية</span>
+                      <span>بدء الإرسال الآمن</span>
                     </button>
                     {!inHours && readyToSendCount > 0 && (
                       <button
                         type="button"
                         onClick={() => void handleStartQueue(true)}
-                        className="inline-flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-3 py-2 rounded-lg text-xs font-bold cursor-pointer"
+                        className="inline-flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-3 py-2 rounded-lg text-xs font-bold cursor-pointer whitespace-nowrap"
                       >
                         <Clock size={13} />
-                        <span>إرسال فوري (تجاوز الوقت)</span>
+                        <span>إرسال فوري</span>
                       </button>
                     )}
                   </>
@@ -601,8 +730,8 @@ export default function WhatsappControlCenter({
                       ? queueProgress.phase === 'batch_pause'
                         ? `استراحة حماية الدفعة... متبقي ${queueProgress.waitSecondsRemaining ?? 0} ثانية`
                         : queueProgress.phase === 'waiting'
-                          ? `انتظار عشوائي آمن قبل الرسالة التالية... متبقي ${queueProgress.waitSecondsRemaining ?? 0} ثانية`
-                          : `جاري الإرسال بالخلفية إلى: ${queueProgress.currentCustomerName || ''} (${queueProgress.currentIndex}/${queueProgress.total})`
+                          ? `انتظار عشوائي آمن... متبقي ${queueProgress.waitSecondsRemaining ?? 0} ثانية`
+                          : `جاري الإرسال إلى: ${queueProgress.currentCustomerName || ''} (${queueProgress.currentIndex}/${queueProgress.total})`
                       : queueProgress.stopReason || `اكتمل الطابور (${queueProgress.currentIndex}/${queueProgress.total})`}
                   </span>
                   <div className="flex items-center gap-3">
@@ -622,7 +751,6 @@ export default function WhatsappControlCenter({
               </div>
             )}
 
-            {/* Candidates Table */}
             <div className="overflow-x-auto border border-slate-200 rounded-xl">
               <table className="w-full text-xs text-right">
                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold">
@@ -631,32 +759,34 @@ export default function WhatsappControlCenter({
                     <th className="p-2.5">رقم الهاتف</th>
                     <th className="p-2.5">العقد</th>
                     <th className="p-2.5">القسط</th>
-                    <th className="p-2.5">التوقيت</th>
+                    <th className="p-2.5">الموعد</th>
                     <th className="p-2.5">الحالة</th>
                     <th className="p-2.5 text-center">إجراء</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {candidates.length === 0 ? (
+                  {visibleCandidates.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
-                        لا توجد أقساط تطابق الفترات المحددة حالياً
+                        {candidates.length === 0
+                          ? 'لا توجد أقساط مطابقة للفترات المحددة حالياً'
+                          : 'لا توجد نتائج مطابقة للبحث'}
                       </td>
                     </tr>
                   ) : (
-                    candidates.map((item) => (
+                    visibleCandidates.map((item) => (
                       <tr key={item.key} className="hover:bg-slate-50/70">
                         <td className="p-2.5 font-bold text-slate-800">{item.customerName}</td>
-                        <td className="p-2.5 font-mono text-slate-700" dir="ltr">
+                        <td className="p-2.5 font-mono text-slate-700 whitespace-nowrap" dir="ltr">
                           {item.phone}
                         </td>
-                        <td className="p-2.5 font-mono font-bold text-blue-700">{item.invoiceNumber}</td>
-                        <td className="p-2.5 font-extrabold text-slate-900">
+                        <td className="p-2.5 font-mono font-bold text-blue-700 whitespace-nowrap">{item.invoiceNumber}</td>
+                        <td className="p-2.5 font-extrabold text-slate-900 whitespace-nowrap">
                           {formatWholeCurrency(item.amount, formData.currency)}
                         </td>
-                        <td className="p-2.5">
+                        <td className="p-2.5 whitespace-nowrap">
                           <span
-                            className={`px-2 py-0.5 rounded-full border font-bold text-[10px] ${
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full border font-bold text-[10px] whitespace-nowrap ${
                               item.offsetDays > 0
                                 ? 'bg-rose-50 text-rose-700 border-rose-200'
                                 : item.offsetDays === 0
@@ -667,28 +797,28 @@ export default function WhatsappControlCenter({
                             {item.dueStatusLabel} ({item.dueDate})
                           </span>
                         </td>
-                        <td className="p-2.5">
+                        <td className="p-2.5 whitespace-nowrap">
                           {item.isExcludedOrNoWhatsapp ? (
-                            <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[10px]">
-                              {item.failReason === 'no_whatsapp' ? 'بدون واتساب' : 'مستبعد / غير صالح'}
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[10px] whitespace-nowrap">
+                              {item.failReason === 'no_whatsapp' ? 'بدون واتساب' : 'مستبعد'}
                             </span>
                           ) : item.alreadySentToday ? (
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px]">
-                              تم الإرسال اليوم
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px] whitespace-nowrap">
+                              أُرسل اليوم
                             </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[10px]">
-                              جاهز للإرسال
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[10px] whitespace-nowrap">
+                              جاهز
                             </span>
                           )}
                         </td>
-                        <td className="p-2.5 text-center">
+                        <td className="p-2.5 text-center whitespace-nowrap">
                           <div className="inline-flex items-center gap-1">
                             <button
                               type="button"
                               disabled={sendingRowKey === item.key || item.isExcludedOrNoWhatsapp}
                               onClick={() => void handleSendSingleRow(item)}
-                              className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-[11px] disabled:opacity-40 cursor-pointer"
+                              className="px-2.5 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-[11px] disabled:opacity-40 cursor-pointer"
                             >
                               {sendingRowKey === item.key ? '...' : 'إرسال'}
                             </button>
@@ -698,7 +828,7 @@ export default function WhatsappControlCenter({
                                 toggleExcludeContact(item.phone, item.customerName, !item.isExcludedOrNoWhatsapp, item.customerId);
                                 setRefreshTick((t) => t + 1);
                               }}
-                              className="px-2 py-1 rounded bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200 font-bold text-[11px] cursor-pointer"
+                              className="px-2.5 py-1 rounded bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200 font-bold text-[11px] cursor-pointer"
                             >
                               {item.isExcludedOrNoWhatsapp ? 'تفعيل' : 'استبعاد'}
                             </button>
@@ -711,212 +841,126 @@ export default function WhatsappControlCenter({
               </table>
             </div>
           </div>
+
+          {canManage && (
+            <div className="flex items-center justify-end">
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 bg-[#1e40af] text-white px-5 py-2 rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold text-xs shadow-2xs cursor-pointer"
+              >
+                <Save size={15} />
+                <span>حفظ مواعيد التذكير</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* SUB-TAB 2: Undeliverable / No-WhatsApp Contacts */}
-      {subTab === 'failed' && (
-        <div className="space-y-4">
-          <div className="bg-rose-50/60 border border-rose-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-start gap-2.5">
-              <AlertTriangle size={18} className="text-rose-600 shrink-0 mt-0.5" />
-              <div className="text-xs text-rose-900">
-                <span className="font-black block">قائمة الأرقام التي لا تملك واتساب أو تعذر التوصيل إليها</span>
-                <span className="text-rose-700">
-                  يتم إضافتها هنا تلقائياً لتجنب تكرار المحاولة عليها وحماية رقم الشركة من الحظر.
-                </span>
-              </div>
-            </div>
-
-            <div className="relative w-full sm:w-64">
-              <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={failedSearch}
-                onChange={(e) => setFailedSearch(e.target.value)}
-                placeholder="بحث بالاسم أو الرقم..."
-                className="input-ui h-9 w-full pr-8 pl-3 text-xs bg-white"
-              />
-            </div>
-          </div>
-
-          {/* Manual Exclude Form */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-end gap-2.5">
-            <div className="flex-1 min-w-[160px]">
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">اسم العميل</label>
-              <input
-                type="text"
-                value={manualExcludeName}
-                onChange={(e) => setManualExcludeName(e.target.value)}
-                placeholder="الاسم..."
-                className="input-ui h-8 w-full text-xs bg-white"
-              />
-            </div>
-            <div className="flex-1 min-w-[160px]">
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">رقم الهاتف</label>
-              <input
-                type="text"
-                dir="ltr"
-                value={manualExcludePhone}
-                onChange={(e) => setManualExcludePhone(e.target.value)}
-                placeholder="01012345678"
-                className="input-ui h-8 w-full text-xs font-mono bg-white"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (!manualExcludePhone.trim()) {
-                  showToast('يرجى إدخال رقم الهاتف للاستبعاد', 'warning');
-                  return;
-                }
-                toggleExcludeContact(manualExcludePhone.trim(), manualExcludeName.trim() || 'عميل مستبعد', true);
-                setManualExcludeName('');
-                setManualExcludePhone('');
-                setRefreshTick((t) => t + 1);
-                showToast('تمت إضافة الرقم لقائمة الاستبعاد', 'success');
-              }}
-              className="h-8 px-3.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <Ban size={13} />
-              <span>استبعاد رقم يدوياً</span>
-            </button>
-          </div>
-
-          <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-            <table className="w-full text-xs text-right">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold">
-                <tr>
-                  <th className="p-2.5">العميل</th>
-                  <th className="p-2.5">رقم الهاتف</th>
-                  <th className="p-2.5">السبب</th>
-                  <th className="p-2.5">التفاصيل</th>
-                  <th className="p-2.5">الحالة</th>
-                  <th className="p-2.5 text-center">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredFailed.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="p-10 text-center text-slate-400 font-bold">
-                      لا توجد أرقام غير متوصل إليها أو مستبعدة حالياً
-                    </td>
-                  </tr>
-                ) : (
-                  filteredFailed.map((entry) => {
-                    const rMeta = reasonMeta(entry.reason);
-                    return (
-                      <tr key={entry.phone} className="hover:bg-slate-50/70">
-                        <td className="p-2.5 font-bold text-slate-800">{entry.customerName}</td>
-                        <td className="p-2.5 font-mono text-slate-700" dir="ltr">
-                          {entry.phone}
-                        </td>
-                        <td className="p-2.5">
-                          <span className={`px-2 py-0.5 rounded-full border font-bold text-[10px] ${rMeta.badge}`}>
-                            {rMeta.label}
-                          </span>
-                        </td>
-                        <td className="p-2.5 text-slate-500 max-w-xs truncate" title={entry.errorMessage}>
-                          {entry.errorMessage}
-                        </td>
-                        <td className="p-2.5">
-                          <span
-                            className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                              entry.excluded
-                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}
-                          >
-                            {entry.excluded ? 'مستبعد تلقائياً' : 'مفعّل'}
-                          </span>
-                        </td>
-                        <td className="p-2.5 text-center">
-                          <div className="inline-flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                toggleExcludeContact(entry.phone, entry.customerName, !entry.excluded, entry.customerId);
-                                setRefreshTick((t) => t + 1);
-                              }}
-                              className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] cursor-pointer"
-                            >
-                              {entry.excluded ? 'إلغاء الاستبعاد' : 'استبعاد'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                removeFailedContact(entry.phone);
-                                setRefreshTick((t) => t + 1);
-                              }}
-                              className="p-1.5 rounded text-rose-600 hover:bg-rose-50 cursor-pointer"
-                              title="حذف من القائمة"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* SUB-TAB 3: Anti-Ban Protection Settings, Meta Mode & Message Template */}
-      {subTab === 'safety' && (
+      {/* TAB 2: Template, Anti-Ban Guard & Connection Mode */}
+      {subTab === 'config' && (
         <div className="space-y-5">
-          {/* Connection Mode Selector */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <button
-              type="button"
-              onClick={() => setFormData({ ...formData, whatsappMode: 'web_session' })}
-              className={`text-right p-4 rounded-xl border-2 transition-all cursor-pointer ${
-                (formData.whatsappMode || 'web_session') === 'web_session'
-                  ? 'border-emerald-500 bg-emerald-50/40 shadow-2xs'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-black text-sm text-slate-900">جلسة واتساب ويب بالخلفية الصامتة</span>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-600 text-white">
-                  مجاني / QR مرة واحدة
-                </span>
+          {/* Template & Test Message */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-sm font-black text-slate-800">قالب نص الرسالة</label>
+              <div className="flex flex-wrap items-center gap-1 text-[11px]">
+                {['{name}', '{amount}', '{dueStatus}', '{dueDate}', '{invoiceNumber}', '{companyName}'].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() =>
+                      setFormData({
+                        ...formData,
+                        whatsappMessageTemplate: `${formData.whatsappMessageTemplate || DEFAULT_WHATSAPP_MESSAGE_TEMPLATE} ${tag}`,
+                      })
+                    }
+                    dir="ltr"
+                    className="font-mono px-2 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-700 hover:border-emerald-400 hover:text-emerald-700 cursor-pointer"
+                  >
+                    {tag}
+                  </button>
+                ))}
               </div>
-              <p className="text-xs text-slate-600">إرسال صامت بالخلفية بدون فتح نوافذ متكررة ومع فحص الأرقام غير المسجلة.</p>
-            </button>
+            </div>
+            <textarea
+              rows={3}
+              spellCheck={false}
+              value={formData.whatsappMessageTemplate || DEFAULT_WHATSAPP_MESSAGE_TEMPLATE}
+              onChange={(e) => setFormData({ ...formData, whatsappMessageTemplate: e.target.value })}
+              className="input-ui w-full text-sm leading-relaxed"
+            />
+            <div className="bg-emerald-50/50 border border-emerald-200/80 rounded-lg p-3 text-xs text-slate-700 whitespace-pre-line">
+              <span className="font-bold text-emerald-700 block mb-1">معاينة الرسالة:</span>
+              {applyAntiBanVariation(
+                formatReminderText(formData, {
+                  name: 'محمد أحمد',
+                  amount: '1,500 جنيه',
+                  dueDate: '2026-11-20',
+                  dueStatus: getDueStatusLabel(-2),
+                  invoiceNumber: 'INV-1031',
+                }),
+                formData,
+              )}
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setFormData({ ...formData, whatsappMode: 'meta_api' })}
-              className={`text-right p-4 rounded-xl border-2 transition-all cursor-pointer ${
-                formData.whatsappMode === 'meta_api'
-                  ? 'border-blue-600 bg-blue-50/40 shadow-2xs'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-black text-sm text-slate-900">واجهة ميتا الرسمية (Meta Cloud API)</span>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-600 text-white">
-                  رسمي بدون حظر
-                </span>
+            <div className="flex flex-wrap items-end gap-2.5 pt-2 border-t border-slate-100">
+              <div className="flex-1 min-w-[200px] max-w-xs">
+                <label className="block text-xs font-bold text-slate-700 mb-1">رقم لاختبار الإرسال</label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={testPhone}
+                  onChange={(e) => setTestPhone(e.target.value)}
+                  placeholder="01012345678"
+                  className="input-ui h-9 w-full font-mono text-xs"
+                />
               </div>
-              <p className="text-xs text-slate-600">إرسال رسمي مباشر عبر خوادم Meta باستخدام قوالب معتمدة.</p>
-            </button>
+              <button
+                type="button"
+                disabled={testingSend}
+                onClick={async () => {
+                  if (!testPhone.trim()) {
+                    showToast('يرجى إدخال رقم هاتف للاختبار', 'warning');
+                    return;
+                  }
+                  setTestingSend(true);
+                  try {
+                    const res = await sendSingleWhatsappReminder(formData, {
+                      phone: testPhone.trim(),
+                      name: 'عميل تجريبي',
+                      amount: '1,000 جنيه',
+                      dueDate: new Date().toISOString().split('T')[0],
+                      dueStatus: 'مستحق اليوم',
+                      invoiceNumber: 'INV-TEST',
+                    });
+                    setRefreshTick((t) => t + 1);
+                    if (res.ok) {
+                      showToast('تم إرسال رسالة الاختبار بنجاح', 'success');
+                    } else {
+                      showToast(res.error || 'فشل إرسال رسالة الاختبار', 'error');
+                    }
+                  } finally {
+                    setTestingSend(false);
+                  }
+                }}
+                className="flex items-center gap-1.5 h-9 px-4 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <Send size={13} />
+                <span>{testingSend ? 'جاري الإرسال...' : 'إرسال رسالة تجريبية'}</span>
+              </button>
+            </div>
           </div>
 
-          {/* Anti-Ban Safety Rules Grid */}
+          {/* Anti-Ban Safety Rules */}
           <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-4 space-y-4">
             <div className="flex items-center gap-2">
               <Shield size={17} className="text-blue-600" />
-              <h4 className="font-black text-sm text-slate-900">قواعد حماية الرقم من الحظر (Anti-Ban Guard)</h4>
+              <h4 className="font-black text-sm text-slate-900">قواعد الأمان والحماية من الحظر</h4>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">أقل تأخير عشوائي بين الرسائل (ثانية)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">أقل تأخير عشوائي (ثانية)</label>
                 <input
                   type="number"
                   min={5}
@@ -927,7 +971,7 @@ export default function WhatsappControlCenter({
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">أقصى تأخير عشوائي بين الرسائل (ثانية)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">أقصى تأخير عشوائي (ثانية)</label>
                 <input
                   type="number"
                   min={10}
@@ -949,7 +993,7 @@ export default function WhatsappControlCenter({
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">أخذ استراحة بعد كل (عدد رسائل)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">استراحة بعد كل (عدد رسائل)</label>
                 <input
                   type="number"
                   min={3}
@@ -1002,7 +1046,7 @@ export default function WhatsappControlCenter({
                 />
                 <div>
                   <span className="text-xs font-black text-slate-800 block">تنويع نص الرسالة تلقائياً (Anti-Spam)</span>
-                  <span className="text-[11px] text-slate-500">يغير التحية ويضيف رمز مرجعي فريد حتى لا تبدو الرسائل متطابقة كـ Spam.</span>
+                  <span className="text-[11px] text-slate-500">يغير التحية ويضيف رمز مرجعي فريد حتى لا تبدو الرسائل مكررة.</span>
                 </div>
               </label>
 
@@ -1015,10 +1059,45 @@ export default function WhatsappControlCenter({
                 />
                 <div>
                   <span className="text-xs font-black text-slate-800 block">تخطي الأرقام التي لا تملك واتساب تلقائياً</span>
-                  <span className="text-[11px] text-slate-500">يمنع إعادة الإرسال للأرقام الفاشلة أو غير المسجلة لحماية حسابك.</span>
+                  <span className="text-[11px] text-slate-500">يمنع تكرار الإرسال للأرقام الفاشلة لحماية رقم الشركة.</span>
                 </div>
               </label>
             </div>
+          </div>
+
+          {/* Connection Mode Selector */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            <button
+              type="button"
+              onClick={() => setFormData({ ...formData, whatsappMode: 'web_session' })}
+              className={`text-right p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                (formData.whatsappMode || 'web_session') === 'web_session'
+                  ? 'border-emerald-500 bg-emerald-50/40 shadow-2xs'
+                  : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-black text-sm text-slate-900">واتساب ويب بالخلفية (QR)</span>
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-600 text-white">مجاني</span>
+              </div>
+              <p className="text-xs text-slate-600">إرسال صامت بالخلفية بعد مسح الكود مرة واحدة.</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFormData({ ...formData, whatsappMode: 'meta_api' })}
+              className={`text-right p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                formData.whatsappMode === 'meta_api'
+                  ? 'border-blue-600 bg-blue-50/40 shadow-2xs'
+                  : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-black text-sm text-slate-900">Meta Cloud API الرسمي</span>
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-600 text-white">رسمي</span>
+              </div>
+              <p className="text-xs text-slate-600">ربط مباشر عبر واجهة Meta باستخدام قوالب معتمدة.</p>
+            </button>
           </div>
 
           {formData.whatsappMode === 'meta_api' && (
@@ -1068,197 +1147,266 @@ export default function WhatsappControlCenter({
             </div>
           )}
 
-          {/* Template & Test Message */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="text-sm font-black text-slate-800">قالب نص الرسالة</label>
-              <div className="flex flex-wrap items-center gap-1 text-[11px]">
-                {['{name}', '{amount}', '{dueStatus}', '{dueDate}', '{invoiceNumber}', '{companyName}'].map((tag) => (
+          {canManage && (
+            <div className="flex items-center justify-end pt-1">
+              <button
+                type="submit"
+                className="flex items-center gap-2 bg-[#1e40af] text-white px-6 py-2.5 rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold text-sm shadow-2xs cursor-pointer"
+              >
+                <Save size={16} />
+                <span>حفظ إعدادات الواتساب والحماية</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: Combined Logs & Failed / Excluded Contacts */}
+      {subTab === 'history' && (
+        <div className="space-y-4">
+          <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 gap-1">
+            <button
+              type="button"
+              onClick={() => setHistoryView('logs')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${
+                historyView === 'logs' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+              }`}
+            >
+              <History size={13} />
+              <span>سجل الإرسال ({deliveryLogs.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryView('failed')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${
+                historyView === 'failed' ? 'bg-white text-rose-700 shadow-xs' : 'text-slate-600'
+              }`}
+            >
+              <UserX size={13} />
+              <span>بدون واتساب ومستبعدون ({failedContacts.length})</span>
+            </button>
+          </div>
+
+          {historyView === 'logs' ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-600">آخر {deliveryLogs.length} عملية إرسال مسجلة</span>
+                {deliveryLogs.length > 0 && (
                   <button
-                    key={tag}
                     type="button"
-                    onClick={() =>
-                      setFormData({
-                        ...formData,
-                        whatsappMessageTemplate: `${formData.whatsappMessageTemplate || DEFAULT_WHATSAPP_MESSAGE_TEMPLATE} ${tag}`,
-                      })
-                    }
-                    dir="ltr"
-                    className="font-mono px-2 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-700 hover:border-emerald-400 hover:text-emerald-700 cursor-pointer"
+                    onClick={() => {
+                      clearDeliveryLogs();
+                      setRefreshTick((t) => t + 1);
+                    }}
+                    className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
                   >
-                    {tag}
+                    مسح السجل
                   </button>
-                ))}
-              </div>
-            </div>
-            <textarea
-              rows={3}
-              spellCheck={false}
-              value={formData.whatsappMessageTemplate || DEFAULT_WHATSAPP_MESSAGE_TEMPLATE}
-              onChange={(e) => setFormData({ ...formData, whatsappMessageTemplate: e.target.value })}
-              className="input-ui w-full text-sm leading-relaxed"
-            />
-            <div className="bg-emerald-50/50 border border-emerald-200/80 rounded-lg p-3 text-xs text-slate-700 whitespace-pre-line">
-              <span className="font-bold text-emerald-700 block mb-1">معاينة الرسالة الفعلية المرسلة:</span>
-              {applyAntiBanVariation(
-                formatReminderText(formData, {
-                  name: 'محمد أحمد',
-                  amount: '1,500 جنيه',
-                  dueDate: '2026-11-20',
-                  dueStatus: getDueStatusLabel(-2),
-                  invoiceNumber: 'INV-1031',
-                }),
-                formData,
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-end gap-2.5 pt-2 border-t border-slate-100">
-              <div className="flex-1 min-w-[200px] max-w-xs">
-                <label className="block text-xs font-bold text-slate-700 mb-1">رقم هاتف لاختبار الإرسال</label>
-                <input
-                  type="text"
-                  dir="ltr"
-                  value={testPhone}
-                  onChange={(e) => setTestPhone(e.target.value)}
-                  placeholder="01012345678"
-                  className="input-ui h-9 w-full font-mono text-xs"
-                />
-              </div>
-              <button
-                type="button"
-                disabled={testingSend}
-                onClick={async () => {
-                  if (!testPhone.trim()) {
-                    showToast('يرجى إدخال رقم هاتف للاختبار', 'warning');
-                    return;
-                  }
-                  setTestingSend(true);
-                  try {
-                    const res = await sendSingleWhatsappReminder(formData, {
-                      phone: testPhone.trim(),
-                      name: 'عميل تجريبي',
-                      amount: '1,000 جنيه',
-                      dueDate: new Date().toISOString().split('T')[0],
-                      dueStatus: 'مستحق اليوم',
-                      invoiceNumber: 'INV-TEST',
-                    });
-                    setRefreshTick((t) => t + 1);
-                    if (res.ok) {
-                      showToast('تم إرسال رسالة الاختبار بنجاح', 'success');
-                    } else {
-                      showToast(res.error || 'فشل إرسال رسالة الاختبار', 'error');
-                    }
-                  } finally {
-                    setTestingSend(false);
-                  }
-                }}
-                className="flex items-center gap-1.5 h-9 px-4 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                <Send size={13} />
-                <span>{testingSend ? 'جاري الإرسال بالخلفية...' : 'إرسال رسالة تجريبية الآن'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* SUB-TAB 4: Delivery History Log */}
-      {subTab === 'logs' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-600">آخر {deliveryLogs.length} عملية إرسال مسجلة</span>
-            {deliveryLogs.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  clearDeliveryLogs();
-                  setRefreshTick((t) => t + 1);
-                }}
-                className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
-              >
-                مسح السجل
-              </button>
-            )}
-          </div>
-
-          <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white">
-            <table className="w-full text-xs text-right">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold">
-                <tr>
-                  <th className="p-2.5">الوقت</th>
-                  <th className="p-2.5">العميل</th>
-                  <th className="p-2.5">الهاتف</th>
-                  <th className="p-2.5">العقد / المبلغ</th>
-                  <th className="p-2.5">الحالة</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {deliveryLogs.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-10 text-center text-slate-400 font-bold">
-                      لا توجد عمليات إرسال مسجلة حتى الآن
-                    </td>
-                  </tr>
-                ) : (
-                  deliveryLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/70">
-                      <td className="p-2.5 text-slate-500 whitespace-nowrap">
-                        {new Date(log.sentAt).toLocaleString('ar-EG')}
-                      </td>
-                      <td className="p-2.5 font-bold text-slate-800">{log.customerName}</td>
-                      <td className="p-2.5 font-mono text-slate-700" dir="ltr">
-                        {log.phone}
-                      </td>
-                      <td className="p-2.5">
-                        <span className="font-mono font-bold text-blue-700">{log.invoiceNumber}</span>
-                        <span className="mx-1.5 text-slate-400">•</span>
-                        <span className="font-extrabold text-slate-800">{log.amount}</span>
-                      </td>
-                      <td className="p-2.5">
-                        {log.status === 'sent' ? (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px]">
-                            تم الإرسال
-                          </span>
-                        ) : (
-                          <span
-                            className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[10px]"
-                            title={log.reason}
-                          >
-                            فشل: {log.reason || 'خطأ'}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
                 )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white">
+                <table className="w-full text-xs text-right">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold">
+                    <tr>
+                      <th className="p-2.5">الوقت</th>
+                      <th className="p-2.5">العميل</th>
+                      <th className="p-2.5">الهاتف</th>
+                      <th className="p-2.5">العقد / المبلغ</th>
+                      <th className="p-2.5">الحالة</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {deliveryLogs.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-10 text-center text-slate-400 font-bold">
+                          لا توجد عمليات إرسال مسجلة حتى الآن
+                        </td>
+                      </tr>
+                    ) : (
+                      deliveryLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-50/70">
+                          <td className="p-2.5 text-slate-500 whitespace-nowrap">
+                            {new Date(log.sentAt).toLocaleString('ar-EG')}
+                          </td>
+                          <td className="p-2.5 font-bold text-slate-800">{log.customerName}</td>
+                          <td className="p-2.5 font-mono text-slate-700 whitespace-nowrap" dir="ltr">
+                            {log.phone}
+                          </td>
+                          <td className="p-2.5 whitespace-nowrap">
+                            <span className="font-mono font-bold text-blue-700">{log.invoiceNumber}</span>
+                            <span className="mx-1.5 text-slate-400">•</span>
+                            <span className="font-extrabold text-slate-800">{log.amount}</span>
+                          </td>
+                          <td className="p-2.5 whitespace-nowrap">
+                            {log.status === 'sent' ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px]">
+                                تم الإرسال
+                              </span>
+                            ) : (
+                              <span
+                                className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-bold text-[10px]"
+                                title={log.reason}
+                              >
+                                فشل: {log.reason || 'خطأ'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-rose-50/60 border border-rose-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-rose-900">
+                    <span className="font-black block">قائمة الأرقام التي لا تملك واتساب أو المستبعدة</span>
+                    <span className="text-rose-700">تُستثنى تلقائياً من الطابور لحماية رقم الشركة من الحظر.</span>
+                  </div>
+                </div>
+
+                <div className="relative w-full sm:w-64">
+                  <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={failedSearch}
+                    onChange={(e) => setFailedSearch(e.target.value)}
+                    placeholder="بحث بالاسم أو الرقم..."
+                    className="input-ui h-9 w-full pr-8 pl-3 text-xs bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-end gap-2.5">
+                <div className="flex-1 min-w-[160px]">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">اسم العميل</label>
+                  <input
+                    type="text"
+                    value={manualExcludeName}
+                    onChange={(e) => setManualExcludeName(e.target.value)}
+                    placeholder="الاسم..."
+                    className="input-ui h-9 w-full text-xs bg-white"
+                  />
+                </div>
+                <div className="flex-1 min-w-[160px]">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">رقم الهاتف</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={manualExcludePhone}
+                    onChange={(e) => setManualExcludePhone(e.target.value)}
+                    placeholder="01012345678"
+                    className="input-ui h-9 w-full text-xs font-mono bg-white"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!manualExcludePhone.trim()) {
+                      showToast('يرجى إدخال رقم الهاتف للاستبعاد', 'warning');
+                      return;
+                    }
+                    toggleExcludeContact(manualExcludePhone.trim(), manualExcludeName.trim() || 'عميل مستبعد', true);
+                    setManualExcludeName('');
+                    setManualExcludePhone('');
+                    setRefreshTick((t) => t + 1);
+                    showToast('تمت إضافة الرقم لقائمة الاستبعاد', 'success');
+                  }}
+                  className="h-9 px-3.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Ban size={13} />
+                  <span>استبعاد رقم</span>
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white">
+                <table className="w-full text-xs text-right">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold">
+                    <tr>
+                      <th className="p-2.5">العميل</th>
+                      <th className="p-2.5">رقم الهاتف</th>
+                      <th className="p-2.5">السبب</th>
+                      <th className="p-2.5">التفاصيل</th>
+                      <th className="p-2.5">الحالة</th>
+                      <th className="p-2.5 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredFailed.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="p-10 text-center text-slate-400 font-bold">
+                          لا توجد أرقام غير متوصل إليها أو مستبعدة حالياً
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredFailed.map((entry) => {
+                        const rMeta = reasonMeta(entry.reason);
+                        return (
+                          <tr key={entry.phone} className="hover:bg-slate-50/70">
+                            <td className="p-2.5 font-bold text-slate-800">{entry.customerName}</td>
+                            <td className="p-2.5 font-mono text-slate-700 whitespace-nowrap" dir="ltr">
+                              {entry.phone}
+                            </td>
+                            <td className="p-2.5 whitespace-nowrap">
+                              <span className={`px-2 py-0.5 rounded-full border font-bold text-[10px] ${rMeta.badge}`}>
+                                {rMeta.label}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-slate-500 max-w-xs truncate" title={entry.errorMessage}>
+                              {entry.errorMessage}
+                            </td>
+                            <td className="p-2.5 whitespace-nowrap">
+                              <span
+                                className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                                  entry.excluded
+                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                {entry.excluded ? 'مستبعد' : 'مفعّل'}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-center whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    toggleExcludeContact(entry.phone, entry.customerName, !entry.excluded, entry.customerId);
+                                    setRefreshTick((t) => t + 1);
+                                  }}
+                                  className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] cursor-pointer"
+                                >
+                                  {entry.excluded ? 'إلغاء الاستبعاد' : 'استبعاد'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    removeFailedContact(entry.phone);
+                                    setRefreshTick((t) => t + 1);
+                                  }}
+                                  className="p-1.5 rounded text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                  title="حذف من القائمة"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
-
-      {/* Save Settings Footer */}
-      <div className="flex items-center gap-4 pt-2 border-t border-slate-100">
-        {canManage ? (
-          <button
-            type="submit"
-            className="flex items-center gap-2 bg-[#1e40af] text-white px-6 py-2.5 rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold text-sm shadow-2xs cursor-pointer"
-          >
-            <Save size={16} />
-            حفظ جميع إعدادات الواتساب والحماية
-          </button>
-        ) : (
-          <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
-            وضع العرض فقط (ليس لديك صلاحية تعديل الإعدادات)
-          </span>
-        )}
-        {saved && (
-          <span className="flex items-center gap-1 text-emerald-600 font-bold text-sm">
-            <CheckCircle2 size={16} />
-            تم الحفظ بنجاح
-          </span>
-        )}
-      </div>
     </form>
   );
 }

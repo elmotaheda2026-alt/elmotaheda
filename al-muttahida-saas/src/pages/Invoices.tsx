@@ -35,10 +35,7 @@ import {
   deleteSale,
   returnSale,
   syncSales,
-  syncCustomers,
   syncProducts,
-  syncSuppliers,
-  syncSalesReps,
 } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
@@ -50,6 +47,8 @@ import { formatWholeCurrency } from '../lib/utils';
 import LoadingState from '../components/LoadingState';
 import { api, isApiMode } from '../lib/apiClient';
 import { useRealtimeSync } from '../lib/realtimeSync';
+import PaymentChannelSelector from '../components/PaymentChannelSelector';
+import type { TreasuryChannel } from '../lib/paymentChannels';
 
 type PaymentMethod = 'cash' | 'card' | 'transfer' | 'installment';
 
@@ -134,6 +133,7 @@ export default function Invoices() {
   const { confirmDialog, showToast } = useDialog();
   const canDelete = isAdmin(user);
   const canWriteSale = hasPermission(user, 'sales:write');
+  const canReschedule = hasPermission(user, 'sales:reschedule');
   const [cashPaidManuallyEdited, setCashPaidManuallyEdited] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -154,27 +154,30 @@ export default function Invoices() {
 
   const customerSuggestions = useMemo(() => {
     const term = normalizeArabic(customerSearchTerm);
-    if (term.length < 1) return [];
-    return customers.filter(
-      (c) =>
-        normalizeArabic(c.name).includes(term) ||
-        (c.phone && c.phone.includes(term)) ||
-        (c.nationalId && c.nationalId.includes(term))
-    );
+    if (term.length < 1) return customers.slice(0, 30);
+    return customers
+      .filter(
+        (c) =>
+          normalizeArabic(c.name).includes(term) ||
+          (c.phone && c.phone.includes(term)) ||
+          (c.nationalId && c.nationalId.includes(term)) ||
+          (c.customerNumber && normalizeArabic(c.customerNumber).includes(term))
+      )
+      .slice(0, 50);
   }, [customers, customerSearchTerm]);
 
   useEffect(() => {
-    const customer = customers.find((c) => c.id === selectedCustomerId);
-    if (customer) {
-      if (customerSearchTerm !== customer.name) {
-        setCustomerSearchTerm(customer.name);
-      }
-    } else {
-      if (!showCustomerSuggestions && customerSearchTerm !== '') {
+    if (!selectedCustomerId) {
+      if (!showCustomerSuggestions) {
         setCustomerSearchTerm('');
       }
+      return;
     }
-  }, [selectedCustomerId, customers, showCustomerSuggestions]);
+    const customer = customers.find((c) => c.id === selectedCustomerId);
+    if (customer && !showCustomerSuggestions) {
+      setCustomerSearchTerm(customer.name);
+    }
+  }, [selectedCustomerId, customers]);
 
   // Autocomplete for Sales Representative
   const [salesRepSearchTerm, setSalesRepSearchTerm] = useState('');
@@ -182,22 +185,22 @@ export default function Invoices() {
 
   const salesRepSuggestions = useMemo(() => {
     const term = normalizeArabic(salesRepSearchTerm);
-    if (term.length < 1) return [];
+    if (term.length < 1) return salesReps;
     return salesReps.filter((r) => normalizeArabic(r.name).includes(term));
   }, [salesReps, salesRepSearchTerm]);
 
   useEffect(() => {
-    const rep = salesReps.find((r) => r.id === selectedSalesRepId);
-    if (rep) {
-      if (salesRepSearchTerm !== rep.name) {
-        setSalesRepSearchTerm(rep.name);
-      }
-    } else {
-      if (!showSalesRepSuggestions && salesRepSearchTerm !== '') {
+    if (!selectedSalesRepId) {
+      if (!showSalesRepSuggestions) {
         setSalesRepSearchTerm('');
       }
+      return;
     }
-  }, [selectedSalesRepId, salesReps, showSalesRepSuggestions]);
+    const rep = salesReps.find((r) => r.id === selectedSalesRepId);
+    if (rep && !showSalesRepSuggestions) {
+      setSalesRepSearchTerm(rep.name);
+    }
+  }, [selectedSalesRepId, salesReps]);
 
   // Autocomplete for Supplier
   const [supplierSearchTerm, setSupplierSearchTerm] = useState('');
@@ -288,6 +291,18 @@ export default function Invoices() {
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
+        customerContainerRef.current &&
+        !customerContainerRef.current.contains(event.target as Node)
+      ) {
+        setShowCustomerSuggestions(false);
+      }
+      if (
+        salesRepContainerRef.current &&
+        !salesRepContainerRef.current.contains(event.target as Node)
+      ) {
+        setShowSalesRepSuggestions(false);
+      }
+      if (
         warehouseSearchContainerRef.current &&
         !warehouseSearchContainerRef.current.contains(event.target as Node)
       ) {
@@ -302,6 +317,7 @@ export default function Invoices() {
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [paymentDate, setPaymentDate] = useState(today());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('installment');
+  const [paymentChannel, setPaymentChannel] = useState<TreasuryChannel>('cash');
   const [paidAmount, setPaidAmount] = useState(0);
   const [installmentMonths, setInstallmentMonths] = useState(12);
   const [invoiceNotes, setInvoiceNotes] = useState('');
@@ -339,6 +355,8 @@ export default function Invoices() {
   const [rescheduleMessage, setRescheduleMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [detailsModalSale, setDetailsModalSale] = useState<Sale | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const customerContainerRef = useRef<HTMLDivElement>(null);
+  const salesRepContainerRef = useRef<HTMLDivElement>(null);
   const customerInputRef = useRef<HTMLInputElement>(null);
   const productSelectRef = useRef<HTMLSelectElement>(null);
   const quantityInputRef = useRef<HTMLInputElement>(null);
@@ -707,35 +725,43 @@ export default function Invoices() {
     }
   };
 
-  const loadData = async () => {
-    await Promise.all([
-      syncSales(),
-      syncCustomers(),
-      syncProducts(),
-      syncSuppliers(),
-      syncSalesReps(),
-    ]);
+  const loadData = async (isInitial = false) => {
+    if (isApiMode()) {
+      const [salesRes, custRes, prodRes, suppRes, repsRes] = await Promise.allSettled([
+        syncSales(),
+        api.listCustomers(),
+        api.listProducts(),
+        api.listSuppliers(),
+        api.listSalesReps(),
+      ]);
 
-    const loadedCustomers = getCustomers();
-    const loadedProducts = getProducts();
-    const loadedSuppliers = getSuppliers();
-    const loadedSalesReps = getSalesReps();
-    const loadedSales = getSales();
+      setCustomers(custRes.status === 'fulfilled' && Array.isArray(custRes.value) ? custRes.value : getCustomers());
+      setProducts(prodRes.status === 'fulfilled' && Array.isArray(prodRes.value) ? prodRes.value : getProducts());
+      setSuppliers(suppRes.status === 'fulfilled' && Array.isArray(suppRes.value) ? suppRes.value : getSuppliers());
+      setSalesReps(repsRes.status === 'fulfilled' && Array.isArray(repsRes.value) ? repsRes.value : getSalesReps());
+      setSales(sortSalesNewestFirst(getSales()));
+      if (isInitial || (!editingSaleId && draftItems.length === 0)) {
+        setInvoiceNumber(getNextSaleInvoiceNumber());
+      }
+      return;
+    }
 
-    setCustomers(loadedCustomers);
-    setProducts(loadedProducts);
-    setSuppliers(loadedSuppliers);
-    setSalesReps(loadedSalesReps);
-    setSales(sortSalesNewestFirst(loadedSales));
-    setInvoiceNumber(getNextSaleInvoiceNumber());
+    setCustomers(getCustomers());
+    setProducts(getProducts());
+    setSuppliers(getSuppliers());
+    setSalesReps(getSalesReps());
+    setSales(sortSalesNewestFirst(getSales()));
+    if (isInitial || (!editingSaleId && draftItems.length === 0)) {
+      setInvoiceNumber(getNextSaleInvoiceNumber());
+    }
   };
 
   useEffect(() => {
-    void loadData();
+    void loadData(true);
   }, []);
 
-  useRealtimeSync(['sales', 'payments', 'customers', 'products', 'suppliers'], () => {
-    void loadData();
+  useRealtimeSync(['sales', 'payments', 'customers', 'products', 'suppliers', 'sales-reps'], () => {
+    void loadData(false);
   });
 
   useEffect(() => {
@@ -896,6 +922,7 @@ export default function Invoices() {
     setInvoiceDate(today());
     setPaymentDate(today());
     setPaymentMethod('installment');
+    setPaymentChannel('cash');
     setPaidAmount(0);
     setInstallmentMonths(12);
     setInvoiceNotes('');
@@ -1449,7 +1476,7 @@ export default function Invoices() {
             invoiceNumber: createdSale.invoiceNumber,
             description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
             date: paymentDate,
-            channel: 'cash',
+            channel: paymentChannel,
             affectsCustomerBalance: false,
           });
         } else {
@@ -1460,6 +1487,7 @@ export default function Invoices() {
             referenceType: 'sale',
             description: `دفعة مقدمة للفاتورة ${createdSale.invoiceNumber}`,
             date: paymentDate,
+            channel: paymentChannel,
             createdBy: user?.name || 'مدير النظام',
             customerId: selectedCustomer.id,
             saleId: createdSale.id,
@@ -1592,7 +1620,7 @@ export default function Invoices() {
             <Panel title="1. بيانات العميل والفاتورة" icon={<CalendarDays size={18} className="text-sky-600" />}>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="العميل">
-                  <div className="relative w-full">
+                  <div ref={customerContainerRef} className="relative w-full">
                     <input
                       ref={customerInputRef}
                       autoFocus
@@ -1605,14 +1633,17 @@ export default function Invoices() {
                         }
                       }}
                       onChange={(e) => {
-                        setCustomerSearchTerm(e.target.value);
+                        const val = e.target.value;
+                        setCustomerSearchTerm(val);
                         setShowCustomerSuggestions(true);
-                        if (e.target.value.trim() === '') {
-                          setSelectedCustomerId('');
+                        if (selectedCustomerId) {
+                          const current = customers.find((c) => c.id === selectedCustomerId);
+                          if (!current || current.name !== val) {
+                            setSelectedCustomerId('');
+                          }
                         }
                       }}
                       onFocus={() => setShowCustomerSuggestions(true)}
-                      onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 200)}
                       className="input-ui w-full"
                       placeholder="اكتب اسم العميل للبحث..."
                     />
@@ -1622,12 +1653,13 @@ export default function Invoices() {
                           <button
                             key={c.id}
                             type="button"
-                            onClick={() => {
+                            onMouseDown={(e) => {
+                              e.preventDefault();
                               setSelectedCustomerId(c.id);
                               setCustomerSearchTerm(c.name);
                               setShowCustomerSuggestions(false);
                             }}
-                            className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                            className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors cursor-pointer"
                           >
                             <span>{c.name}</span>
                           </button>
@@ -1638,18 +1670,22 @@ export default function Invoices() {
                 </Field>
 
                 <Field label="مندوب المبيعات">
-                  <div className="relative w-full">
+                  <div ref={salesRepContainerRef} className="relative w-full">
                     <input
+                      autoComplete="off"
                       value={salesRepSearchTerm}
                       onChange={(e) => {
-                        setSalesRepSearchTerm(e.target.value);
+                        const val = e.target.value;
+                        setSalesRepSearchTerm(val);
                         setShowSalesRepSuggestions(true);
-                        if (e.target.value.trim() === '') {
-                          setSelectedSalesRepId('');
+                        if (selectedSalesRepId) {
+                          const current = salesReps.find((r) => r.id === selectedSalesRepId);
+                          if (!current || current.name !== val) {
+                            setSelectedSalesRepId('');
+                          }
                         }
                       }}
                       onFocus={() => setShowSalesRepSuggestions(true)}
-                      onBlur={() => setTimeout(() => setShowSalesRepSuggestions(false), 200)}
                       className="input-ui w-full"
                       placeholder="اكتب اسم المندوب..."
                     />
@@ -1659,12 +1695,13 @@ export default function Invoices() {
                           <button
                             key={rep.id}
                             type="button"
-                            onClick={() => {
+                            onMouseDown={(e) => {
+                              e.preventDefault();
                               setSelectedSalesRepId(rep.id);
                               setSalesRepSearchTerm(rep.name);
                               setShowSalesRepSuggestions(false);
                             }}
-                            className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors"
+                            className="w-full text-right px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-700 font-medium transition-colors cursor-pointer"
                           >
                             <span>{rep.name}</span>
                           </button>
@@ -1732,6 +1769,17 @@ export default function Invoices() {
                       <div className="input-ui flex items-center">{formatDateDisplay(firstInstallmentDate)}</div>
                     </Field>
                   </>
+                )}
+
+                {!editingSaleId && (paid > 0 || paymentMethod !== 'installment') && (
+                  <div className="md:col-span-2 xl:col-span-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                    <PaymentChannelSelector
+                      compact
+                      label="خزنة تحصيل الدفعة / المقدم"
+                      value={paymentChannel}
+                      onChange={setPaymentChannel}
+                    />
+                  </div>
                 )}
 
                 <div className="md:col-span-2 xl:col-span-4">
@@ -2256,7 +2304,7 @@ export default function Invoices() {
                               </td>
                               <td className="py-2.5 px-3 text-center">
                                 <div className="inline-flex items-center justify-center gap-1.5 flex-wrap">
-                                  {canDelete && !isPaid && (
+                                  {canReschedule && !isPaid && (
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -2274,7 +2322,7 @@ export default function Invoices() {
                                       ترحيل القسط
                                     </button>
                                   )}
-                                  {canDelete && isDeferred && isApiMode() && (
+                                  {canReschedule && isDeferred && isApiMode() && (
                                     <button
                                       type="button"
                                       onClick={() => handleUndoDeferInstallment(editingSale.id, sch.id)}
@@ -2285,7 +2333,7 @@ export default function Invoices() {
                                       تراجع
                                     </button>
                                   )}
-                                  {(!canDelete || (isPaid && !isDeferred)) && (
+                                  {(!canReschedule || (isPaid && !isDeferred)) && (
                                     <span className="text-slate-400 text-[10px]">-</span>
                                   )}
                                 </div>
@@ -2475,7 +2523,7 @@ export default function Invoices() {
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="font-bold text-violet-700">{formatCurrency(displayAmount)}</span>
-                          {Boolean(editingSale) && (!correspondingSchedule || !isPaid) && (
+                          {canReschedule && Boolean(editingSale) && (!correspondingSchedule || !isPaid) && (
                             <button
                               type="button"
                               onClick={() => {
@@ -2707,7 +2755,7 @@ export default function Invoices() {
                                   </button>
                                 )}
 
-                                {canDelete && hasRemainingInstallments && (
+                                {canReschedule && hasRemainingInstallments && (
                                   <>
                                     <button
                                       type="button"
@@ -2915,7 +2963,7 @@ export default function Invoices() {
                                     ترحيل
                                   </button>
                                 )}
-                                {isDeferred && canDelete && deferModalSale?.id !== 'draft-new-contract' && isApiMode() && (
+                                {isDeferred && canReschedule && deferModalSale?.id !== 'draft-new-contract' && isApiMode() && (
                                   <button
                                     type="button"
                                     onClick={() => handleUndoDeferInstallment(deferModalSale.id, sch.id)}

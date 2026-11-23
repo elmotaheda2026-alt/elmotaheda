@@ -31,10 +31,10 @@ export default function UpdateBanner() {
     }
 
     const unsubscribe = api.onUpdaterStatus((payload) => {
-      if (payload.status === 'available' || payload.status === 'downloading' || payload.status === 'downloaded' || payload.status === 'error') {
+      if (payload.status === 'available' || payload.status === 'downloading' || payload.status === 'downloaded') {
         setDismissed(false);
         setUpdateState(payload);
-      } else if (payload.status === 'up-to-date') {
+      } else if (payload.status === 'up-to-date' || payload.status === 'error') {
         setUpdateState(null);
       }
     });
@@ -66,9 +66,7 @@ export default function UpdateBanner() {
             ? `تم تحميل التحديث الجديد${updateState.version ? ` (v${updateState.version})` : ''} — جاهز للتثبيت الآن`
             : updateState.status === 'downloading'
               ? `جاري تحميل التحديث الجديد... ${updateState.percent ?? 0}%`
-              : updateState.status === 'error'
-                ? `تعذر فحص/تحميل التحديث: ${updateState.message || 'خطأ في الاتصال'}`
-                : `يتوفر تحديث جديد للنظام${updateState.version ? ` (v${updateState.version})` : ''} — جاري التحميل...`}
+              : `يتوفر تحديث جديد للنظام${updateState.version ? ` (v${updateState.version})` : ''} — جاري التحميل...`}
         </span>
       </div>
 

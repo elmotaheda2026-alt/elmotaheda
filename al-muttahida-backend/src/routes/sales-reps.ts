@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
 
@@ -21,7 +21,7 @@ const salesRepSchema = z.object({
 });
 
 // GET /sales-reps
-router.get('/', async (_req, res) => {
+router.get('/', requireAnyPermission('sales:read', 'reports:read'), async (_req, res) => {
   try {
     const db = await dbPromise;
     const rows = await db.all('SELECT * FROM sales_reps ORDER BY created_at DESC');

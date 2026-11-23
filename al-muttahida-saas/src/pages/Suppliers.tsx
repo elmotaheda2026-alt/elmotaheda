@@ -8,6 +8,7 @@ import { hasPermission, isAdmin } from '../lib/permissions';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 import SupplierStatementModal from '../components/SupplierStatementModal';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 export default function Suppliers() {
   const { confirmDialog, showToast } = useDialog();
@@ -26,6 +27,7 @@ export default function Suppliers() {
   });
   const { settings, user } = useAuth();
   const canDelete = isAdmin(user);
+  const canWriteSupplier = hasPermission(user, 'sales:write') || hasPermission(user, 'purchases:manage');
 
   useEffect(() => {
     loadSuppliers();
@@ -37,7 +39,7 @@ export default function Suppliers() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F2') {
+      if (event.key === 'F2' && canWriteSupplier) {
         event.preventDefault();
         resetForm();
         setEditingSupplier(null);
@@ -62,6 +64,10 @@ export default function Suppliers() {
     const data = getSuppliers();
     setSuppliers(data);
   };
+
+  useRealtimeSync(['suppliers', 'payments', 'sales'], () => {
+    void loadSuppliers();
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -158,7 +164,7 @@ export default function Suppliers() {
             />
           </div>
         </div>
-        {hasPermission(user, 'sales:write') && (
+        {canWriteSupplier && (
           <button
             onClick={() => { resetForm(); setShowModal(true); }}
             className="flex items-center gap-1.5 bg-[#1e40af] text-white h-9 px-4 rounded-xl hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs shrink-0 cursor-pointer"
@@ -216,7 +222,7 @@ export default function Suppliers() {
                       <FileText size={13} />
                       كشف الحساب
                     </button>
-                    {hasPermission(user, 'sales:write') && (
+                    {canWriteSupplier && (
                       <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
                         <Edit size={14} />
                       </button>
@@ -253,8 +259,8 @@ export default function Suppliers() {
                 filteredSuppliers.map(supplier => (
                   <tr
                     key={supplier.id}
-                    onDoubleClick={() => hasPermission(user, 'sales:write') && handleEdit(supplier)}
-                    title={hasPermission(user, 'sales:write') ? 'انقر مرتين للتعديل' : ''}
+                    onDoubleClick={() => canWriteSupplier && handleEdit(supplier)}
+                    title={canWriteSupplier ? 'انقر مرتين للتعديل' : ''}
                     className="group cursor-pointer hover:bg-slate-50 transition-colors"
                   >
                     <td className="py-3 px-4 font-bold text-slate-900 text-xs sm:text-sm">{supplier.name}</td>
@@ -288,7 +294,7 @@ export default function Suppliers() {
                         >
                           <FileText size={15} />
                         </button>
-                        {hasPermission(user, 'sales:write') && (
+                        {canWriteSupplier && (
                           <button onClick={() => handleEdit(supplier)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer" title="تعديل">
                             <Edit size={15} />
                           </button>

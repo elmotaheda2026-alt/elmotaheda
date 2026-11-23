@@ -3,7 +3,7 @@
   "description": "Al-Muttahida ERP System",
   "author": "Al-Muttahida",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.1.4",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -129,17 +129,12 @@
     ],
     "extraResources": [
       {
-        "from": "dist",
-        "to": "frontend",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "../al-muttahida-backend/dist",
         "to": "backend",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/*.test.*",
+          "!**/test_*"
         ]
       },
       {

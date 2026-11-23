@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Permission } from '../types';
-import { hasPermission as userHasPermission, isAdmin } from '../lib/permissions';
+import { getDefaultRouteForUser, hasPermission as userHasPermission, isAdmin } from '../lib/permissions';
+import { preloadRouteByPath } from '../lib/routePreloader';
 import CompanyLogo from './CompanyLogo';
 import {
   Banknote,
@@ -45,7 +46,7 @@ const menuGroups: {
     activeText: string;
     activeIcon: string;
   };
-  items: { icon: any; label: string; path: string; permission?: PermissionKey; adminOnly?: boolean }[];
+  items: { icon: any; label: string; path: string; permission?: PermissionKey; anyPermissions?: PermissionKey[]; adminOnly?: boolean }[];
 }[] = [
     {
       title: 'المبيعات والعملاء',
@@ -58,10 +59,10 @@ const menuGroups: {
         activeIcon: 'text-blue-600',
       },
       items: [
-        { icon: Warehouse, label: 'الرئيسية', path: '/' },
+        { icon: Warehouse, label: 'الرئيسية', path: '/', permission: 'dashboard:view' },
         { icon: UserCircle, label: 'العملاء', path: '/customers', permission: 'sales:read' },
         { icon: Receipt, label: 'إصدار فاتورة', path: '/invoices', permission: 'sales:read' },
-        { icon: Truck, label: 'الموردين', path: '/suppliers', permission: 'sales:read' },
+        { icon: Truck, label: 'الموردين', path: '/suppliers', anyPermissions: ['sales:read', 'purchases:manage'] },
         { icon: UserCheck, label: 'المناديب', path: '/sales-reps', permission: 'sales:read' },
         { icon: Package, label: 'الأصناف والمخزون', path: '/products-inventory', permission: 'inventory:manage' },
       ],
@@ -79,7 +80,7 @@ const menuGroups: {
       items: [
         { icon: Banknote, label: 'الخزينة', path: '/payments', permission: 'payments:read' },
         { icon: FileSearch, label: 'متابعة التحصيل', path: '/collection-statement', permission: 'payments:read' },
-        { icon: ClipboardList, label: 'المصروفات', path: '/expenses', permission: 'payments:write' },
+        { icon: ClipboardList, label: 'المصروفات', path: '/expenses', permission: 'payments:read' },
       ],
     },
     {
@@ -148,8 +149,11 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
     };
   }, []);
 
-  const hasPermission = (permission?: PermissionKey) => {
+  const hasPermission = (permission?: PermissionKey, anyPermissions?: PermissionKey[]) => {
     if (!user) return false;
+    if (anyPermissions && anyPermissions.length > 0) {
+      return anyPermissions.some((p) => userHasPermission(user, p));
+    }
     if (!permission) return true;
     return userHasPermission(user, permission);
   };
@@ -173,7 +177,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
       <aside
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className={`fixed right-0 top-0 z-40 lg:z-20 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
+        className={`fixed right-0 top-0 z-40 lg:z-30 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
           } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
         {/* Header / Branding with Custom Corporate Logo (exact h-14 match & seamless fade into Header) */}
@@ -189,7 +193,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
           <button
             type="button"
             onClick={() => {
-              navigate('/');
+              navigate(getDefaultRouteForUser(user));
               setIsHovered(false);
               if (window.innerWidth < 1024) onClose();
             }}
@@ -210,7 +214,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
           <div className="space-y-3">
             {menuGroups.map((group) => {
               const allowedItems = group.items.filter(
-                (item) => (!item.adminOnly || isAdmin(user)) && hasPermission(item.permission)
+                (item) => (!item.adminOnly || isAdmin(user)) && hasPermission(item.permission, item.anyPermissions)
               );
               if (allowedItems.length === 0) return null;
 
@@ -248,6 +252,8 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
                             key={item.path}
                             type="button"
                             title={item.label}
+                            onMouseEnter={() => preloadRouteByPath(item.path)}
+                            onFocus={() => preloadRouteByPath(item.path)}
                             onClick={() => {
                               navigate(item.path);
                               setIsHovered(false);

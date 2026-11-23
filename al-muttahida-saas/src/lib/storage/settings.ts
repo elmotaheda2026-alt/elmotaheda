@@ -63,7 +63,8 @@ export async function syncSettings(): Promise<Setting> {
   const remote = await api.getSettings();
   apiSettingsCache = mergeSettings(remote);
   try {
-    localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(apiSettingsCache));
+    const { whatsappAccessToken: _stripToken, ...safeCache } = apiSettingsCache;
+    localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(safeCache));
   } catch {
     // Ignore storage quota errors
   }
@@ -76,12 +77,14 @@ export async function updateSettings(settings: Setting): Promise<void> {
     await api.updateSettings(normalized);
     apiSettingsCache = normalized;
     try {
-      localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(normalized));
+      const { whatsappAccessToken: _stripToken, ...safeCache } = normalized;
+      localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(safeCache));
     } catch {
       // Ignore storage quota errors
     }
     return;
   }
 
-  localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(normalized));
+  const { whatsappAccessToken: _stripToken, ...safeLocal } = normalized;
+  localStorage.setItem(DB_KEYS.SETTINGS, JSON.stringify(safeLocal));
 }

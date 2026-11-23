@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, Search, UserCheck, UserX, Shield } from 'lucide-react';
-import { User, UserPermissions } from '../types';
+import { Permission, User, UserPermissions } from '../types';
 import { getUsers, createUser, updateUser, toggleUserStatus as toggleUserStatusApi, deleteUser, syncUsers } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
-import { hasPermission, isAdmin } from '../lib/permissions';
+import { getRolePermissionsSnapshot, hasPermission, isAdmin, PERMISSION_CATALOG } from '../lib/permissions';
+import { useRealtimeSync } from '../lib/realtimeSync';
 
 const ROLE_META: Record<User['role'], { label: string; badgeClass: string }> = {
   admin: { label: 'مدير نظام', badgeClass: 'bg-purple-50 text-purple-700 border border-purple-200' },
@@ -16,6 +17,14 @@ const ROLE_META: Record<User['role'], { label: string; badgeClass: string }> = {
   user: { label: 'مستخدم', badgeClass: 'bg-slate-100 text-slate-700' },
 };
 
+function buildRoleDefaultPermissions(role: User['role']): Record<Permission, boolean> {
+  const rolePerms = new Set(getRolePermissionsSnapshot()[role] || []);
+  return PERMISSION_CATALOG.reduce((acc, item) => {
+    acc[item.key] = rolePerms.has(item.key);
+    return acc;
+  }, {} as Record<Permission, boolean>);
+}
+
 export default function Users() {
   const { user: currentUser } = useAuth();
   const { confirmDialog, showToast } = useDialog();
@@ -26,23 +35,7 @@ export default function Users() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const defaultPermissions: UserPermissions = {
-    'dashboard:view': true,
-    'sales:read': false,
-    'sales:write': false,
-    'sales:reschedule': false,
-    'payments:read': false,
-    'payments:write': false,
-    'payments:reverse': false,
-    'reports:read': false,
-    'closing:write': false,
-    'users:manage': false,
-    'inventory:manage': false,
-    'purchases:manage': false,
-    'settings:manage': false,
-    'shareholders:manage': false,
-    'notifications:read': true,
-  };
+  const [useCustomPermissions, setUseCustomPermissions] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -51,7 +44,7 @@ export default function Users() {
     role: 'user' as User['role'],
     phone: '',
     isActive: true,
-    permissions: defaultPermissions,
+    permissions: buildRoleDefaultPermissions('user') as UserPermissions,
   });
 
   useEffect(() => {
@@ -68,14 +61,25 @@ export default function Users() {
     setUsers(data);
   };
 
+  useRealtimeSync(['users'], () => {
+    void loadUsers();
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     try {
+      const payload = {
+        ...formData,
+        permissions:
+          formData.role === 'admin' || !useCustomPermissions
+            ? null
+            : formData.permissions,
+      };
       if (editingUser) {
-        await updateUser(editingUser.id, formData);
+        await updateUser(editingUser.id, payload);
       } else {
-        await createUser({ ...formData });
+        await createUser({ ...payload });
       }
       await loadUsers();
       setShowModal(false);
@@ -88,15 +92,23 @@ export default function Users() {
   };
 
   const handleEdit = (user: User) => {
+    const hasCustom = Boolean(
+      user.role !== 'admin' &&
+      user.permissions &&
+      typeof user.permissions === 'object' &&
+      Object.keys(user.permissions).length > 0
+    );
+    const roleDefaults = buildRoleDefaultPermissions(user.role);
     setEditingUser(user);
+    setUseCustomPermissions(hasCustom);
     setFormData({
       name: user.name,
       username: user.username,
-      password: user.password,
+      password: '',
       role: user.role,
       phone: user.phone || '',
       isActive: user.isActive,
-      permissions: user.permissions || defaultPermissions,
+      permissions: hasCustom ? { ...roleDefaults, ...(user.permissions || {}) } : roleDefaults,
     });
     setShowModal(true);
   };
@@ -134,6 +146,7 @@ export default function Users() {
 
   const resetForm = () => {
     setErrorMsg('');
+    setUseCustomPermissions(false);
     setFormData({
       name: '',
       username: '',
@@ -141,7 +154,7 @@ export default function Users() {
       role: 'user',
       phone: '',
       isActive: true,
-      permissions: defaultPermissions,
+      permissions: buildRoleDefaultPermissions('user'),
     });
   };
 
@@ -202,7 +215,7 @@ export default function Users() {
               </div>
 
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
-                {canManageUsers && isAdmin(currentUser) ? (
+                {canManageUsers && (isAdmin(currentUser) || user.role !== 'admin') ? (
                   <button
                     onClick={() => toggleUserStatus(user)}
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold cursor-pointer ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}
@@ -218,7 +231,7 @@ export default function Users() {
                 )}
 
                 <div className="flex items-center gap-1.5">
-                  {canManageUsers && (
+                  {canManageUsers && (isAdmin(currentUser) || user.role !== 'admin') && (
                     <button onClick={() => handleEdit(user)} className="p-1.5 text-blue-600 bg-blue-50 rounded-lg" title="تعديل">
                       <Edit size={14} />
                     </button>
@@ -266,7 +279,7 @@ export default function Users() {
                     </span>
                   </td>
                   <td className="px-5 py-3">
-                    {canManageUsers && isAdmin(currentUser) ? (
+                    {canManageUsers && (isAdmin(currentUser) || user.role !== 'admin') ? (
                       <button
                         onClick={() => toggleUserStatus(user)}
                         className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold cursor-pointer ${user.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
@@ -287,7 +300,7 @@ export default function Users() {
                   </td>
                   <td className="px-5 py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
-                      {canManageUsers && (
+                      {canManageUsers && (isAdmin(currentUser) || user.role !== 'admin') && (
                         <button
                           onClick={() => handleEdit(user)}
                           className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
@@ -376,108 +389,101 @@ export default function Users() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">الدور</label>
                   <select
                     value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                    onChange={(e) => {
+                      const nextRole = e.target.value as User['role'];
+                      setFormData((prev) => ({
+                        ...prev,
+                        role: nextRole,
+                        permissions: useCustomPermissions ? prev.permissions : buildRoleDefaultPermissions(nextRole),
+                      }));
+                    }}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   >
-                    {(Object.entries(ROLE_META) as [User['role'], { label: string }][]).map(([roleKey, meta]) => (
-                      <option key={roleKey} value={roleKey}>{meta.label}</option>
-                    ))}
+                    {(Object.entries(ROLE_META) as [User['role'], { label: string }][])
+                      .filter(([roleKey]) => isAdmin(currentUser) || roleKey !== 'admin')
+                      .map(([roleKey, meta]) => (
+                        <option key={roleKey} value={roleKey}>{meta.label}</option>
+                      ))}
                   </select>
                 </div>
 
                 {formData.role !== 'admin' && (
-                  <div className="border-t border-slate-100 pt-4 mt-4">
-                    <h4 className="font-bold text-slate-800 mb-3 text-sm flex items-center gap-2">
-                      <Shield size={16} className="text-indigo-600" />
-                      تخصيص صلاحيات المستخدم الدقيقة
-                    </h4>
-                    <div className="grid grid-cols-1 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                      {/* المبيعات والعملاء */}
-                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
+                  <div className="border-t border-slate-100 pt-4 mt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <Shield size={16} className="text-indigo-600" />
+                        <span>صلاحيات الحساب</span>
+                      </h4>
+                      <label className="inline-flex items-center gap-2 text-xs font-bold text-indigo-700 cursor-pointer">
                         <input
                           type="checkbox"
-                          checked={formData.permissions['sales:read'] && formData.permissions['sales:write'] && formData.permissions['sales:reschedule']}
+                          checked={useCustomPermissions}
                           onChange={(e) => {
-                            const checked = e.target.checked;
-                            setFormData({
-                              ...formData,
-                              permissions: {
-                                ...formData.permissions,
-                                'sales:read': checked,
-                                'sales:write': checked,
-                                'sales:reschedule': checked,
-                                'inventory:manage': checked,
-                                'purchases:manage': checked,
-                              },
-                            });
+                            const enabled = e.target.checked;
+                            setUseCustomPermissions(enabled);
+                            if (enabled) {
+                              setFormData((prev) => ({
+                                ...prev,
+                                permissions: buildRoleDefaultPermissions(prev.role),
+                              }));
+                            }
                           }}
                           className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
                         />
-                        <span className="text-sm font-medium text-slate-700">المبيعات والعملاء</span>
-                      </label>
-                      {/* الخزينة والتحصيل */}
-                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={formData.permissions['payments:read'] && formData.permissions['payments:write'] && formData.permissions['payments:reverse']}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setFormData({
-                              ...formData,
-                              permissions: {
-                                ...formData.permissions,
-                                'payments:read': checked,
-                                'payments:write': checked,
-                                'payments:reverse': checked,
-                                'closing:write': checked,
-                              },
-                            });
-                          }}
-                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        <span className="text-sm font-medium text-slate-700">الخزينة والتحصيل</span>
-                      </label>
-                      {/* التقارير والمالية */}
-                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={formData.permissions['reports:read'] && formData.permissions['closing:write']}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setFormData({
-                              ...formData,
-                              permissions: {
-                                ...formData.permissions,
-                                'reports:read': checked,
-                                'closing:write': checked,
-                              },
-                            });
-                          }}
-                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        <span className="text-sm font-medium text-slate-700">التقارير والمالية</span>
-                      </label>
-                      {/* الإدارة */}
-                      <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={formData.permissions['users:manage']}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            const allPermissions = Object.keys(formData.permissions).reduce((acc, key) => {
-                              acc[key as keyof typeof formData.permissions] = checked;
-                              return acc;
-                            }, {} as typeof formData.permissions);
-                            setFormData({
-                              ...formData,
-                              permissions: allPermissions,
-                            });
-                          }}
-                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        <span className="text-sm font-medium text-slate-700">الإدارة</span>
+                        <span>تخصيص استثناء خاص</span>
                       </label>
                     </div>
+
+                    {!useCustomPermissions ? (
+                      <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 space-y-2">
+                        <p className="text-xs font-bold text-emerald-900">
+                          صلاحيات الدور من الإعدادات ({ROLE_META[formData.role]?.label}): يتبع هذا الحساب تلقائياً أي تعديل يُحفظ في مصفوفة الصلاحيات.
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {PERMISSION_CATALOG.filter((item) =>
+                            (getRolePermissionsSnapshot()[formData.role] || []).includes(item.key)
+                          ).map((item) => (
+                            <span
+                              key={item.key}
+                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-emerald-800 border border-emerald-200"
+                            >
+                              {item.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-1.5 bg-slate-50 p-3 rounded-xl border border-slate-200 max-h-60 overflow-y-auto">
+                        {PERMISSION_CATALOG.map((item) => (
+                          <label
+                            key={item.key}
+                            className="flex items-center justify-between gap-2 cursor-pointer p-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-colors"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(formData.permissions[item.key])}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    permissions: {
+                                      ...prev.permissions,
+                                      [item.key]: checked,
+                                    },
+                                  }));
+                                }}
+                                className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500 cursor-pointer shrink-0"
+                              />
+                              <span className="text-xs font-bold text-slate-700 truncate">{item.label}</span>
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200/70 text-slate-600 shrink-0">
+                              {item.category}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

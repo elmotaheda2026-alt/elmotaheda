@@ -1,9 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import UpdateBanner from './UpdateBanner';
+import LoadingState from './LoadingState';
 import { useAuth } from '../context/AuthContext';
 import { startRealtimeSync, stopRealtimeSync } from '../lib/realtimeSync';
+import { preloadAllRoutesInBackground } from '../lib/routePreloader';
 
 export default function Layout() {
   const { settings, isAuthenticated } = useAuth();
@@ -11,6 +14,7 @@ export default function Layout() {
   useEffect(() => {
     if (isAuthenticated) {
       startRealtimeSync();
+      preloadAllRoutesInBackground();
     } else {
       stopRealtimeSync();
     }
@@ -50,11 +54,14 @@ export default function Layout() {
 
       <div className={`h-[100dvh] max-h-[100dvh] flex flex-col flex-1 min-w-0 transition-all duration-300 ${sidebarOpen ? 'lg:mr-60' : 'lg:mr-16'} print:m-0 overflow-hidden relative`}>
         <div className="print:hidden shrink-0 z-20 sticky top-0">
+          <UpdateBanner />
           <Header onMenuClick={toggleSidebar} />
         </div>
 
         <main className="flex-1 min-h-0 flex flex-col overflow-y-auto overflow-x-hidden custom-scrollbar p-2 sm:p-2.5 md:p-3 print:h-auto print:overflow-visible print:p-0">
-          <Outlet />
+          <Suspense fallback={<LoadingState />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

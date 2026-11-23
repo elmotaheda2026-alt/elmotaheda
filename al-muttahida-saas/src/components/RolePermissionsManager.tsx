@@ -4,6 +4,7 @@ import { Permission, User } from '../types';
 import {
   DEFAULT_ROLE_PERMISSIONS,
   getRolePermissionsSnapshot,
+  PERMISSION_CATALOG,
   setDynamicRolePermissions,
 } from '../lib/permissions';
 import { useAuth } from '../context/AuthContext';
@@ -20,26 +21,8 @@ const EDITABLE_ROLES: { key: EditableRole; label: string; desc: string }[] = [
   { key: 'user', label: 'مستخدم', desc: 'عرض أساسي' },
 ];
 
-const PERMISSION_ITEMS: { key: Permission; label: string; category: string }[] = [
-  { key: 'dashboard:view', label: 'عرض الرئيسية والإحصائيات', category: 'عام' },
-  { key: 'notifications:read', label: 'عرض مركز التنبيهات', category: 'عام' },
-  { key: 'sales:read', label: 'عرض المبيعات والعملاء', category: 'المبيعات' },
-  { key: 'sales:write', label: 'إضافة وتعديل المبيعات والعملاء', category: 'المبيعات' },
-  { key: 'sales:reschedule', label: 'ترحيل وإعادة جدولة الأقساط', category: 'المبيعات' },
-  { key: 'payments:read', label: 'عرض الخزينة والمدفوعات', category: 'الخزينة' },
-  { key: 'payments:write', label: 'تسجيل تحصيل وصرف نقدي', category: 'الخزينة' },
-  { key: 'payments:reverse', label: 'عكس وإلغاء الحركات المالية', category: 'الخزينة' },
-  { key: 'closing:write', label: 'إغلاق وفتح الفترات اليومية', category: 'الخزينة' },
-  { key: 'inventory:manage', label: 'إدارة الأصناف والمخزون', category: 'المخزون' },
-  { key: 'purchases:manage', label: 'إدارة المشتريات والموردين', category: 'المخزون' },
-  { key: 'reports:read', label: 'عرض التقارير والقيود المالية', category: 'التقارير' },
-  { key: 'shareholders:manage', label: 'إدارة حسابات الشركاء والمساهمين', category: 'الإدارة' },
-  { key: 'users:manage', label: 'إدارة المستخدمين', category: 'الإدارة' },
-  { key: 'settings:manage', label: 'تعديل إعدادات النظام', category: 'الإدارة' },
-];
-
 export default function RolePermissionsManager() {
-  const { user, settings, updateSettings } = useAuth();
+  const { user, settings, updateSettings, refreshSettings } = useAuth();
   const [matrix, setMatrix] = useState<Record<User['role'], Permission[]>>(() => getRolePermissionsSnapshot());
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -74,7 +57,7 @@ export default function RolePermissionsManager() {
     setError(null);
     setMatrix((prev) => ({
       ...prev,
-      [role]: grantAll ? PERMISSION_ITEMS.map((item) => item.key) : [],
+      [role]: grantAll ? PERMISSION_CATALOG.map((item) => item.key) : [],
     }));
   };
 
@@ -99,10 +82,7 @@ export default function RolePermissionsManager() {
         const res = await api.updateRolePermissions(matrix as Record<string, string[]>);
         const updated = (res.rolePermissions || matrix) as Partial<Record<User['role'], Permission[]>>;
         setDynamicRolePermissions(updated);
-        await updateSettings({
-          ...settings,
-          rolePermissions: updated,
-        });
+        await refreshSettings();
       } else {
         setDynamicRolePermissions(matrix);
         await updateSettings({
@@ -195,7 +175,7 @@ export default function RolePermissionsManager() {
               </th>
               {EDITABLE_ROLES.map((role) => {
                 const count = (matrix[role.key] || []).length;
-                const allSelected = count === PERMISSION_ITEMS.length;
+                const allSelected = count === PERMISSION_CATALOG.length;
                 return (
                   <th key={role.key} className="py-3 px-3 text-center min-w-[115px] border-r border-slate-200">
                     <div className="text-xs font-black text-slate-900">{role.label}</div>
@@ -205,7 +185,7 @@ export default function RolePermissionsManager() {
                       onClick={() => toggleAllForRole(role.key, !allSelected)}
                       className="mt-1.5 text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
                     >
-                      {allSelected ? 'إلغاء الكل' : 'تحديد الكل'} ({count}/{PERMISSION_ITEMS.length})
+                      {allSelected ? 'إلغاء الكل' : 'تحديد الكل'} ({count}/{PERMISSION_CATALOG.length})
                     </button>
                   </th>
                 );
@@ -213,7 +193,7 @@ export default function RolePermissionsManager() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {PERMISSION_ITEMS.map((perm) => (
+            {PERMISSION_CATALOG.map((perm) => (
               <tr key={perm.key} className="hover:bg-slate-50/70 transition-colors">
                 <td className="py-2.5 px-4">
                   <div className="flex items-center justify-between gap-2">

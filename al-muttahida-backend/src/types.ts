@@ -8,12 +8,14 @@ export type UserRole =
   | 'finance_manager';
 
 export type Permission =
+  | 'dashboard:view'
   | 'sales:read'
   | 'sales:write'
   | 'sales:reschedule'
   | 'payments:read'
   | 'payments:write'
   | 'payments:reverse'
+  | 'payments:early_settlement'
   | 'reports:read'
   | 'closing:write'
   | 'users:manage'

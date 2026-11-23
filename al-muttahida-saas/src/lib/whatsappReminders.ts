@@ -525,6 +525,21 @@ export async function runWhatsappQueue(options?: {
   const settings = options?.customSettings || getSettings();
   const todayIso = getTodayIso();
 
+  if (!settings.whatsappRemindersEnabled) {
+    const reason = 'تم إيقاف تذكيرات الواتساب التلقائية — قم بتفعيلها أولاً للبدء.';
+    options?.onProgress?.({
+      running: false,
+      phase: 'stopped',
+      currentIndex: 0,
+      total: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      stopReason: reason,
+    });
+    return { sent: 0, failed: 0, skipped: 0, stopReason: reason };
+  }
+
   if (!options?.ignoreHours && !isWithinSendingHours(settings)) {
     const reason = `خارج ساعات الإرسال المسموحة (${settings.whatsappSendStartHour || '10:00'} - ${settings.whatsappSendEndHour || '21:00'}) لحماية الرقم`;
     options?.onProgress?.({

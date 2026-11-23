@@ -3,6 +3,14 @@ import { formatDate } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
 import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import {
+  extractApiPermissions,
+  parseStoredPermissionsObject,
+  removeUserAuthSnapshot,
+  upsertUserAuthSnapshot,
+} from '../permissions.js';
+import { broadcastDataChange } from '../realtime.js';
+import type { UserRole } from '../types.js';
 import { hashPassword, uid } from '../utils.js';
 import { audit } from '../audit.js';
 
@@ -17,6 +25,7 @@ const userPermissionsSchema = z.object({
   'payments:read': z.boolean().default(false),
   'payments:write': z.boolean().default(false),
   'payments:reverse': z.boolean().default(false),
+  'payments:early_settlement': z.boolean().default(false),
   'reports:read': z.boolean().default(false),
   'closing:write': z.boolean().default(false),
   'users:manage': z.boolean().default(false),
@@ -35,6 +44,7 @@ const defaultPermissions = {
   'payments:read': false,
   'payments:write': false,
   'payments:reverse': false,
+  'payments:early_settlement': false,
   'reports:read': false,
   'closing:write': false,
   'users:manage': false,
@@ -81,7 +91,7 @@ router.get('/', requirePermission('users:manage'), async (_req, res) => {
       isActive: row.is_active === 1 || row.is_active === true,
       phone: row.phone || '',
       createdAt: formatDate(row.created_at),
-      permissions: row.permissions ? { ...defaultPermissions, ...JSON.parse(row.permissions) } : defaultPermissions,
+      permissions: row.role === 'admin' ? null : (parseStoredPermissionsObject(row.permissions) || null),
     }));
     return res.json(mapped);
   } catch (error: any) {
@@ -115,6 +125,7 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
     }
 
     const hashedPassword = await hashPassword(data.password);
+    const storedPermissions = data.role === 'admin' || !data.permissions ? null : JSON.stringify(data.permissions);
     await db.run(
       `INSERT INTO users (id, name, username, password_hash, role, is_active, phone, permissions, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -125,9 +136,17 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
       data.role,
       data.isActive ? 1 : 0,
       data.phone || null,
-      data.permissions ? JSON.stringify(data.permissions) : null,
+      storedPermissions,
       now,
     );
+
+    upsertUserAuthSnapshot({
+      id,
+      name: data.name,
+      role: data.role as UserRole,
+      isActive: data.isActive,
+      permissions: data.role === 'admin' ? undefined : extractApiPermissions(storedPermissions),
+    });
 
     await audit('user.create', 'user', id, req.user?.name || 'system', {
       name: data.name,
@@ -135,8 +154,9 @@ router.post('/', requirePermission('users:manage'), async (req: AuthedRequest, r
       role: data.role,
       isActive: data.isActive,
       phone: data.phone,
-      permissions: data.permissions,
+      permissions: data.role === 'admin' ? null : data.permissions,
     });
+    broadcastDataChange('users', 'create');
 
     return res.status(201).json({ id });
   } catch (error: any) {
@@ -158,9 +178,15 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
 
   try {
     const db = await dbPromise;
-    const current = await db.get<{ id: string; password_hash: string }>('SELECT id, password_hash FROM users WHERE id = ?', req.params.id);
+    const current = await db.get<{ id: string; role: string; password_hash: string }>(
+      'SELECT id, role, password_hash FROM users WHERE id = ?',
+      req.params.id,
+    );
     if (!current) {
       return res.status(404).json({ message: 'User not found' });
+    }
+    if (current.role === 'admin' && req.user?.role !== 'admin') {
+      return res.status(403).json({ message: 'تعديل حساب مدير نظام يتطلب صلاحية المدير العام.' });
     }
 
     let hashedPassword = current.password_hash;
@@ -168,6 +194,7 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
       hashedPassword = await hashPassword(data.password);
     }
 
+    const storedPermissions = data.role === 'admin' || !data.permissions ? null : JSON.stringify(data.permissions);
     await db.run(
       `UPDATE users
        SET name = ?, username = ?, password_hash = ?, role = ?, is_active = ?, phone = ?, permissions = ?
@@ -178,9 +205,17 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
       data.role,
       data.isActive ? 1 : 0,
       data.phone || null,
-      data.permissions ? JSON.stringify(data.permissions) : null,
+      storedPermissions,
       req.params.id,
     );
+
+    upsertUserAuthSnapshot({
+      id: req.params.id,
+      name: data.name,
+      role: data.role as UserRole,
+      isActive: data.isActive,
+      permissions: data.role === 'admin' ? undefined : extractApiPermissions(storedPermissions),
+    });
 
     await audit('user.update', 'user', req.params.id, req.user?.name || 'system', {
       name: data.name,
@@ -188,8 +223,9 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
       role: data.role,
       isActive: data.isActive,
       phone: data.phone,
-      permissions: data.permissions,
+      permissions: data.role === 'admin' ? null : data.permissions,
     });
+    broadcastDataChange('users', 'update');
 
     return res.json({ message: 'User updated successfully' });
   } catch (error: any) {
@@ -198,7 +234,7 @@ router.put('/:id', requirePermission('users:manage'), async (req: AuthedRequest,
 });
 
 // PATCH /users/:id/status
-router.patch('/:id/status', requirePermission('users:manage'), requireAdmin, async (req: AuthedRequest, res) => {
+router.patch('/:id/status', requirePermission('users:manage'), async (req: AuthedRequest, res) => {
   const parsed = z.object({ isActive: z.boolean() }).safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid status payload' });
@@ -206,9 +242,15 @@ router.patch('/:id/status', requirePermission('users:manage'), requireAdmin, asy
 
   try {
     const db = await dbPromise;
-    const current = await db.get<{ id: string; username: string }>('SELECT id, username FROM users WHERE id = ?', req.params.id);
+    const current = await db.get<{ id: string; username: string; name: string; role: string; permissions: string | null }>(
+      'SELECT id, username, name, role, permissions FROM users WHERE id = ?',
+      req.params.id,
+    );
     if (!current) {
       return res.status(404).json({ message: 'User not found' });
+    }
+    if (current.role === 'admin' && req.user?.role !== 'admin') {
+      return res.status(403).json({ message: 'تغيير حالة مدير نظام يتطلب صلاحية المدير العام.' });
     }
 
     if (req.user?.userId === req.params.id && !parsed.data.isActive) {
@@ -216,10 +258,18 @@ router.patch('/:id/status', requirePermission('users:manage'), requireAdmin, asy
     }
 
     await db.run('UPDATE users SET is_active = ? WHERE id = ?', parsed.data.isActive ? 1 : 0, req.params.id);
+    upsertUserAuthSnapshot({
+      id: current.id,
+      name: current.name,
+      role: current.role as UserRole,
+      isActive: parsed.data.isActive,
+      permissions: current.role === 'admin' ? undefined : extractApiPermissions(current.permissions),
+    });
     await audit('user.toggle_status', 'user', req.params.id, req.user?.name || 'system', {
       username: current.username,
       isActive: parsed.data.isActive,
     });
+    broadcastDataChange('users', 'update');
 
     return res.json({ message: 'تم تحديث حالة المستخدم بنجاح', isActive: parsed.data.isActive });
   } catch (error: any) {
@@ -241,7 +291,9 @@ router.delete('/:id', requirePermission('users:manage'), requireAdmin, async (re
     }
 
     await db.run('DELETE FROM users WHERE id = ?', req.params.id);
+    removeUserAuthSnapshot(req.params.id);
     await audit('user.delete', 'user', req.params.id, req.user?.name || 'system', { id: req.params.id });
+    broadcastDataChange('users', 'delete');
     return res.json({ message: 'User deleted successfully' });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });

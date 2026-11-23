@@ -21,9 +21,6 @@ import {
   Search,
   ExternalLink,
   RotateCcw,
-  ShieldCheck,
-  Users,
-  Plus,
   QrCode,
 } from 'lucide-react';
 import QRCode from 'qrcode';
@@ -37,8 +34,6 @@ import {
   restoreDatabaseBackup,
   getOpeningBalances,
   saveOpeningBalances,
-  createShareholder,
-  updateShareholder,
 } from '../lib/storage';
 import {
   api,
@@ -50,10 +45,11 @@ import {
   getServerApiUrl,
   testServerUrl,
 } from '../lib/apiClient';
-import { hasPermission } from '../lib/permissions';
+import { hasPermission, isAdmin } from '../lib/permissions';
 import { scanLanForServer } from '../lib/lanDiscovery';
 import DocumentTemplatesManager from '../components/DocumentTemplatesManager';
 import WhatsappControlCenter from '../components/WhatsappControlCenter';
+import PaymentChannelsManager from '../components/PaymentChannelsManager';
 
 async function fetchNetworkInfo(retries = 2, delayMs = 600) {
   const currentBase = getServerApiUrl();
@@ -152,141 +148,45 @@ export default function Settings() {
   const [obLoading, setObLoading] = useState(false);
   const [obSubmitting, setObSubmitting] = useState(false);
 
-  interface FoundingPartnerRow {
-    id: string;
-    name: string;
-    phone: string;
-    isFounder: boolean;
-    sharePercentage: number;
-    capital: number;
-    notes?: string;
-  }
-
-  const [partners, setPartners] = useState<FoundingPartnerRow[]>([]);
-
-  const loadOpeningBalancesAndPartners = async () => {
+  const loadOpeningBalances = async () => {
     setObLoading(true);
     try {
       if (isApiMode()) {
-        const [backendOb, backendShareholders] = await Promise.allSettled([
-          api.getOpeningBalances(),
-          api.listShareholders(),
-        ]);
-
-        if (backendOb.status === 'fulfilled' && backendOb.value) {
+        const backendOb = await api.getOpeningBalances();
+        if (backendOb) {
           setObData({
-            startingCashBalance: Number(backendOb.value.startingCashBalance || 0),
-            startingReceivables: Number(backendOb.value.startingReceivables || 0),
-            startingPayables: Number(backendOb.value.startingPayables || 0),
-            startingInventoryValue: Number(backendOb.value.startingInventoryValue || 0),
+            startingCashBalance: Number(backendOb.startingCashBalance || 0),
+            startingReceivables: Number(backendOb.startingReceivables || 0),
+            startingPayables: Number(backendOb.startingPayables || 0),
+            startingInventoryValue: Number(backendOb.startingInventoryValue || 0),
           });
-        }
-
-        if (
-          backendShareholders.status === 'fulfilled' &&
-          Array.isArray(backendShareholders.value) &&
-          backendShareholders.value.length > 0
-        ) {
-          setPartners(
-            backendShareholders.value.map((sh: any, index: number) => ({
-              id: sh.id || `partner-${index}`,
-              name: sh.name || '',
-              phone: sh.phone || '',
-              isFounder: sh.isFounder !== false,
-              sharePercentage: Number(sh.sharePercentage || 0),
-              capital: Number(sh.capital || 0),
-              notes: sh.notes || 'شريك تأسيسي',
-            }))
-          );
-        } else {
-          setPartners([
-            {
-              id: 'init-1',
-              name: '',
-              phone: '',
-              isFounder: true,
-              sharePercentage: 100,
-              capital: 0,
-              notes: 'شريك تأسيسي',
-            },
-          ]);
         }
       }
     } catch (e) {
-      console.error('Failed to load opening balances or partners in Settings:', e);
+      console.error('Failed to load opening balances in Settings:', e);
     } finally {
       setObLoading(false);
     }
   };
 
-  const founders = partners.filter((p) => p.isFounder);
-  const investors = partners.filter((p) => !p.isFounder);
-
-  const foundersTotalCapital = founders.reduce((sum, p) => sum + (Number(p.capital) || 0), 0);
-  const foundersTotalShare = Number(
-    founders.reduce((sum, p) => sum + (Number(p.sharePercentage) || 0), 0).toFixed(2)
-  );
-
-  const investorsTotalCapital = investors.reduce((sum, p) => sum + (Number(p.capital) || 0), 0);
-  const totalCompanyCapital = foundersTotalCapital + investorsTotalCapital;
-
-  const addFounderRow = () => {
-    const remainingShare = Math.max(0, Number((100 - foundersTotalShare).toFixed(2)));
-    setPartners([
-      ...partners,
-      {
-        id: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        name: '',
-        phone: '',
-        isFounder: true,
-        sharePercentage: remainingShare,
-        capital: 0,
-        notes: 'شريك أساسي',
-      },
-    ]);
-  };
-
-  const addInvestorRow = () => {
-    setPartners([
-      ...partners,
-      {
-        id: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        name: '',
-        phone: '',
-        isFounder: false,
-        sharePercentage: 20,
-        capital: 0,
-        notes: 'مساهم بالتمويل',
-      },
-    ]);
-  };
-
-  const removePartnerRow = (id: string) => {
-    setPartners(partners.filter((p) => p.id !== id));
-  };
-
-  const updatePartnerField = (id: string, field: keyof FoundingPartnerRow, value: any) => {
-    setPartners(partners.map((p) => (p.id === id ? { ...p, [field]: value } : p)));
-  };
-
   const [searchParams] = useSearchParams();
-  const requestedTab = searchParams.get('tab') as 'company' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger' | null;
-  const [activeTab, setActiveTab] = useState<'company' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger'>(() => {
-    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
+  const requestedTab = searchParams.get('tab') as 'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger' | null;
+  const [activeTab, setActiveTab] = useState<'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger'>(() => {
+    if (requestedTab && ['company', 'channels', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
       return requestedTab;
     }
     return 'company';
   });
 
   useEffect(() => {
-    if (requestedTab && ['company', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
+    if (requestedTab && ['company', 'channels', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
       setActiveTab(requestedTab);
     }
   }, [requestedTab]);
 
   useEffect(() => {
     if (activeTab === 'balances') {
-      void loadOpeningBalancesAndPartners();
+      void loadOpeningBalances();
     }
   }, [activeTab]);
   const [networkInfo, setNetworkInfo] = useState<{
@@ -502,7 +402,9 @@ export default function Settings() {
 
       const res = await apiBridge.checkForUpdates();
       if (res?.error) {
-        setUpdateCheckMsg(`تعذر الفحص: ${res.error}`);
+        const errText = String(res.error);
+        const isOfflineErr = /ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ENOTFOUND/i.test(errText);
+        setUpdateCheckMsg(isOfflineErr ? 'تعذر الفحص: لا يوجد اتصال بالإنترنت حالياً.' : `تعذر الفحص: ${errText}`);
       } else if (res?.supported === false) {
         setUpdateCheckMsg(res?.message || 'الفحص التلقائي يعمل في النسخة المثبتة فقط');
       } else if (res?.version && appVersion && isNewerVersion(res.version, appVersion)) {
@@ -649,40 +551,13 @@ export default function Settings() {
       }
       saveOpeningBalances(obData);
 
-      const validPartners = partners.filter((p) => p.name.trim().length > 0);
-      for (const partner of validPartners) {
-        const payload = {
-          name: partner.name.trim(),
-          phone: partner.phone.trim() || '01000000000',
-          sharePercentage: Number(partner.sharePercentage) || 0,
-          managementFeePercentage: partner.isFounder ? 0 : Math.max(0, 100 - (Number(partner.sharePercentage) || 0)),
-          capital: Number(partner.capital) || 0,
-          currentBalance: 0,
-          joinedDate: new Date().toISOString().slice(0, 10),
-          isFounder: Boolean(partner.isFounder),
-          notes: partner.notes?.trim() || 'شريك تأسيسي / رصيد افتتاحي دفتري',
-          isOpeningBalance: true,
-          affectsTreasury: false,
-        };
-
-        if (isApiMode()) {
-          if (partner.id && !partner.id.startsWith('temp-') && !partner.id.startsWith('init-')) {
-            await api.updateShareholder(partner.id, payload);
-          } else {
-            await api.createShareholder(payload);
-          }
-        } else {
-          await createShareholder(payload);
-        }
-      }
-
       setObSaved(true);
+      showToast('تم حفظ الأرصدة الافتتاحية بنجاح', 'success');
       setTimeout(() => setObSaved(false), 4000);
-      await loadOpeningBalancesAndPartners();
       toggleObCollapsed(true);
     } catch (err: any) {
-      console.error('Failed to save opening balances and partners:', err);
-      window.alert(err?.message || 'حدث خطأ أثناء حفظ الأرصدة والشركاء');
+      console.error('Failed to save opening balances:', err);
+      window.alert(err?.message || 'حدث خطأ أثناء حفظ الأرصدة الافتتاحية');
     } finally {
       setObSubmitting(false);
     }
@@ -716,13 +591,20 @@ export default function Settings() {
 
     const reader = new FileReader();
     reader.onload = async () => {
+      setBackupBusy(true);
       try {
         await restoreDatabaseBackup(String(reader.result || ''));
         showToast('تم استيراد النسخة الاحتياطية بنجاح. ستتم إعادة تحميل النظام.', 'success');
         setTimeout(() => window.location.reload(), 1500);
       } catch (err: any) {
         showToast(err.message || 'تعذر استيراد ملف النسخة الاحتياطية.', 'error');
+      } finally {
+        setBackupBusy(false);
       }
+    };
+    reader.onerror = () => {
+      setBackupBusy(false);
+      showToast('تعذر قراءة ملف النسخة الاحتياطية.', 'error');
     };
     reader.readAsText(file);
   };
@@ -739,12 +621,13 @@ export default function Settings() {
 
   const tabs = [
     { key: 'company' as const, label: 'معلومات الشركة' },
-    { key: 'documents' as const, label: 'قوالب المستندات' },
-    { key: 'whatsapp' as const, label: 'رسائل الواتساب' },
-    ...(user?.role === 'admin' ? [{ key: 'roles' as const, label: 'صلاحيات الأدوار' }] : []),
-    { key: 'network' as const, label: 'اعدادات الشبكة' },
-    { key: 'balances' as const, label: 'الارصدة الافتتاحية' },
     { key: 'backup' as const, label: 'النسخ الاحتياطي' },
+    { key: 'channels' as const, label: 'قنوات الدفع والخزائن' },
+    { key: 'whatsapp' as const, label: 'رسائل الواتساب' },
+    { key: 'network' as const, label: 'اعدادات الشبكة' },
+    { key: 'documents' as const, label: 'قوالب المستندات' },
+    ...(user?.role === 'admin' ? [{ key: 'roles' as const, label: 'صلاحيات الأدوار' }] : []),
+    { key: 'balances' as const, label: 'الارصدة الافتتاحية' },
     { key: 'danger' as const, label: 'منطقة الخطر' },
   ];
 
@@ -1284,9 +1167,9 @@ export default function Settings() {
                   <CheckCircle2 size={22} />
                 </div>
                 <div>
-                  <h3 className="font-black text-slate-800 text-sm">تم حفظ وإغلاق الأرصدة الافتتاحية والشركاء التأسيسيين</h3>
+                  <h3 className="font-black text-slate-800 text-sm">تم حفظ الأرصدة الافتتاحية بنجاح</h3>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    البيانات محفوظة ومعتمدة في النظام. يمكنك إعادة فتح النموذج عند الحاجة للتعديل.
+                    الأرصدة المالية محفوظة ومعتمدة في النظام. يمكنك إعادة فتح النموذج عند الحاجة للتعديل.
                   </p>
                 </div>
               </div>
@@ -1295,7 +1178,7 @@ export default function Settings() {
                 onClick={() => toggleObCollapsed(false)}
                 className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-xs transition-colors cursor-pointer"
               >
-                عرض / تعديل البيانات
+                عرض / تعديل الأرصدة
               </button>
             </div>
           </div>
@@ -1310,15 +1193,15 @@ export default function Settings() {
                   <Landmark size={20} />
                 </div>
                 <div>
-                  <h3 className="font-black text-slate-800 text-base">الأرصدة الافتتاحية والشركاء التأسيسيون</h3>
+                  <h3 className="font-black text-slate-800 text-base">الأرصدة الافتتاحية</h3>
                   <p className="text-xs text-slate-500">
-                    المرجع الموحد لترحيل أرقام الشركة القديمة، أرصدة الخزينة والديون، وحصص ورؤوس أموال الشركاء التأسيسيين بدقة محاسبية 100%
+                    ترحيل الأرصدة المالية الافتتاحية للشركة (الخزينة، العملاء، الموردين، المخزون)
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => void loadOpeningBalancesAndPartners()}
+                onClick={() => void loadOpeningBalances()}
                 disabled={obLoading}
                 className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-blue-300 transition-colors cursor-pointer"
               >
@@ -1327,12 +1210,12 @@ export default function Settings() {
               </button>
             </div>
 
-            {/* Section 1: Financial Opening Balances */}
+            {/* Financial Opening Balances */}
             <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
               <div className="flex items-center gap-2">
                 <Landmark size={18} className="text-emerald-600" />
                 <h4 className="font-bold text-slate-800 text-sm">
-                  1. الأرصدة المالية الافتتاحية (ترحيل أرقام الشركة القديمة)
+                  الأرصدة المالية الافتتاحية (ترحيل أرقام الشركة القديمة)
                 </h4>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1399,362 +1282,26 @@ export default function Settings() {
               </div>
             </div>
 
-            {/* Section 2: Primary Partners (Owners - 100% Equity Pool) */}
-            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck size={18} className="text-blue-600" />
-                  <div>
-                    <h4 className="font-bold text-slate-800 text-sm">
-                      2. الشركاء الأساسيون أصحاب المنشأة (توزيع الملكية 100%)
-                    </h4>
-                    <p className="text-[11px] text-slate-400">
-                      اقتسام صافي أرباح المنشأة وحقوق الملكية بين الشركاء الأساسيين (مجموع حصص الشركاء يجب أن يساوي 100%)
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={addFounderRow}
-                  className="flex items-center gap-1.5 bg-[#1e40af] hover:bg-[#1d4ed8] text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-sm"
-                >
-                  <Plus size={14} />
-                  <span>إضافة شريك أساسي</span>
-                </button>
-              </div>
-
-              {/* KPI Badges for Founders */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
-                  <span className="text-[11px] text-slate-500 block font-bold">إجمالي رأس مال الشركاء الأساسيين</span>
-                  <span className="text-sm font-black text-slate-800 block mt-0.5" dir="ltr">
-                    {foundersTotalCapital.toLocaleString()} جنيه
-                  </span>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
-                  <span className="text-[11px] text-slate-500 block font-bold">مجموع حصص الشركاء الأساسيين</span>
-                  <div className="flex items-center justify-center gap-1.5 mt-0.5">
-                    <span
-                      className={`text-sm font-black ${
-                        foundersTotalShare === 100
-                          ? 'text-emerald-600'
-                          : foundersTotalShare > 100
-                          ? 'text-rose-600'
-                          : 'text-amber-600'
-                      }`}
-                    >
-                      %{foundersTotalShare}
-                    </span>
-                    {foundersTotalShare === 100 ? (
-                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold">
-                        مكتمل 100%
-                      </span>
-                    ) : (
-                      <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">
-                        {foundersTotalShare < 100 ? 'أقل من 100%' : 'أكبر من 100%'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
-                  <span className="text-[11px] text-slate-500 block font-bold">عدد الشركاء الأساسيين</span>
-                  <span className="text-sm font-black text-blue-700 block mt-0.5">
-                    {founders.length} شريك رئيسي
-                  </span>
-                </div>
-              </div>
-
-              {/* Founders List */}
-              <div className="space-y-3 pt-1">
-                {founders.map((partner, index) => (
-                  <div
-                    key={partner.id}
-                    className="bg-white border border-blue-200/60 rounded-xl p-3.5 space-y-3 shadow-2xs"
-                  >
-                    <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                      <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                        <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-[11px]">
-                          {index + 1}
-                        </span>
-                        <span>شريك أساسي #{index + 1}</span>
-                      </span>
-                      {founders.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removePartnerRow(partner.id)}
-                          className="text-slate-400 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
-                          title="حذف هذا الشريك"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                      <div className="md:col-span-2">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">اسم الشريك الأساسي</label>
-                        <input
-                          type="text"
-                          required
-                          value={partner.name}
-                          onChange={(e) => updatePartnerField(partner.id, 'name', e.target.value)}
-                          placeholder="مثال: أحمد محمود"
-                          className="input-ui w-full text-xs font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">رقم الهاتف</label>
-                        <input
-                          type="tel"
-                          value={partner.phone}
-                          onChange={(e) =>
-                            updatePartnerField(partner.id, 'phone', e.target.value.replace(/\D/g, ''))
-                          }
-                          placeholder="010..."
-                          className="input-ui w-full text-xs font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          نسبة الملكية من الشركة %
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          value={partner.sharePercentage === 0 ? '' : partner.sharePercentage}
-                          onChange={(e) =>
-                            updatePartnerField(partner.id, 'sharePercentage', Number(e.target.value))
-                          }
-                          placeholder="مثال: 50"
-                          className="input-ui w-full text-xs font-black text-center text-blue-700 bg-blue-50/50"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          رأس المال التأسيسي الدفتري (جنيه)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={partner.capital === 0 ? '' : partner.capital}
-                          onChange={(e) => updatePartnerField(partner.id, 'capital', Number(e.target.value))}
-                          placeholder="0.00"
-                          className="input-ui w-full text-xs font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          ملاحظات الشريك (اختياري)
-                        </label>
-                        <input
-                          type="text"
-                          value={partner.notes || ''}
-                          onChange={(e) => updatePartnerField(partner.id, 'notes', e.target.value)}
-                          placeholder="شريك أساسي مؤسس..."
-                          className="input-ui w-full text-xs"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Section 3: Silent Investors / Shareholders (Capital ROI Model) */}
-            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-                <div className="flex items-center gap-2">
-                  <Users size={18} className="text-purple-600" />
-                  <div>
-                    <h4 className="font-bold text-slate-800 text-sm">
-                      3. المساهمون بالتمويل والمضاربة (عائد تشغيل رأس المال)
-                    </h4>
-                    <p className="text-[11px] text-slate-400">
-                      مستثمرون برؤوس أموالهم — يحصل كل مساهم على نسبته من أرباح أمواله فقط، والباقي يعود للمنشأة كنسبة إدارة
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={addInvestorRow}
-                  className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-sm"
-                >
-                  <Plus size={14} />
-                  <span>إضافة مساهم تمويل</span>
-                </button>
-              </div>
-
-              {/* Explanatory banner */}
-              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs text-purple-900 space-y-1">
-                <div className="flex items-center gap-2 font-bold text-purple-800">
-                  <ShieldCheck size={16} className="text-purple-600 shrink-0" />
-                  <span>قاعدة حساب أرباح المساهمين (مفصولة تماماً عن نسبة الـ 100% للشركاء):</span>
-                </div>
-                <p className="leading-relaxed text-[11px] text-purple-700 pr-6">
-                  المساهم يدخل برأس مال محدد، ويأخذ نسبته المتفق عليها من عائد تشغيل رأس ماله هو فقط، والمنشأة تحتفظ بالباقي كـ (نسبة إدارة) تضاف لأرباح الشركاء الأساسيين. <strong>لذلك لا تُجمع نسب المساهمين مع حصص الشركاء الأساسيين ولا تنقص من نسبتكم الـ 100%.</strong>
-                </p>
-              </div>
-
-              {/* KPI Badges for Investors */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
-                  <span className="text-[11px] text-slate-500 block font-bold">إجمالي رؤوس أموال المساهمين</span>
-                  <span className="text-sm font-black text-purple-700 block mt-0.5" dir="ltr">
-                    {investorsTotalCapital.toLocaleString()} جنيه
-                  </span>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-3 text-center">
-                  <span className="text-[11px] text-slate-500 block font-bold">عدد المساهمين بالتمويل</span>
-                  <span className="text-sm font-black text-slate-800 block mt-0.5">
-                    {investors.length} مساهم
-                  </span>
-                </div>
-              </div>
-
-              {/* Investors List */}
-              {investors.length === 0 ? (
-                <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl bg-white text-slate-400 text-xs">
-                  لا يوجد مساهمون بالتمويل حالياً. اضغط على "إضافة مساهم تمويل" إذا كان هناك مستثمرون خارجيون.
-                </div>
-              ) : (
-                <div className="space-y-3 pt-1">
-                  {investors.map((investor, index) => {
-                    const investorShare = Number(investor.sharePercentage || 0);
-                    const mgmtFee = Math.max(0, 100 - investorShare);
-                    return (
-                      <div
-                        key={investor.id}
-                        className="bg-white border border-purple-200/60 rounded-xl p-3.5 space-y-3 shadow-2xs"
-                      >
-                        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                          <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                            <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 font-bold flex items-center justify-center text-[11px]">
-                              {index + 1}
-                            </span>
-                            <span>مساهم تمويل #{index + 1}</span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => removePartnerRow(investor.id)}
-                            className="text-slate-400 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
-                            title="حذف هذا المساهم"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-                          <div className="md:col-span-2">
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">اسم المساهم</label>
-                            <input
-                              type="text"
-                              required
-                              value={investor.name}
-                              onChange={(e) => updatePartnerField(investor.id, 'name', e.target.value)}
-                              placeholder="مثال: أحمد علي"
-                              className="input-ui w-full text-xs font-bold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">رقم الهاتف</label>
-                            <input
-                              type="tel"
-                              value={investor.phone}
-                              onChange={(e) =>
-                                updatePartnerField(investor.id, 'phone', e.target.value.replace(/\D/g, ''))
-                              }
-                              placeholder="010..."
-                              className="input-ui w-full text-xs font-bold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                              نسبة ربح المساهم %
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.01"
-                              value={investor.sharePercentage === 0 ? '' : investor.sharePercentage}
-                              onChange={(e) =>
-                                updatePartnerField(investor.id, 'sharePercentage', Number(e.target.value))
-                              }
-                              placeholder="مثال: 20"
-                              className="input-ui w-full text-xs font-black text-center text-purple-700 bg-purple-50/50"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                              نسبة إدارة المنشأة %
-                            </label>
-                            <div className="h-9 flex items-center justify-center bg-slate-100 rounded-xl text-xs font-black text-slate-700 border border-slate-200">
-                              %{mgmtFee}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                              رأس المال المستثمر (جنيه)
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={investor.capital === 0 ? '' : investor.capital}
-                              onChange={(e) => updatePartnerField(investor.id, 'capital', Number(e.target.value))}
-                              placeholder="0.00"
-                              className="input-ui w-full text-xs font-bold text-emerald-700 bg-emerald-50/30"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                              ملاحظات المساهم (اختياري)
-                            </label>
-                            <input
-                              type="text"
-                              value={investor.notes || ''}
-                              onChange={(e) => updatePartnerField(investor.id, 'notes', e.target.value)}
-                              placeholder="مساهم تمويل - عقد مضاربة..."
-                              className="input-ui w-full text-xs"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
             {/* Submit Bar */}
             <div className="flex items-center gap-4 pt-2">
-              {user?.role !== 'manager' ? (
+              {hasPermission(user, 'settings:manage') ? (
                 <button
                   type="submit"
                   disabled={obSubmitting}
                   className="flex items-center gap-2 bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-8 py-3 rounded-xl font-bold text-sm shadow-md transition-all cursor-pointer disabled:opacity-50"
                 >
                   <Save size={18} />
-                  <span>{obSubmitting ? 'جاري الحفظ...' : 'حفظ الأرصدة والشركاء التأسيسيين'}</span>
+                  <span>{obSubmitting ? 'جاري الحفظ...' : 'حفظ الأرصدة الافتتاحية'}</span>
                 </button>
               ) : (
                 <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
-                  حساب المشرف: وضع العرض فقط (لا يمكن تعديل الأرصدة الافتتاحية)
+                  وضع العرض فقط (ليس لديك صلاحية تعديل الإعدادات)
                 </span>
               )}
               {obSaved && (
                 <span className="flex items-center gap-1.5 text-emerald-600 font-black text-sm">
                   <CheckCircle2 size={18} />
-                  <span>تم حفظ الأرصدة والشركاء التأسيسيين بنجاح 100%!</span>
+                  <span>تم حفظ الأرصدة الافتتاحية بنجاح!</span>
                 </span>
               )}
             </div>
@@ -1791,18 +1338,19 @@ export default function Settings() {
                   className="hidden"
                   onChange={handleImportBackup}
                 />
-                {user?.role !== 'manager' ? (
+                {isAdmin(user) ? (
                   <button
                     type="button"
+                    disabled={backupBusy}
                     onClick={() => backupInputRef.current?.click()}
-                    className="flex items-center gap-2 bg-amber-500 text-white px-5 py-2 rounded-lg hover:bg-amber-600 transition-colors text-sm font-bold cursor-pointer"
+                    className="flex items-center gap-2 bg-amber-500 text-white px-5 py-2 rounded-lg hover:bg-amber-600 transition-colors text-sm font-bold cursor-pointer disabled:opacity-50"
                   >
                     <Upload size={15} />
-                    استيراد نسخة احتياطية
+                    {backupBusy ? 'جاري الاستيراد...' : 'استيراد نسخة احتياطية'}
                   </button>
                 ) : (
                   <span className="text-xs font-bold text-slate-400 block pt-1">
-                    غير مصرح للمشرف باستيراد النسخ الاحتياطية
+                    استعادة النسخ الاحتياطية متاحة لمدير النظام فقط
                   </span>
                 )}
               </div>
@@ -1992,6 +1540,8 @@ export default function Settings() {
           </div>
         )}
 
+        {activeTab === 'channels' && <PaymentChannelsManager />}
+
         {activeTab === 'documents' && <DocumentTemplatesManager />}
 
         {activeTab === 'whatsapp' && (
@@ -2014,7 +1564,7 @@ export default function Settings() {
                 منطقة الخطر
               </h3>
               <p className="text-rose-700 text-sm">مسح كامل البيانات سيحذف جميع السجلات نهائيا. لا يمكن التراجع.</p>
-              {user?.role !== 'manager' ? (
+              {isAdmin(user) ? (
                 <button
                   type="button"
                   onClick={() => setShowDeleteConfirm(true)}
@@ -2025,7 +1575,7 @@ export default function Settings() {
                 </button>
               ) : (
                 <span className="text-xs font-bold text-slate-500 block pt-1">
-                  غير مصرح للمشرف بمسح البيانات
+                  مسح جميع البيانات متاح لمدير النظام فقط
                 </span>
               )}
             </div>

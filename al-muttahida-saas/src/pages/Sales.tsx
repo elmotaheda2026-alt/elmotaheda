@@ -3,12 +3,13 @@ import { Printer, Search } from 'lucide-react';
 import { Product, Sale, SalesRep } from '../types';
 import { getProducts, getSales, getSalesReps } from '../lib/storage';
 import { api, isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import { useAuth } from '../context/AuthContext';
 import { DatePicker } from '../components/DatePicker';
-import LegalDocumentsPrintModal from '../components/LegalDocumentsPrintModal';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 import LoadingState from '../components/LoadingState';
+import CurrencyText from '../components/CurrencyText';
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
@@ -75,8 +76,10 @@ export default function Sales() {
     financing: row.financing,
   });
 
-  const loadData = async () => {
-    setIsLoading(true);
+  const loadData = async (silent = false) => {
+    if (!silent) {
+      setIsLoading(true);
+    }
     setLoadError(null);
     try {
       if (isApiMode()) {
@@ -104,6 +107,10 @@ export default function Sales() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useRealtimeSync(['sales', 'payments', 'customers', 'products', 'sales-reps'], () => {
+    void loadData(true);
+  });
 
   const formatCurrency = (amount: number) => formatWholeCurrency(amount, settings.currency);
 
@@ -138,8 +145,6 @@ export default function Sales() {
       }),
     [sales, dateFrom, dateTo, searchQuery, selectedRepId],
   );
-
-  const [saleForPrinting, setSaleForPrinting] = useState<Sale | null>(null);
 
   const saleLineRows = useMemo(
     () =>
@@ -244,88 +249,116 @@ export default function Sales() {
       </div>
 
       {/* Tier 1: Fixed Compact Header & Filters */}
-      <div className="erp-action-bar shrink-0 no-print print:hidden">
-        <div>
-          <h2 className="text-lg font-black text-slate-900">تقرير ربحية المبيعات</h2>
-          <p className="text-xs text-slate-500">
-            متابعة ربح كل صنف حسب العميل والتاريخ، بإجمالي ربح الفترة المحددة.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[200px]">
-            <Search size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="بحث بالعميل / الفاتورة / الصنف..."
-              className="h-9 w-full rounded-xl border border-slate-200 bg-white pr-9 pl-3 text-xs font-medium text-slate-700 outline-none focus:border-blue-500"
-            />
-          </div>
-          {salesReps.length > 0 && (
-            <select
-              value={selectedRepId}
-              onChange={(e) => setSelectedRepId(e.target.value)}
-              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 outline-none focus:border-blue-500"
-            >
-              <option value="all">كل المناديب</option>
-              {salesReps.map((rep) => (
-                <option key={rep.id} value={rep.id}>{rep.name}</option>
-              ))}
-            </select>
-          )}
-          {/* Quick presets */}
-          <div className="flex items-center rounded-xl bg-slate-100 p-0.5 border border-slate-200">
-            <button
-              type="button"
-              onClick={() => { setDateFrom(''); setDateTo(''); }}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${!dateFrom && !dateTo ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              الكل
-            </button>
-            <button
-              type="button"
-              onClick={() => { setDateFrom(currentYearRange.from); setDateTo(currentYearRange.to); }}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${dateFrom === currentYearRange.from && dateTo === currentYearRange.to ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              هذا العام
-            </button>
-            <button
-              type="button"
-              onClick={() => { setDateFrom(currentMonthRange.from); setDateTo(currentMonthRange.to); }}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${dateFrom === currentMonthRange.from && dateTo === currentMonthRange.to ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              هذا الشهر
-            </button>
+      <div className="bg-white border border-slate-200/90 rounded-2xl px-4 py-3 space-y-2.5 shadow-xs shrink-0 no-print print:hidden">
+        {/* Row 1: Title, Search & Print Action */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+            <div className="shrink-0">
+              <h2 className="text-lg font-black text-slate-900 leading-tight">تقرير ربحية المبيعات</h2>
+              <p className="text-[11px] text-slate-500 hidden sm:block">
+                متابعة ربح كل صنف حسب العميل والتاريخ، بإجمالي ربح الفترة المحددة.
+              </p>
+            </div>
+
+            <div className="relative flex-1 min-w-[220px] max-w-sm">
+              <Search size={15} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="بحث بالعميل / الفاتورة / الصنف..."
+                className="input-ui h-9 w-full pr-10 pl-3.5 text-xs font-semibold bg-slate-50/70 hover:bg-white focus:bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 placeholder:text-slate-400"
+              />
+            </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-bold text-slate-500">من:</span>
-            <DatePicker value={dateFrom} onChange={setDateFrom} className="h-9 w-[125px] rounded-xl border-slate-200 text-xs font-bold" />
-            <span className="text-xs font-bold text-slate-500">إلى:</span>
-            <DatePicker value={dateTo} onChange={setDateTo} className="h-9 w-[125px] rounded-xl border-slate-200 text-xs font-bold" />
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 h-9 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-4 text-xs font-bold shadow-xs transition-all active:scale-95 whitespace-nowrap cursor-pointer"
+              title="طباعة تقرير ربحية المبيعات"
+            >
+              <Printer size={15} />
+              <span>طباعة</span>
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="h-9 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors"
-          >
-            مسح الفلاتر
-          </button>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 h-9 rounded-xl bg-[#1e40af] hover:bg-[#1d4ed8] text-white px-3.5 text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
-            title="طباعة تقرير ربحية المبيعات"
-          >
-            <Printer size={15} />
-            <span>طباعة</span>
-          </button>
+        </div>
+
+        {/* Row 2: Period Presets, Sales Rep & Unified Date Range */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Period Presets */}
+            <div className="inline-flex h-9 items-center rounded-xl bg-slate-100/90 p-0.5 border border-slate-200/70">
+              <button
+                type="button"
+                onClick={() => { setDateFrom(''); setDateTo(''); }}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${!dateFrom && !dateTo ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                الكل
+              </button>
+              <button
+                type="button"
+                onClick={() => { setDateFrom(currentYearRange.from); setDateTo(currentYearRange.to); }}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${dateFrom === currentYearRange.from && dateTo === currentYearRange.to ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                هذا العام
+              </button>
+              <button
+                type="button"
+                onClick={() => { setDateFrom(currentMonthRange.from); setDateTo(currentMonthRange.to); }}
+                className={`h-full px-3 text-xs font-bold rounded-lg transition-all whitespace-nowrap cursor-pointer ${dateFrom === currentMonthRange.from && dateTo === currentMonthRange.to ? 'bg-white text-[#1e40af] shadow-2xs' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                هذا الشهر
+              </button>
+            </div>
+
+            {salesReps.length > 0 && (
+              <select
+                value={selectedRepId}
+                onChange={(e) => setSelectedRepId(e.target.value)}
+                className="h-9 px-3 text-xs font-bold rounded-xl border border-slate-200/90 bg-slate-50/70 hover:bg-white focus:bg-white text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition-all cursor-pointer min-w-[135px]"
+              >
+                <option value="all">كل المناديب</option>
+                {salesReps.map((rep) => (
+                  <option key={rep.id} value={rep.id}>{rep.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Unified Date Range Pill */}
+            <div className="flex h-9 items-center gap-1.5 bg-slate-50/70 border border-slate-200/90 rounded-xl px-2.5 text-xs">
+              <span className="text-[11px] font-semibold text-slate-500">الفترة:</span>
+              <DatePicker
+                value={dateFrom}
+                onChange={setDateFrom}
+                className="h-7 w-[112px] rounded-lg border border-slate-200/70 bg-white text-xs font-bold text-slate-700 text-center"
+              />
+              <span className="text-[11px] font-bold text-slate-400">←</span>
+              <DatePicker
+                value={dateTo}
+                onChange={setDateTo}
+                className="h-7 w-[112px] rounded-lg border border-slate-200/70 bg-white text-xs font-bold text-slate-700 text-center"
+              />
+            </div>
+
+            {(dateFrom || dateTo || searchQuery || selectedRepId !== 'all') && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="h-9 px-3 text-xs font-bold text-rose-600 bg-rose-50/70 hover:bg-rose-100/80 rounded-xl transition-colors border border-rose-200/80 whitespace-nowrap cursor-pointer"
+              >
+                مسح الفلاتر
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Tier 2: Fixed Height KPI Metrics Bar */}
-      <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-3 shrink-0 print:grid-cols-3 print:gap-2.5 print:mb-3">
+      <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(220px,1fr))] shrink-0 print:grid-cols-3 print:gap-2.5 print:mb-3">
         <SalesMetric
           label="صافي المبيعات"
           value={formatCurrency(salesSummary.revenue)}
@@ -367,14 +400,6 @@ export default function Sales() {
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className="text-[11px] font-mono text-slate-500">{formatDateDisplay(row.date)}</span>
-                    <button
-                      type="button"
-                      onClick={() => setSaleForPrinting(row.sale)}
-                      className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"
-                      title="طباعة العقد"
-                    >
-                      <Printer size={13} />
-                    </button>
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-1.5 bg-slate-50 rounded-xl p-2 text-center text-xs border border-slate-100">
@@ -407,7 +432,6 @@ export default function Sales() {
                 <TableHead>صافي البيع</TableHead>
                 <TableHead>التكلفة</TableHead>
                 <TableHead>الربح</TableHead>
-                <th className="px-3 py-2.5 text-center text-xs font-black text-slate-700 no-print print:hidden">إجراء</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 print:divide-slate-200">
@@ -435,23 +459,13 @@ export default function Sales() {
                   <td className={`px-3.5 py-2.5 text-xs md:text-sm font-black font-mono print:px-2 print:py-1.5 print:text-[10px] ${row.profit >= 0 ? 'text-sky-700' : 'text-rose-700'}`}>
                     {formatCurrency(row.profit)}
                   </td>
-                  <td className="px-3 py-2.5 text-center no-print print:hidden">
-                    <button
-                      type="button"
-                      onClick={() => setSaleForPrinting(row.sale)}
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
-                      title="طباعة العقد والمستندات"
-                    >
-                      <Printer size={14} />
-                    </button>
-                  </td>
                 </tr>
               ))}
               {isLoading ? (
-                <LoadingState variant="table" colSpan={8} />
+                <LoadingState variant="table" colSpan={7} />
               ) : loadError ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-16 text-center text-xs font-bold text-rose-600">
+                  <td colSpan={7} className="px-4 py-16 text-center text-xs font-bold text-rose-600">
                     <div className="flex flex-col items-center justify-center min-h-[200px] gap-2">
                       <p className="text-sm font-bold text-rose-700">{loadError}</p>
                       <button
@@ -465,7 +479,7 @@ export default function Sales() {
                 </tr>
               ) : saleLineRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-16 text-center text-xs font-bold text-slate-400">
+                  <td colSpan={7} className="px-4 py-16 text-center text-xs font-bold text-slate-400">
                     <div className="flex flex-col items-center justify-center min-h-[220px] gap-2">
                       <p className="text-sm font-bold text-slate-700">لا توجد مبيعات مطابقة للفترة المحددة</p>
                       {(dateFrom || dateTo || searchQuery || selectedRepId !== 'all') && (
@@ -494,14 +508,6 @@ export default function Sales() {
           <span className="font-bold text-slate-700">صافي الربح الإجمالي: <span className={salesSummary.profit >= 0 ? 'text-sky-700 font-extrabold' : 'text-rose-700 font-extrabold'}>{formatCurrency(salesSummary.profit)}</span></span>
         </div>
       </div>
-
-      {saleForPrinting && (
-        <LegalDocumentsPrintModal
-          isOpen={!!saleForPrinting}
-          onClose={() => setSaleForPrinting(null)}
-          sale={saleForPrinting}
-        />
-      )}
     </div>
   );
 }
@@ -531,7 +537,7 @@ function SalesMetric({
   return (
     <div className={`rounded-xl border p-3.5 shadow-2xs print:p-2.5 print:rounded-lg ${toneClass}`}>
       <p className="text-xs font-bold opacity-75 print:text-[10px]">{label}</p>
-      <p className="mt-1 text-xl font-black print:text-sm print:mt-0.5 tabular-nums">{value}</p>
+      <p className="mt-1 text-xl font-black print:text-sm print:mt-0.5 tabular-nums"><CurrencyText value={value} /></p>
       {subtitle && <p className="mt-0.5 text-[10px] font-semibold opacity-80">{subtitle}</p>}
     </div>
   );

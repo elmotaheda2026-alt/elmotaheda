@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
-import { hasPermission } from '../permissions.js';
+import { getLiveUserAuth, hasPermission, validPermissions } from '../permissions.js';
 import { Permission, UserRole } from '../types.js';
 
 export interface AuthedRequest extends Request {
@@ -9,22 +9,6 @@ export interface AuthedRequest extends Request {
 }
 
 const validRoles: UserRole[] = ['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager'];
-const validPermissions: Permission[] = [
-  'sales:read',
-  'sales:write',
-  'sales:reschedule',
-  'payments:read',
-  'payments:write',
-  'payments:reverse',
-  'reports:read',
-  'closing:write',
-  'users:manage',
-  'inventory:manage',
-  'purchases:manage',
-  'settings:manage',
-  'shareholders:manage',
-  'notifications:read',
-];
 
 function isUserRole(role: unknown): role is UserRole {
   return typeof role === 'string' && validRoles.includes(role as UserRole);
@@ -58,6 +42,20 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
       || !isPermissionArray(payload.permissions)
     ) {
       return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const live = getLiveUserAuth(payload.userId);
+    if (live.loaded) {
+      if (!live.user || !live.user.isActive) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+      req.user = {
+        userId: live.user.id,
+        role: live.user.role,
+        name: live.user.name,
+        permissions: live.user.role === 'admin' ? undefined : live.user.permissions,
+      };
+      return next();
     }
 
     req.user = payload;

@@ -188,6 +188,7 @@ export async function addShareholderTransaction(data: Omit<ShareholderTransactio
       referenceType: 'other',
       description: `${data.description} - مساهم: ${shareholder.name}`,
       date: newTx.date,
+      channel: data.channel || 'cash',
       createdBy: data.createdBy,
       createdAt: newTx.createdAt
     };

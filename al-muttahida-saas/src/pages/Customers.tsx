@@ -6,7 +6,7 @@ import {
   Grid, List, TrendingUp, UserCheck, Coins, Eye
 } from 'lucide-react';
 import { Customer, Guarantor } from '../types';
-import { getCustomers, createCustomer, updateCustomer, toggleCustomerSued, deleteCustomer, getSales, syncSales } from '../lib/storage';
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer, getSales, syncSales } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
@@ -15,7 +15,7 @@ import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
 import { useRealtimeSync } from '../lib/realtimeSync';
 
-const CUSTOMER_RENDER_LIMIT = 100;
+const CUSTOMER_RENDER_LIMIT = 40;
 const SEARCH_MODAL_LIMIT = 50;
 
 const initialGuarantor: Guarantor = {
@@ -223,7 +223,10 @@ export default function Customers() {
   });
 
   useEffect(() => {
-    searchInputRef.current?.focus();
+    const raf = requestAnimationFrame(() => {
+      searchInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(raf);
   }, []);
 
   useEffect(() => {
@@ -327,56 +330,26 @@ export default function Customers() {
     setError(null);
   };
 
-  const handleToggleSued = async (customer: Customer) => {
-    const nextState = !customer.isSued;
-    const isConfirmed = await confirmDialog({
-      title: nextState ? 'تحويل للشئون القانونية' : 'إلغاء الإحالة القضائية',
-      message: nextState
-        ? `هل أنت متأكد من تحويل العميل "${customer.name}" للشئون القانونية (النزاعات)؟`
-        : `هل أنت متأكد من إلغاء تحويل العميل "${customer.name}" من الشئون القانونية؟`,
-      confirmText: nextState ? 'تحويل للقضاء' : 'إلغاء النزاع',
-      type: nextState ? 'warning' : 'info',
-    });
-    if (!isConfirmed) return;
+  const [customerIdsWithActiveSales, setCustomerIdsWithActiveSales] = useState<{
+    idSet: Set<string>;
+    nameSet: Set<string>;
+  }>(() => ({ idSet: new Set(), nameSet: new Set() }));
 
-    const now = new Date().toISOString();
-    // Optimistic update
-    setCustomers(prev => prev.map(c =>
-      c.id === customer.id
-        ? { ...c, isSued: nextState, suedDate: nextState ? (c.suedDate || now) : undefined, updatedAt: now }
-        : c
-    ));
-
-    try {
-      if (isApiMode()) {
-        await api.toggleCustomerSued(customer.id, nextState, nextState ? now : undefined);
-      } else {
-        await toggleCustomerSued(customer.id, nextState, nextState ? now : undefined);
+  useEffect(() => {
+    // Compute active-sales lookup asynchronously after initial paint so JSON.parse(almuttahida_sales) never blocks opening Customers
+    const timer = window.setTimeout(() => {
+      const allSales = getSales();
+      const idSet = new Set<string>();
+      const nameSet = new Set<string>();
+      for (const s of allSales) {
+        if (s.status !== 'cancelled') {
+          if (s.customerId) idSet.add(s.customerId);
+          if (s.customerName) nameSet.add(s.customerName.trim());
+        }
       }
-      await loadCustomers();
-      showToast(nextState ? 'تم تحويل العميل للشئون القانونية بنجاح' : 'تم إلغاء النزاع عن العميل', 'success');
-    } catch (err: any) {
-      // Rollback on failure
-      setCustomers(prev => prev.map(c =>
-        c.id === customer.id
-          ? { ...c, isSued: customer.isSued, suedDate: customer.suedDate, updatedAt: customer.updatedAt }
-          : c
-      ));
-      showToast(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.', 'error');
-    }
-  };
-
-  const customerIdsWithActiveSales = useMemo(() => {
-    const allSales = getSales();
-    const idSet = new Set<string>();
-    const nameSet = new Set<string>();
-    for (const s of allSales) {
-      if (s.status !== 'cancelled') {
-        if (s.customerId) idSet.add(s.customerId);
-        if (s.customerName) nameSet.add(s.customerName.trim());
-      }
-    }
-    return { idSet, nameSet };
+      setCustomerIdsWithActiveSales({ idSet, nameSet });
+    }, 120);
+    return () => window.clearTimeout(timer);
   }, [customers]);
 
   const handleDelete = async (id: string) => {
@@ -827,22 +800,13 @@ export default function Customers() {
 
                     <div className="flex items-center gap-1">
                       {canModify && (
-                        <>
-                          <button
-                            onClick={() => void handleToggleSued(customer)}
-                            className={`p-1.5 rounded-lg transition-colors ${customer.isSued ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'}`}
-                            title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء'}
-                          >
-                            <Gavel size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleEdit(customer)}
-                            className="p-1.5 text-blue-600 bg-blue-50 rounded-lg transition-colors"
-                            title="تعديل"
-                          >
-                            <Edit size={14} />
-                          </button>
-                        </>
+                        <button
+                          onClick={() => handleEdit(customer)}
+                          className="p-1.5 text-blue-600 bg-blue-50 rounded-lg transition-colors"
+                          title="تعديل"
+                        >
+                          <Edit size={14} />
+                        </button>
                       )}
                       {canDelete && (
                         <button
@@ -923,22 +887,13 @@ export default function Customers() {
                       <td className="py-2.5 px-4">
                         <div className="erp-icon-actions">
                           {canModify && (
-                            <>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); void handleToggleSued(customer); }}
-                                className={`p-1.5 rounded-md transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                                title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
-                              >
-                                <Gavel size={15} />
-                              </button>
-                              <button
-                                onClick={() => handleEdit(customer)}
-                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                                title="تعديل"
-                              >
-                                <Edit size={15} />
-                              </button>
-                            </>
+                            <button
+                              onClick={() => handleEdit(customer)}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                              title="تعديل"
+                            >
+                              <Edit size={15} />
+                            </button>
                           )}
                           {canDelete && (
                             <button
@@ -1051,22 +1006,13 @@ export default function Customers() {
                     {/* Actions Dropdown / Icons */}
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                       {canModify && (
-                        <>
-                          <button
-                            onClick={() => handleToggleSued(customer)}
-                            className={`p-1.5 rounded-lg transition-colors ${customer.isSued ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'}`}
-                            title={customer.isSued ? 'إلغاء التحويل للقضاء' : 'تحويل للقضاء / الشؤون القانونية'}
-                          >
-                            <Gavel size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleEdit(customer)}
-                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
-                            title="تعديل"
-                          >
-                            <Edit size={14} />
-                          </button>
-                        </>
+                        <button
+                          onClick={() => handleEdit(customer)}
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                          title="تعديل"
+                        >
+                          <Edit size={14} />
+                        </button>
                       )}
                       {canDelete && (
                         <button

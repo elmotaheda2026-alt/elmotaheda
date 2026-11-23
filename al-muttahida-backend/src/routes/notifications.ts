@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { hasPermission } from '../permissions.js';
 import { uid, formatDate } from '../utils.js';
 
@@ -11,6 +11,7 @@ router.use(requireAuth);
 function canViewNotification(user: AuthedRequest['user'], row: { title?: string; message?: string }): boolean {
   if (!user) return false;
   if (user.role === 'admin') return true;
+  if (!hasPermission(user.role, 'notifications:read', user.permissions)) return false;
 
   const text = `${row.title || ''} ${row.message || ''}`;
     if (text.includes('حركة شريك') || text.includes('مساهم') || text.includes('تسوية أرباح') || text.includes('رأس المال')) {
@@ -47,7 +48,9 @@ function canViewNotification(user: AuthedRequest['user'], row: { title?: string;
     router.get('/', async (req: AuthedRequest, res) => {
       try {
         const db = await dbPromise;
-        const rows = await db.all('SELECT * FROM notifications ORDER BY created_at DESC');
+        const rawLimit = Number(req.query.limit);
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 300) : 150;
+        const rows = await db.all('SELECT TOP (?) * FROM notifications ORDER BY created_at DESC', limit);
         const mapped = rows
           .filter((row: any) => canViewNotification(req.user, row))
           .map((row: any) => ({
@@ -65,7 +68,7 @@ function canViewNotification(user: AuthedRequest['user'], row: { title?: string;
     });
 
     // POST /notifications (usually created by system triggers)
-    router.post('/', async (req: AuthedRequest, res) => {
+    router.post('/', requireAnyPermission('sales:write', 'payments:write', 'settings:manage'), async (req: AuthedRequest, res) => {
       const parsed = notificationSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ message: 'Invalid notification payload', errors: parsed.error.format() });
@@ -93,7 +96,7 @@ function canViewNotification(user: AuthedRequest['user'], row: { title?: string;
     });
 
     // PUT /notifications/read-all
-    router.put('/read-all', async (_req, res) => {
+    router.put('/read-all', requirePermission('notifications:read'), async (_req, res) => {
       try {
         const db = await dbPromise;
         await db.run('UPDATE notifications SET is_read = 1');
@@ -104,7 +107,7 @@ function canViewNotification(user: AuthedRequest['user'], row: { title?: string;
     });
 
     // PUT /notifications/:id/read
-    router.put('/:id/read', async (req, res) => {
+    router.put('/:id/read', requirePermission('notifications:read'), async (req, res) => {
       try {
         const db = await dbPromise;
         const existing = await db.get('SELECT id FROM notifications WHERE id = ?', req.params.id);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput, isPeriodClosed } from '../utils.js';
 import { createSystemNotification } from '../financialNotifications.js';
@@ -219,7 +219,7 @@ async function undoLinkedAutoPurchases(txDb: any, linkedPurchases: LinkedPurchas
 async function nextReceiptNumber(txDb: any): Promise<string> {
   const receiptRow = await txDb.get(
     `SELECT TOP 1 receipt_number
-     FROM payments
+     FROM payments WITH (UPDLOCK, HOLDLOCK)
      WHERE receipt_number LIKE 'RCPT-%'
        AND TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) IS NOT NULL
      ORDER BY TRY_CONVERT(INT, SUBSTRING(receipt_number, 6, 32)) DESC`,
@@ -528,7 +528,7 @@ async function getMappedSale(id: string) {
   return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
 }
 
-router.get('/', requirePermission('sales:read'), async (req, res) => {
+router.get('/', requireAnyPermission('sales:read', 'payments:read', 'reports:read'), async (req, res) => {
   try {
     const db = await dbPromise;
     const includeItems = String(req.query.includeItems) === 'true';
@@ -563,7 +563,7 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
       SELECT s.*${countSelect}
       FROM sales s
       ${where}
-      ORDER BY s.created_at DESC
+      ORDER BY COALESCE(TRY_CONVERT(datetime2, s.created_at), TRY_CONVERT(datetime2, s.date), TRY_CONVERT(datetime2, '1900-01-01')) DESC, s.id DESC
     `;
 
     const rows = await db.all<SaleRow & { total_count_metadata?: number }>(
@@ -626,7 +626,7 @@ router.get('/', requirePermission('sales:read'), async (req, res) => {
   }
 });
 
-router.get('/collection-due', requirePermission('sales:read'), async (req, res) => {
+router.get('/collection-due', requireAnyPermission('sales:read', 'payments:read'), async (req, res) => {
   try {
     const data = await getCollectionDues({
       from: typeof req.query.from === 'string' ? req.query.from : undefined,
@@ -674,7 +674,7 @@ router.get('/next-invoice-number', requirePermission('sales:read'), async (_req,
   }
 });
 
-router.get('/:id', requirePermission('sales:read'), async (req, res) => {
+router.get('/:id', requireAnyPermission('sales:read', 'payments:read', 'reports:read'), async (req, res) => {
   try {
     const sale = await getMappedSale(req.params.id);
     if (!sale) {
@@ -848,6 +848,13 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
     }
 
     await db.withTransaction(async (txDb) => {
+      const lockedSale = await txDb.get(
+        'SELECT paid, locked FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        req.params.id,
+      );
+      if (!lockedSale || Number(lockedSale.paid || 0) > 0 || lockedSale.locked === 1 || lockedSale.locked === true) {
+        throw Object.assign(new Error('Cannot edit a sale that has payments or is locked'), { statusCode: 409 });
+      }
       if (data.replaceAutoPurchases && linkedPurchases.length > 0) {
         await undoLinkedAutoPurchases(txDb, linkedPurchases, now);
       }
@@ -974,6 +981,13 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
     let linkedPurchaseIds: string[] = [];
 
     await db.withTransaction(async (txDb) => {
+      const lockedSale = await txDb.get(
+        'SELECT paid, locked FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        req.params.id,
+      );
+      if (!lockedSale || Number(lockedSale.paid || 0) > 0 || lockedSale.locked === 1 || lockedSale.locked === true) {
+        throw Object.assign(new Error('لا يمكن حذف تعاقد تم تحصيل مدفوعات عليه'), { statusCode: 409 });
+      }
       for (const item of oldItems) {
         await txDb.run(
           `UPDATE products
@@ -1460,15 +1474,15 @@ const handleDeferOrPostpone = async (req: AuthedRequest, res: any) => {
   }
 };
 
-// Route aliases: accept POST and PUT on all defer and postpone endpoints (Admin only)
-router.post('/:id/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.put('/:id/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.post('/:id/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.put('/:id/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.post('/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.put('/defer-installment', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.post('/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.put('/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+// Route aliases: accept POST and PUT on all defer and postpone endpoints
+router.post('/:id/defer-installment', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.put('/:id/defer-installment', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.post('/:id/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.put('/:id/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.post('/defer-installment', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.put('/defer-installment', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.post('/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.put('/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
 
 const rescheduleSchema = z.object({
   newInstallmentCount: z.number().int().min(1).max(120),
@@ -1478,7 +1492,7 @@ const rescheduleSchema = z.object({
 });
 
 // POST /sales/:id/reschedule — Safely reschedule remaining unpaid balance without touching paid installments or cash receipts
-router.post('/:id/reschedule', requirePermission('sales:reschedule'), requireAdmin, async (req: AuthedRequest, res) => {
+router.post('/:id/reschedule', requirePermission('sales:reschedule'), async (req: AuthedRequest, res) => {
   const parsed = rescheduleSchema.safeParse(req.body || {});
   if (!parsed.success) {
     return res.status(400).json({ message: 'بيانات إعادة الجدولة غير صالحة', errors: parsed.error.format() });
@@ -1639,14 +1653,17 @@ router.post('/:id/reschedule', requirePermission('sales:reschedule'), requireAdm
       await txDb.run(
         `INSERT INTO reschedule_requests (
           id, sale_id, customer_id, reason, status, old_installment_months, new_installment_months,
+          paid_before_reschedule, extra_interest_amount,
           requested_by, requested_at, reviewed_by, reviewed_at
-        ) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?)`,
         uid(),
         sale.id,
         sale.customer_id,
         reason.trim() || 'إعادة جدولة المتبقي من العقد',
         oldMonths,
         newTotalMonths,
+        roundMoney(Number(sale.paid || 0)),
+        extraInterestAmount,
         req.user?.name || 'system',
         now,
         req.user?.name || 'system',
@@ -1688,13 +1705,13 @@ router.post('/:id/reschedule', requirePermission('sales:reschedule'), requireAdm
     return res.status(500).json({ message: error.message || 'Database error' });
   }
 });
-router.post('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.put('/:id/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.post('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
-router.put('/installments/postpone', requirePermission('sales:write'), requireAdmin, handleDeferOrPostpone);
+router.post('/:id/installments/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.put('/:id/installments/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.post('/installments/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
+router.put('/installments/postpone', requirePermission('sales:reschedule'), handleDeferOrPostpone);
 
 // POST /sales/:id/undo-defer-installment — Revert an installment deferral cleanly
-router.post('/:id/undo-defer-installment', requirePermission('sales:write'), requireAdmin, async (req: AuthedRequest, res) => {
+router.post('/:id/undo-defer-installment', requirePermission('sales:reschedule'), async (req: AuthedRequest, res) => {
   const installmentId = String(req.body?.installmentId || '').trim();
   const saleId = String(req.params.id || '').trim();
   if (!saleId || !installmentId) {
@@ -1913,8 +1930,8 @@ const handleUpdateInstallmentNote = async (req: any, res: any) => {
   }
 };
 
-router.patch('/:id/note', handleUpdateInstallmentNote);
-router.post('/:id/note', handleUpdateInstallmentNote);
+router.patch('/:id/note', requireAnyPermission('sales:write', 'payments:write'), handleUpdateInstallmentNote);
+router.post('/:id/note', requireAnyPermission('sales:write', 'payments:write'), handleUpdateInstallmentNote);
 
 // Update or clear a pinned collection follow-up note on the entire sale/invoice (persists until invoice is paid off)
 const handleUpdateSaleCollectionNote = async (req: any, res: any) => {
@@ -1939,8 +1956,8 @@ const handleUpdateSaleCollectionNote = async (req: any, res: any) => {
   }
 };
 
-router.patch('/:id/collection-note', handleUpdateSaleCollectionNote);
-router.post('/:id/collection-note', handleUpdateSaleCollectionNote);
+router.patch('/:id/collection-note', requireAnyPermission('sales:write', 'payments:write'), handleUpdateSaleCollectionNote);
+router.post('/:id/collection-note', requireAnyPermission('sales:write', 'payments:write'), handleUpdateSaleCollectionNote);
 
 export default router;
 

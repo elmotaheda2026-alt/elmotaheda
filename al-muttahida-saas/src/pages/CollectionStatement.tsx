@@ -10,6 +10,7 @@ import { formatDateDisplay } from '../lib/dateUtils';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
 import LoadingState from '../components/LoadingState';
+import CurrencyText from '../components/CurrencyText';
 import { useRealtimeSync } from '../lib/realtimeSync';
 
 interface CollectionInvoiceView {
@@ -43,6 +44,7 @@ interface DueCustomerRow {
   customerNumber: string;
   installmentId?: string;
   installmentLabel: string;
+  totalInstallments?: number;
   dueDate: string;
   installmentAmount: number;
   paidAmount?: number;
@@ -654,6 +656,7 @@ export default function CollectionStatement() {
           customerAddress: row.customerAddress,
           customerNumber: customerMap.get(row.customerId)?.customerNumber || '',
           installmentLabel: schedule.label,
+          totalInstallments: row.schedules.length,
           dueDate: toISODateOnly(schedule.dueDate),
           installmentAmount: schedule.amount,
           paidAmount: schedule.paidAmount,
@@ -2424,7 +2427,15 @@ export default function CollectionStatement() {
                 const firstRow = group[0];
                 const activeGuarantors = firstRow.guarantors.filter(g => g && g.name);
                 const lastPayment = firstRow.lastPaymentDate ? formatDateDisplay(firstRow.lastPaymentDate) : 'لا يوجد سداد سابق';
-                const dueDateStr = group.map(r => `${r.installmentLabel} (${formatDateDisplay(r.dueDate)})`).join(' ، ');
+                const dueDateStr = group
+                  .map((r) => {
+                    const totalInst =
+                      r.totalInstallments ||
+                      rows.find((row) => row.saleId === r.saleId)?.schedules.length ||
+                      0;
+                    return `${r.installmentLabel}${totalInst > 0 ? ` من ${totalInst}` : ''} (${formatDateDisplay(r.dueDate)})`;
+                  })
+                  .join(' ، ');
 
                 return (
                   <div key={idx} className="due-card">
@@ -2660,7 +2671,7 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone: 
   return (
     <div className={`rounded-xl border px-5 py-4 shadow-sm ${toneClass}`}>
       <p className="text-sm font-medium opacity-80">{label}</p>
-      <p className="mt-1 font-bold text-2xl">{value}</p>
+      <p className="mt-1 font-bold text-2xl"><CurrencyText value={value} /></p>
     </div>
   );
 }
@@ -2683,7 +2694,7 @@ function SmallStat({
   return (
     <div className={`rounded-xl px-4 py-3 text-center ${toneClass}`}>
       <p className="text-sm opacity-80 font-medium mb-1">{label}</p>
-      <p className="font-bold text-base">{value}</p>
+      <p className="font-bold text-base"><CurrencyText value={value} /></p>
     </div>
   );
 }

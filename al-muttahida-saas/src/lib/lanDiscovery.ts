@@ -21,43 +21,45 @@ export async function scanLanForServer(port = 4000, timeoutMs = 800): Promise<st
   }
 
   const candidateSubnets = ['192.168.1', '192.168.0', '192.168.100', '10.0.0'];
+  const BATCH_SIZE = 25;
 
-  // Probe candidates in parallel batches
+  // Probe candidates in bounded concurrency batches to avoid saturating browser socket limits
   for (const subnet of candidateSubnets) {
-    const promises: Array<Promise<string | null>> = [];
+    for (let start = 1; start <= 254; start += BATCH_SIZE) {
+      const batchPromises: Array<Promise<string | null>> = [];
+      const end = Math.min(254, start + BATCH_SIZE - 1);
 
-    for (let i = 1; i <= 254; i++) {
-      const targetIp = `${subnet}.${i}`;
-      const url = `http://${targetIp}:${port}/health`;
+      for (let i = start; i <= end; i++) {
+        const targetIp = `${subnet}.${i}`;
+        const url = `http://${targetIp}:${port}/health`;
 
-      const probePromise = (async (): Promise<string | null> => {
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-          const res = await fetch(url, { signal: controller.signal });
-          clearTimeout(id);
-          if (res.ok) {
-            const data = await res.json();
-            if (data?.service === 'al-muttahida-backend' || data?.ok === true) {
-              return `http://${targetIp}:${port}`;
+        batchPromises.push(
+          (async (): Promise<string | null> => {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+              const res = await fetch(url, { signal: controller.signal });
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.service === 'al-muttahida-backend' || data?.ok === true) {
+                  return `http://${targetIp}:${port}`;
+                }
+              }
+            } catch {
+              // Timeout or connection refused
+            } finally {
+              clearTimeout(id);
             }
-          }
-        } catch {
-          // Timeout or connection refused
-        } finally {
-          clearTimeout(id);
-        }
-        return null;
-      })();
+            return null;
+          })(),
+        );
+      }
 
-      promises.push(probePromise);
-    }
-
-    const results = await Promise.all(promises);
-    const found = results.find((res) => res !== null);
-    if (found) {
-      return found;
+      const results = await Promise.all(batchPromises);
+      const found = results.find((res) => res !== null);
+      if (found) {
+        return found;
+      }
     }
   }
 

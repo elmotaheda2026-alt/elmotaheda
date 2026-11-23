@@ -11,9 +11,10 @@ import rateLimit from 'express-rate-limit';
 import { requestLogger } from './middleware/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import jwt from 'jsonwebtoken';
-import { subscribeSseClient, broadcastDataChange } from './realtime.js';
+import { subscribeSseClient, broadcastDataChange, initRealtimeSqlSync, stopRealtimeSqlSync } from './realtime.js';
 import { dbPromise, initDb, mssqlPool } from './db.js';
-import { setRolePermissions } from './permissions.js';
+import { extractApiPermissions, setRolePermissions, setUserAuthSnapshot } from './permissions.js';
+import type { UserRole } from './types.js';
 import authRoutes from './routes/auth.js';
 import salesRoutes from './routes/sales.js';
 import paymentRoutes from './routes/payments.js';
@@ -38,6 +39,7 @@ import { startAutoBackupScheduler } from './autoBackupService.js';
 
 async function bootstrap() {
   const app = express();
+  app.set('etag', false);
   const allowedOrigins = (process.env.CORS_ORIGIN || '')
     .split(',')
     .map((o) => o.trim())
@@ -79,7 +81,10 @@ async function bootstrap() {
       credentials: true,
     })
   );
-  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  }));
   app.use(
     rateLimit({
       windowMs: 60 * 1000, // 1 minute
@@ -94,8 +99,12 @@ async function bootstrap() {
       message: { error: 'تم إرسال عدد كبير جداً من الطلبات، يرجى الانتظار لحظة ثم المحاولة.' },
     })
   );
-  app.use(express.json({ limit: '100mb' }));
-  app.use(morgan('dev'));
+  app.use('/settings/restore-backup', express.json({ limit: '200mb' }));
+  app.use('/api/settings/restore-backup', express.json({ limit: '200mb' }));
+  app.use(express.json({ limit: '15mb' }));
+  app.use(morgan('dev', {
+    skip: (req) => req.path === '/events' || req.path === '/api/events',
+  }));
   // Request logging
   app.use(requestLogger);
 
@@ -230,6 +239,7 @@ async function bootstrap() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     subscribeSseClient(req, res);
     return undefined;
   };
@@ -274,6 +284,13 @@ async function bootstrap() {
       } else if (p.startsWith('/closing')) {
         broadcastDataChange('payments', method);
         broadcastDataChange('sales', method);
+      } else if (p.startsWith('/collection-tasks') || p.startsWith('/dues')) {
+        broadcastDataChange('sales', method);
+        broadcastDataChange('customers', method);
+      } else if (p.startsWith('/sales-reps')) {
+        broadcastDataChange('sales-reps', method);
+      } else if (p.startsWith('/users')) {
+        broadcastDataChange('users', method);
       } else if (p.startsWith('/settings')) {
         broadcastDataChange('settings', method);
       }
@@ -378,14 +395,33 @@ async function bootstrap() {
     try {
       const db = await dbPromise;
       const col = await db.get<any>(`SELECT COL_LENGTH('settings', 'role_permissions_json') AS len`);
-      if (!col?.len) return;
-      const row = await db.get<{ role_permissions_json?: string | null }>('SELECT TOP 1 role_permissions_json FROM settings');
-      if (row?.role_permissions_json) {
-        const parsed = JSON.parse(row.role_permissions_json);
-        if (parsed && typeof parsed === 'object') {
-          setRolePermissions(parsed);
+      if (col?.len) {
+        const row = await db.get<{ role_permissions_json?: string | null }>('SELECT TOP 1 role_permissions_json FROM settings');
+        if (row?.role_permissions_json) {
+          const parsed = JSON.parse(row.role_permissions_json);
+          if (parsed && typeof parsed === 'object') {
+            setRolePermissions(parsed);
+          }
         }
       }
+
+      const users = await db.all<{
+        id: string;
+        name: string;
+        role: UserRole;
+        is_active: number | boolean;
+        permissions: string | null;
+      }>('SELECT id, name, role, is_active, permissions FROM users');
+
+      setUserAuthSnapshot(
+        users.map((u) => ({
+          id: u.id,
+          name: u.name,
+          role: u.role,
+          isActive: u.is_active === 1 || u.is_active === true,
+          permissions: u.role === 'admin' ? undefined : extractApiPermissions(u.permissions),
+        }))
+      );
     } catch {
       // Ignore startup role permission sync errors
     }
@@ -396,6 +432,7 @@ async function bootstrap() {
   ensureDbInitialized().then((connected) => {
     if (connected) {
       void syncRolePermissionsFromDb();
+      void dbPromise.then((db) => initRealtimeSqlSync(db)).catch(() => {});
     }
     if (!connected && !dbRetryTimer) {
       dbRetryTimer = setInterval(() => {
@@ -409,6 +446,7 @@ async function bootstrap() {
         void ensureDbInitialized().then((ok) => {
           if (ok) {
             void syncRolePermissionsFromDb();
+            void dbPromise.then((db) => initRealtimeSqlSync(db)).catch(() => {});
           }
           if (ok && dbRetryTimer) {
             clearInterval(dbRetryTimer);
@@ -423,6 +461,7 @@ async function bootstrap() {
   const gracefulShutdown = async (signal: string) => {
     // eslint-disable-next-line no-console
     console.log(`[Backend] Received ${signal}. Closing MSSQL connection pool and exiting cleanly...`);
+    stopRealtimeSqlSync();
     if (dbRetryTimer) {
       clearInterval(dbRetryTimer);
       dbRetryTimer = null;
@@ -434,6 +473,11 @@ async function bootstrap() {
     } catch (_) {}
     process.exit(0);
   };
+
+  process.on('unhandledRejection', (reason) => {
+    // eslint-disable-next-line no-console
+    console.error('[Backend] Unhandled promise rejection:', reason);
+  });
 
   process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => void gracefulShutdown('SIGINT'));

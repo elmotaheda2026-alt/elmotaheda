@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate, parseDateInput, isPeriodClosed } from '../utils.js';
 import { createSystemNotification, formatMoney } from '../financialNotifications.js';
@@ -15,13 +15,27 @@ const expenseSchema = z.object({
   amount: z.number().positive(),
   date: z.string().min(8),
   receipt: z.string().optional().nullable(),
+  channel: z.string().trim().min(1).max(64).default('cash'),
 });
 
 // GET /expenses
-router.get('/', requirePermission('payments:read'), async (_req, res) => {
+router.get('/', requireAnyPermission('payments:read', 'reports:read'), async (_req, res) => {
   try {
     const db = await dbPromise;
-    const rows = await db.all('SELECT * FROM expenses ORDER BY date DESC, created_at DESC');
+    const rows = await db.all(
+      `SELECT e.*,
+              COALESCE(p.channel, 'cash') AS channel
+       FROM expenses e
+       OUTER APPLY (
+         SELECT TOP 1 channel
+         FROM payments p
+         WHERE p.reference_type = 'expense'
+           AND p.reference_id = e.id
+           AND (p.status IS NULL OR p.status != 'voided')
+         ORDER BY p.created_at DESC
+       ) p
+       ORDER BY e.date DESC, e.created_at DESC`,
+    );
     const mapped = rows.map((row: any) => ({
       id: row.id,
       category: row.category,
@@ -29,6 +43,7 @@ router.get('/', requirePermission('payments:read'), async (_req, res) => {
       amount: Number(row.amount),
       date: formatDate(row.date),
       receipt: row.receipt,
+      channel: row.channel || 'cash',
       createdBy: row.created_by,
       createdAt: formatDate(row.created_at),
     }));
@@ -80,12 +95,13 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
         `INSERT INTO payments (
           id, type, amount, description, date, receipt_number, status, channel,
           reference_id, reference_type, created_by, created_at, affects_customer_balance
-        ) VALUES (?, 'out', ?, ?, ?, ?, 'posted', 'cash', ?, 'expense', ?, ?, 0)`,
+        ) VALUES (?, 'out', ?, ?, ?, ?, 'posted', ?, ?, 'expense', ?, ?, 0)`,
         uid(),
         data.amount,
         `سند صرف: ${data.category} - ${data.description}`,
         data.date,
         `EXP-${id.slice(-6).toUpperCase()}`,
+        data.channel || 'cash',
         id,
         req.user?.name || 'system',
         now,
@@ -144,11 +160,12 @@ router.put('/:id', requirePermission('payments:write'), async (req: AuthedReques
 
       await tx.run(
         `UPDATE payments
-         SET amount = ?, date = ?, description = ?
+         SET amount = ?, date = ?, description = ?, channel = ?
          WHERE reference_type = 'expense' AND reference_id = ?`,
         data.amount,
         data.date,
         `سند صرف: ${data.category} - ${data.description}`,
+        data.channel || 'cash',
         req.params.id,
       );
     });

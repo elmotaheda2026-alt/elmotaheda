@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { escapeHtml } from '../lib/htmlUtils';
 import {
   X,
   Printer,
@@ -405,10 +406,10 @@ export default function SupplierStatementModal({
         <div class="title">كشف حساب مورد رسمي</div>
 
         <div class="meta-box">
-          <div><strong>اسم المورد:</strong> ${supplier.name}</div>
-          <div><strong>رقم الهاتف:</strong> <span style="font-family:monospace;">${supplier.phone}</span></div>
-          <div><strong>العنوان:</strong> ${supplier.address || '—'}</div>
-          <div><strong>${periodLabel}</strong></div>
+          <div><strong>اسم المورد:</strong> ${escapeHtml(supplier.name)}</div>
+          <div><strong>رقم الهاتف:</strong> <span style="font-family:monospace;">${escapeHtml(supplier.phone)}</span></div>
+          <div><strong>العنوان:</strong> ${escapeHtml(supplier.address || '—')}</div>
+          <div><strong>${escapeHtml(periodLabel)}</strong></div>
         </div>
 
         <div class="summary-cards">

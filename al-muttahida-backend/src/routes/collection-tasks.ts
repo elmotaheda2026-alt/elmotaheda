@@ -23,7 +23,7 @@ const collectionTaskSchema = z.object({
 });
 
 // GET /collection-tasks
-router.get('/', async (req: AuthedRequest, res) => {
+router.get('/', requireAnyPermission('payments:read', 'sales:read'), async (req: AuthedRequest, res) => {
   try {
     const db = await dbPromise;
     let query = 'SELECT * FROM collection_tasks';

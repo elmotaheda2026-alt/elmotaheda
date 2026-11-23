@@ -21,6 +21,7 @@ const broadPermissionMap: Partial<Record<Permission, LegacyPermission[]>> = {
   'payments:read': ['treasury'],
   'payments:write': ['treasury'],
   'payments:reverse': ['treasury'],
+  'payments:early_settlement': ['treasury'],
   'reports:read': ['reports'],
   'closing:write': ['treasury'],
   'users:manage': ['users'],
@@ -40,6 +41,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
     'payments:read',
     'payments:write',
     'payments:reverse',
+    'payments:early_settlement',
     'reports:read',
     'closing:write',
     'users:manage',
@@ -83,6 +85,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
     'payments:read',
     'payments:write',
     'payments:reverse',
+    'payments:early_settlement',
     'reports:read',
     'closing:write',
     'inventory:manage',
@@ -131,10 +134,29 @@ const MOBILE_BLOCKED_WRITE_PERMISSIONS: ReadonlySet<Permission> = new Set([
   'closing:write',
 ]);
 
+export const PERMISSION_CATALOG: { key: Permission; label: string; category: string }[] = [
+  { key: 'dashboard:view', label: 'عرض الرئيسية والإحصائيات', category: 'عام' },
+  { key: 'notifications:read', label: 'عرض مركز التنبيهات', category: 'عام' },
+  { key: 'sales:read', label: 'عرض المبيعات والعملاء', category: 'المبيعات' },
+  { key: 'sales:write', label: 'إضافة وتعديل المبيعات والعملاء', category: 'المبيعات' },
+  { key: 'sales:reschedule', label: 'ترحيل وإعادة جدولة الأقساط', category: 'المبيعات' },
+  { key: 'payments:read', label: 'عرض الخزينة والمدفوعات', category: 'الخزينة' },
+  { key: 'payments:write', label: 'تسجيل تحصيل وصرف نقدي', category: 'الخزينة' },
+  { key: 'payments:reverse', label: 'عكس وإلغاء الحركات المالية', category: 'الخزينة' },
+  { key: 'payments:early_settlement', label: 'تكييش وتسوية مبكرة للأقساط', category: 'الخزينة' },
+  { key: 'closing:write', label: 'إغلاق وفتح الفترات اليومية', category: 'الخزينة' },
+  { key: 'inventory:manage', label: 'إدارة الأصناف والمخزون', category: 'المخزون' },
+  { key: 'purchases:manage', label: 'إدارة المشتريات والموردين', category: 'المخزون' },
+  { key: 'reports:read', label: 'عرض التقارير والقيود المالية', category: 'التقارير' },
+  { key: 'shareholders:manage', label: 'إدارة حسابات الشركاء والمساهمين', category: 'الإدارة' },
+  { key: 'users:manage', label: 'إدارة المستخدمين', category: 'الإدارة' },
+  { key: 'settings:manage', label: 'تعديل إعدادات النظام', category: 'الإدارة' },
+];
+
 export const isAdmin = (user: User | null): boolean => user?.role === 'admin';
 export const isSupervisor = (user: User | null): boolean => user?.role === 'manager';
-export const isReadOnlyUser = (user: User | null): boolean => isMobileDevice() || user?.role === 'manager';
-export const canModify = (user: User | null): boolean => !isMobileDevice() && Boolean(user && user.role !== 'manager');
+export const isReadOnlyUser = (_user: User | null): boolean => isMobileDevice();
+export const canModify = (user: User | null): boolean => !isMobileDevice() && Boolean(user);
 
 /**
  * Checks if the current authenticated user has the given permission.
@@ -158,12 +180,29 @@ export const hasPermission = (user: User | null, permission: Permission): boolea
   return dynamicRolePermissions[user.role]?.includes(permission) ?? false;
 };
 
+export function getDefaultRouteForUser(user: User | null): string {
+  if (!user) return '/login';
+  if (hasPermission(user, 'dashboard:view')) return '/';
+  if (hasPermission(user, 'sales:read')) return '/customers';
+  if (hasPermission(user, 'purchases:manage')) return '/suppliers';
+  if (hasPermission(user, 'inventory:manage')) return '/products-inventory';
+  if (hasPermission(user, 'payments:read')) return '/payments';
+  if (hasPermission(user, 'payments:write')) return '/expenses';
+  if (hasPermission(user, 'reports:read')) return '/sales';
+  if (hasPermission(user, 'shareholders:manage')) return '/shareholders';
+  if (hasPermission(user, 'users:manage')) return '/users';
+  if (hasPermission(user, 'notifications:read')) return '/notifications';
+  if (hasPermission(user, 'settings:manage')) return '/settings';
+  return '/';
+}
+
 export const canViewNotification = (
   user: User | null,
   notification: { title?: string | null; message?: string | null },
 ): boolean => {
   if (!user) return false;
   if (isAdmin(user)) return true;
+  if (!hasPermission(user, 'notifications:read')) return false;
 
   const text = `${notification.title || ''} ${notification.message || ''}`;
     if (text.includes('حركة شريك') || text.includes('مساهم') || text.includes('تسوية أرباح') || text.includes('رأس المال')) {

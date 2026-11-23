@@ -80,7 +80,7 @@ export default function Dashboard() {
       path: '/expenses',
       icon: ClipboardList,
       iconBg: 'bg-rose-50 text-rose-600 border-rose-100',
-      permission: 'payments:write',
+      permission: 'payments:read',
     },
     {
       title: 'التقارير والقيود المالية',
@@ -124,17 +124,19 @@ export default function Dashboard() {
             </p>
           </div>
 
-          <div className="flex items-center shrink-0">
-            <button
-              type="button"
-              onClick={() => navigate('/invoices')}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-white hover:bg-slate-100 px-5 py-3 text-sm font-bold text-[#0f1f4a] transition-all hover:shadow-md active:scale-98 shadow-sm cursor-pointer"
-            >
-              <Plus size={18} />
-              <span>إصدار فاتورة جديدة</span>
-              <ArrowLeft size={16} />
-            </button>
-          </div>
+          {hasPermission(user, 'sales:write') && (
+            <div className="flex items-center shrink-0">
+              <button
+                type="button"
+                onClick={() => navigate('/invoices')}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-white hover:bg-slate-100 px-5 py-3 text-sm font-bold text-[#0f1f4a] transition-all hover:shadow-md active:scale-98 shadow-sm cursor-pointer"
+              >
+                <Plus size={18} />
+                <span>إصدار فاتورة جديدة</span>
+                <ArrowLeft size={16} />
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

@@ -2,27 +2,12 @@ import { Router } from 'express';
 import { formatDate, formatDateDisplay } from '../utils.js';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
-import { hasPermission } from '../permissions.js';
-import type { Permission } from '../types.js';
+import { requireAdmin, requireAnyPermission, requireAuth, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid } from '../utils.js';
 
 const router = Router();
 router.use(requireAuth);
-
-function requireAnyPermission(...permissions: Permission[]) {
-  return (req: AuthedRequest, res: any, next: any) => {
-    if (!req.user) {
-      return res.status(401).json({ message: 'Unauthorized' });
-    }
-    const granted = permissions.some((permission) => hasPermission(req.user!.role, permission, req.user!.permissions));
-    if (!granted) {
-      return res.status(403).json({ message: 'Forbidden' });
-    }
-    return next();
-  };
-}
 
 const supplierSchema = z.object({
   name: z.string().min(1),
@@ -34,7 +19,7 @@ const supplierSchema = z.object({
 });
 
 // GET /suppliers
-router.get('/', requirePermission('sales:read'), async (_req, res) => {
+router.get('/', requireAnyPermission('sales:read', 'purchases:manage', 'payments:read'), async (_req, res) => {
   try {
     const db = await dbPromise;
     const rows = await db.all('SELECT * FROM suppliers ORDER BY created_at DESC');
@@ -51,7 +36,7 @@ router.get('/', requirePermission('sales:read'), async (_req, res) => {
 });
 
 // GET /suppliers/:id/statement
-router.get('/:id/statement', requirePermission('sales:read'), async (req, res) => {
+router.get('/:id/statement', requireAnyPermission('sales:read', 'purchases:manage', 'payments:read'), async (req, res) => {
   try {
     const db = await dbPromise;
     const supplierId = req.params.id;
@@ -315,7 +300,7 @@ router.get('/:id/statement', requirePermission('sales:read'), async (req, res) =
 });
 
 // POST /suppliers
-router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
+router.post('/', requireAnyPermission('sales:write', 'purchases:manage'), async (req: AuthedRequest, res) => {
   const parsed = supplierSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid supplier payload', errors: parsed.error.format() });
@@ -349,7 +334,7 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
 });
 
 // PUT /suppliers/:id
-router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, res) => {
+router.put('/:id', requireAnyPermission('sales:write', 'purchases:manage'), async (req: AuthedRequest, res) => {
   const parsed = supplierSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid supplier payload', errors: parsed.error.format() });

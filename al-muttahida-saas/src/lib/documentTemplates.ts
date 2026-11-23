@@ -3,6 +3,7 @@ import { api, isApiMode } from './apiClient';
 import { formatDateDisplay } from './dateUtils';
 import { tafqeet } from './tafqeet';
 import { formatWholeCurrency } from './utils';
+import { escapeHtml, sanitizeTemplateHtml } from './htmlUtils';
 
 export type BuiltinTemplateKey =
   | 'creditApplication'
@@ -234,8 +235,9 @@ export const PLACEHOLDER_LABEL_MAP: Record<string, string> = TEMPLATE_PLACEHOLDE
 );
 
 export function createVariableChipHtml(token: string): string {
-  const label = PLACEHOLDER_LABEL_MAP[token] || token.replace(/\{\{|\}\}/g, '');
-  return `<span class="tpl-var-chip" contenteditable="false" data-var="${token}" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:6px;padding:0px 7px;margin:0 2px;font-weight:700;font-size:0.9em;user-select:all;cursor:default;">📌 ${label}</span>`;
+  const safeToken = escapeHtml(token);
+  const label = escapeHtml(PLACEHOLDER_LABEL_MAP[token] || token.replace(/\{\{|\}\}/g, ''));
+  return `<span class="tpl-var-chip" contenteditable="false" data-var="${safeToken}" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:6px;padding:0px 7px;margin:0 2px;font-weight:700;font-size:0.9em;user-select:all;cursor:default;">📌 ${label}</span>`;
 }
 
 export function tokensToVisualChips(html: string): string {
@@ -265,10 +267,10 @@ function buildItemsTableHtml(sale: Sale, currency: string): string {
       (item, idx) => `
       <tr>
         <td style="border:1px solid #000;padding:5px 8px;text-align:center;">${idx + 1}</td>
-        <td style="border:1px solid #000;padding:5px 8px;text-align:right;font-weight:700;">${item.productName || '---'}</td>
-        <td style="border:1px solid #000;padding:5px 8px;text-align:center;">${item.quantity || 1}</td>
-        <td style="border:1px solid #000;padding:5px 8px;text-align:center;">${formatWholeCurrency(Number(item.unitPrice || 0), currency)}</td>
-        <td style="border:1px solid #000;padding:5px 8px;text-align:center;font-weight:700;">${formatWholeCurrency(Number(item.total || 0), currency)}</td>
+        <td style="border:1px solid #000;padding:5px 8px;text-align:right;font-weight:700;">${escapeHtml(item.productName || '---')}</td>
+        <td style="border:1px solid #000;padding:5px 8px;text-align:center;">${Number(item.quantity || 1)}</td>
+        <td style="border:1px solid #000;padding:5px 8px;text-align:center;">${escapeHtml(formatWholeCurrency(Number(item.unitPrice || 0), currency))}</td>
+        <td style="border:1px solid #000;padding:5px 8px;text-align:center;font-weight:700;">${escapeHtml(formatWholeCurrency(Number(item.total || 0), currency))}</td>
       </tr>`
     )
     .join('');
@@ -332,46 +334,46 @@ export function renderTemplateHtml(htmlTemplate: string, ctx: TemplateRenderCont
   const g2 = ctx.customer?.guarantors?.[1];
 
   const replacements: Record<string, string> = {
-    '{{signatory.roleLabel}}': ctx.signatory.roleLabel || 'العميل',
-    '{{signatory.name}}': ctx.signatory.name || ctx.sale.customerName || '---',
-    '{{signatory.nationalId}}': ctx.signatory.nationalId || '---',
-    '{{signatory.phone}}': ctx.signatory.phone || '---',
-    '{{signatory.address}}': ctx.signatory.address || '---',
+    '{{signatory.roleLabel}}': escapeHtml(ctx.signatory.roleLabel || 'العميل'),
+    '{{signatory.name}}': escapeHtml(ctx.signatory.name || ctx.sale.customerName || '---'),
+    '{{signatory.nationalId}}': escapeHtml(ctx.signatory.nationalId || '---'),
+    '{{signatory.phone}}': escapeHtml(ctx.signatory.phone || '---'),
+    '{{signatory.address}}': escapeHtml(ctx.signatory.address || '---'),
 
-    '{{customer.name}}': ctx.customer?.name || ctx.sale.customerName || '---',
-    '{{customer.nationalId}}': ctx.customer?.nationalId || '---',
-    '{{customer.phone}}': ctx.customer?.phone || '---',
-    '{{customer.address}}': ctx.customer?.address || '---',
+    '{{customer.name}}': escapeHtml(ctx.customer?.name || ctx.sale.customerName || '---'),
+    '{{customer.nationalId}}': escapeHtml(ctx.customer?.nationalId || '---'),
+    '{{customer.phone}}': escapeHtml(ctx.customer?.phone || '---'),
+    '{{customer.address}}': escapeHtml(ctx.customer?.address || '---'),
 
-    '{{guarantor1.name}}': g1?.name || '---',
-    '{{guarantor1.nationalId}}': g1?.nationalId || '---',
-    '{{guarantor1.phone}}': g1?.phone || '---',
-    '{{guarantor2.name}}': g2?.name || '---',
+    '{{guarantor1.name}}': escapeHtml(g1?.name || '---'),
+    '{{guarantor1.nationalId}}': escapeHtml(g1?.nationalId || '---'),
+    '{{guarantor1.phone}}': escapeHtml(g1?.phone || '---'),
+    '{{guarantor2.name}}': escapeHtml(g2?.name || '---'),
 
-    '{{sale.invoiceNumber}}': ctx.sale.invoiceNumber || '---',
-    '{{sale.date}}': invoiceDate,
-    '{{sale.total}}': formatWholeCurrency(Number(ctx.sale.total || 0), currency),
-    '{{sale.paid}}': formatWholeCurrency(Number(ctx.sale.paid || 0), currency),
-    '{{sale.remaining}}': formatWholeCurrency(remaining, currency),
-    '{{sale.remainingInWords}}': tafqeet(remaining),
-    '{{sale.installmentMonths}}': String(ctx.sale.financing?.installmentMonths || ctx.sale.financing?.schedules?.length || 0),
-    '{{sale.monthlyInstallment}}': formatWholeCurrency(monthly, currency),
-    '{{itemType}}': ctx.itemType || ctx.sale.items?.[0]?.productName || '---',
-    '{{amount}}': formatWholeCurrency(Number(ctx.amount || 0), currency),
-    '{{amountInWords}}': ctx.amountInWords || tafqeet(ctx.amount || 0),
+    '{{sale.invoiceNumber}}': escapeHtml(ctx.sale.invoiceNumber || '---'),
+    '{{sale.date}}': escapeHtml(invoiceDate),
+    '{{sale.total}}': escapeHtml(formatWholeCurrency(Number(ctx.sale.total || 0), currency)),
+    '{{sale.paid}}': escapeHtml(formatWholeCurrency(Number(ctx.sale.paid || 0), currency)),
+    '{{sale.remaining}}': escapeHtml(formatWholeCurrency(remaining, currency)),
+    '{{sale.remainingInWords}}': escapeHtml(tafqeet(remaining)),
+    '{{sale.installmentMonths}}': escapeHtml(String(ctx.sale.financing?.installmentMonths || ctx.sale.financing?.schedules?.length || 0)),
+    '{{sale.monthlyInstallment}}': escapeHtml(formatWholeCurrency(monthly, currency)),
+    '{{itemType}}': escapeHtml(ctx.itemType || ctx.sale.items?.[0]?.productName || '---'),
+    '{{amount}}': escapeHtml(formatWholeCurrency(Number(ctx.amount || 0), currency)),
+    '{{amountInWords}}': escapeHtml(ctx.amountInWords || tafqeet(ctx.amount || 0)),
     '{{sale.itemsTable}}': buildItemsTableHtml(ctx.sale, currency),
     '{{sale.installmentsTable}}': buildInstallmentsTableHtml(ctx.sale, currency),
 
-    '{{legal.firstPartyName}}': ctx.firstPartyName || '---',
-    '{{legal.thirdPartyName}}': ctx.thirdPartyName || '---',
-    '{{legal.lawyerName}}': ctx.lawyerName || '---',
-    '{{company.name}}': ctx.companyName || 'شركة المتحدة للتجارة',
-    '{{company.phone}}': ctx.companyPhone || '01001207474',
-    '{{company.address}}': ctx.companyAddress || '',
-    '{{todayDate}}': todayDate,
+    '{{legal.firstPartyName}}': escapeHtml(ctx.firstPartyName || '---'),
+    '{{legal.thirdPartyName}}': escapeHtml(ctx.thirdPartyName || '---'),
+    '{{legal.lawyerName}}': escapeHtml(ctx.lawyerName || '---'),
+    '{{company.name}}': escapeHtml(ctx.companyName || 'شركة المتحدة للتجارة'),
+    '{{company.phone}}': escapeHtml(ctx.companyPhone || '01001207474'),
+    '{{company.address}}': escapeHtml(ctx.companyAddress || ''),
+    '{{todayDate}}': escapeHtml(todayDate),
   };
 
-  let rendered = htmlTemplate;
+  let rendered = sanitizeTemplateHtml(htmlTemplate);
   for (const [token, value] of Object.entries(replacements)) {
     rendered = rendered.split(token).join(value);
   }

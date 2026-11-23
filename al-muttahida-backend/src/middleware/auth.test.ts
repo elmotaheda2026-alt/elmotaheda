@@ -5,6 +5,12 @@ import jwt from 'jsonwebtoken';
 process.env.JWT_SECRET = 'test-secret-with-enough-entropy';
 
 const { requireAuth, requirePermission } = await import('./auth.js');
+const {
+  clearNonAdminUserPermissionOverrides,
+  resetUserAuthSnapshotForTests,
+  setRolePermissions,
+  setUserAuthSnapshot,
+} = await import('../permissions.js');
 
 function createResponse() {
   return {
@@ -115,4 +121,109 @@ test('requirePermission denies authenticated users without the required permissi
 
   assert.equal(nextCalled, false);
   assert.equal(res.statusCode, 403);
+});
+
+test('requireAuth uses live user snapshot permissions and active status instead of stale JWT claims', () => {
+  try {
+    setUserAuthSnapshot([
+      {
+        id: 'u-live',
+        name: 'Accountant Live',
+        role: 'accountant',
+        isActive: true,
+        permissions: undefined,
+      },
+    ]);
+
+    const staleToken = jwt.sign(
+      { userId: 'u-live', role: 'user', name: 'Old Name', permissions: ['dashboard:view'] },
+      process.env.JWT_SECRET!,
+    );
+    const req = { headers: { authorization: `Bearer ${staleToken}` } } as any;
+    const res = createResponse();
+    let nextCalled = false;
+
+    requireAuth(req, res as any, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, true);
+    assert.equal(req.user.role, 'accountant');
+    assert.equal(req.user.name, 'Accountant Live');
+    assert.equal(req.user.permissions, undefined);
+
+    setUserAuthSnapshot([
+      {
+        id: 'u-live',
+        name: 'Accountant Live',
+        role: 'accountant',
+        isActive: false,
+        permissions: undefined,
+      },
+    ]);
+
+    const inactiveReq = { headers: { authorization: `Bearer ${staleToken}` } } as any;
+    const inactiveRes = createResponse();
+    let inactiveNext = false;
+    requireAuth(inactiveReq, inactiveRes as any, () => {
+      inactiveNext = true;
+    });
+    assert.equal(inactiveNext, false);
+    assert.equal(inactiveRes.statusCode, 401);
+  } finally {
+    resetUserAuthSnapshotForTests();
+  }
+});
+
+test('setRolePermissions + clearNonAdminUserPermissionOverrides updates permissions on existing JWT sessions immediately', () => {
+  try {
+    setRolePermissions({
+      accountant: ['dashboard:view', 'sales:read', 'sales:reschedule', 'payments:early_settlement', 'closing:write'],
+    });
+    setUserAuthSnapshot([
+      {
+        id: 'u-acc',
+        name: 'Mohamed',
+        role: 'accountant',
+        isActive: true,
+        permissions: ['dashboard:view'],
+      },
+    ]);
+    clearNonAdminUserPermissionOverrides();
+
+    const staleToken = jwt.sign(
+      { userId: 'u-acc', role: 'accountant', name: 'Mohamed', permissions: ['dashboard:view'] },
+      process.env.JWT_SECRET!,
+    );
+    const req = { headers: { authorization: `Bearer ${staleToken}` } } as any;
+    const res = createResponse();
+    let authPassed = false;
+    requireAuth(req, res as any, () => {
+      authPassed = true;
+    });
+    assert.equal(authPassed, true);
+
+    for (const perm of ['sales:reschedule', 'payments:early_settlement', 'closing:write'] as const) {
+      const permRes = createResponse();
+      let permPassed = false;
+      requirePermission(perm)(req, permRes as any, () => {
+        permPassed = true;
+      });
+      assert.equal(permPassed, true, `expected ${perm} to be granted`);
+    }
+
+    setRolePermissions({
+      accountant: ['dashboard:view', 'sales:read'],
+    });
+    const revokedRes = createResponse();
+    let revokedPassed = false;
+    requirePermission('sales:reschedule')(req, revokedRes as any, () => {
+      revokedPassed = true;
+    });
+    assert.equal(revokedPassed, false);
+    assert.equal(revokedRes.statusCode, 403);
+  } finally {
+    setRolePermissions(null);
+    resetUserAuthSnapshotForTests();
+  }
 });

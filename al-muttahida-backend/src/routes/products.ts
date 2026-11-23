@@ -1,25 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
 import { uid, formatDate } from '../utils.js';
-import { hasPermission } from '../permissions.js';
-import { Permission } from '../types.js';
 
 const router = Router();
 router.use(requireAuth);
-
-function requireAnyPermission(...permissions: Permission[]) {
-  return (req: AuthedRequest, res: any, next: any) => {
-    if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
-    const allowed = permissions.some((permission) =>
-      hasPermission(req.user!.role, permission, req.user!.permissions),
-    );
-    if (!allowed) return res.status(403).json({ message: 'Forbidden' });
-    return next();
-  };
-}
 
 const productSchema = z.object({
   name: z.string().min(1),
@@ -38,7 +25,7 @@ const productSchema = z.object({
 });
 
 // GET /products — List (lightweight: excludes image NVARCHAR(MAX) column)
-router.get('/', async (_req, res) => {
+router.get('/', requireAnyPermission('inventory:manage', 'sales:read', 'purchases:manage', 'reports:read'), async (_req, res) => {
   try {
     const db = await dbPromise;
     const queryStart = performance.now();
@@ -83,7 +70,7 @@ router.get('/', async (_req, res) => {
 });
 
 // GET /products/:id — Single product (full detail, includes image)
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireAnyPermission('inventory:manage', 'sales:read', 'purchases:manage', 'reports:read'), async (req, res) => {
   try {
     const db = await dbPromise;
     const row = await db.get<any>('SELECT * FROM products WHERE id = ?', req.params.id);

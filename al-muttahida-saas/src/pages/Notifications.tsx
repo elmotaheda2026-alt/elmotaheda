@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bell,
-  Check,
   AlertTriangle,
   Info,
   CheckCircle,
@@ -13,10 +12,11 @@ import {
   CalendarClock,
   FileText,
   Truck,
+  Landmark,
   ExternalLink,
 } from 'lucide-react';
 import { Notification } from '../types';
-import { getNotifications, markNotificationRead, markAllNotificationsRead, syncNotifications } from '../lib/storage';
+import { getNotifications, markAllNotificationsRead, syncNotifications } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { canViewNotification } from '../lib/permissions';
 import { formatDateDisplay, today } from '../lib/dateUtils';
@@ -34,6 +34,7 @@ type FilterType =
 type NotificationCategory =
   | 'treasury_in'
   | 'treasury_out'
+  | 'shareholders'
   | 'returns'
   | 'installments'
   | 'sales'
@@ -82,6 +83,20 @@ function classifyNotification(notification: Notification): CategoryMeta {
       icon: <FileText size={18} />,
       route: '/invoices',
       routeLabel: 'سجل المبيعات',
+    };
+  }
+
+  if (/شريك|شركاء|مساهم|رأس مال|أرباح الشركاء/.test(text)) {
+    return {
+      category: 'shareholders',
+      filterGroup: 'treasury',
+      label: 'الشركاء والمساهمين',
+      titleClass: 'text-indigo-700',
+      iconBoxClass: 'bg-indigo-50 text-indigo-600 border-indigo-200',
+      accentBorderClass: 'border-r-indigo-500',
+      icon: <Landmark size={18} />,
+      route: '/shareholders',
+      routeLabel: 'الشركاء والمساهمين',
     };
   }
 
@@ -204,7 +219,11 @@ function formatNotificationTime(dateStr?: string | null): string {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')} • ${formattedDate}`;
 }
 
-function getDateGroupLabel(dateStr?: string | null): { key: string; label: string } {
+function getDateGroupLabel(
+  dateStr: string | null | undefined,
+  todayIso: string,
+  yesterdayIso: string,
+): { key: string; label: string } {
   if (!dateStr) return { key: 'unknown', label: 'سابقاً' };
   const date = new Date(dateStr);
   if (Number.isNaN(date.getTime())) return { key: 'unknown', label: 'سابقاً' };
@@ -213,11 +232,6 @@ function getDateGroupLabel(dateStr?: string | null): { key: string; label: strin
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   const isoDay = `${y}-${m}-${d}`;
-
-  const todayIso = today();
-  const yesterdayDate = new Date(`${todayIso}T00:00:00`);
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  const yesterdayIso = `${yesterdayDate.getFullYear()}-${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}-${String(yesterdayDate.getDate()).padStart(2, '0')}`;
 
   if (isoDay === todayIso) {
     return { key: isoDay, label: `اليوم — ${formatDateDisplay(isoDay)}` };
@@ -257,12 +271,21 @@ function renderHighlightedMessage(message: string): React.ReactNode {
   });
 }
 
+const PAGE_SIZE = 35;
+
 export default function Notifications() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>(() =>
+    getNotifications().filter((n) => canViewNotification(user, n)),
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [activeFilter, searchTerm]);
 
   const refreshNotifications = async () => {
     try {
@@ -270,7 +293,19 @@ export default function Notifications() {
     } catch (error) {
       console.error('Failed to sync notifications:', error);
     }
-    setNotifications(getNotifications().filter((n) => canViewNotification(user, n)));
+    const loaded = getNotifications().filter((n) => canViewNotification(user, n));
+    if (loaded.some((n) => !n.isRead)) {
+      setNotifications(loaded.map((n) => ({ ...n, isRead: true })));
+      void markAllNotificationsRead()
+        .then(() => {
+          window.dispatchEvent(new Event('notifications-updated'));
+        })
+        .catch((error) => {
+          console.error('Failed to auto-mark notifications read:', error);
+        });
+    } else {
+      setNotifications(loaded);
+    }
   };
 
   useEffect(() => {
@@ -281,26 +316,6 @@ export default function Notifications() {
   useRealtimeSync(['notifications', 'sales', 'payments'], () => {
     void refreshNotifications();
   });
-
-  const handleMarkRead = async (id: string) => {
-    setNotifications((current) =>
-      current.map((notification) => (notification.id === id ? { ...notification, isRead: true } : notification)),
-    );
-    try {
-      await markNotificationRead(id);
-    } finally {
-      setNotifications(getNotifications().filter((n) => canViewNotification(user, n)));
-    }
-  };
-
-  const handleMarkAllRead = async () => {
-    setNotifications((current) => current.map((notification) => ({ ...notification, isRead: true })));
-    try {
-      await markAllNotificationsRead();
-    } finally {
-      setNotifications(getNotifications().filter((n) => canViewNotification(user, n)));
-    }
-  };
 
   const classifiedItems = useMemo(() => {
     return notifications.map((notification) => ({
@@ -360,12 +375,25 @@ export default function Notifications() {
     });
   }, [classifiedItems, activeFilter, searchTerm]);
 
+  const { todayIso, yesterdayIso } = useMemo(() => {
+    const t = today();
+    const yDate = new Date(`${t}T00:00:00`);
+    yDate.setDate(yDate.getDate() - 1);
+    const y = `${yDate.getFullYear()}-${String(yDate.getMonth() + 1).padStart(2, '0')}-${String(yDate.getDate()).padStart(2, '0')}`;
+    return { todayIso: t, yesterdayIso: y };
+  }, []);
+
+  const visibleFilteredItems = useMemo(
+    () => filteredItems.slice(0, visibleLimit),
+    [filteredItems, visibleLimit],
+  );
+
   const groupedItems = useMemo(() => {
-    const groups: Array<{ key: string; label: string; items: typeof filteredItems }> = [];
+    const groups: Array<{ key: string; label: string; items: typeof visibleFilteredItems }> = [];
     const indexByKey = new Map<string, number>();
 
-    for (const entry of filteredItems) {
-      const { key, label } = getDateGroupLabel(entry.notification.createdAt);
+    for (const entry of visibleFilteredItems) {
+      const { key, label } = getDateGroupLabel(entry.notification.createdAt, todayIso, yesterdayIso);
       const existingIdx = indexByKey.get(key);
       if (existingIdx !== undefined) {
         groups[existingIdx].items.push(entry);
@@ -376,7 +404,7 @@ export default function Notifications() {
     }
 
     return groups;
-  }, [filteredItems]);
+  }, [visibleFilteredItems, todayIso, yesterdayIso]);
 
   const filterButtons: Array<{
     id: FilterType;
@@ -472,17 +500,6 @@ export default function Notifications() {
                 className="input-ui h-9 w-full pr-9 pl-3 text-xs bg-white border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               />
             </div>
-
-            {counts.unread > 0 && (
-              <button
-                type="button"
-                onClick={handleMarkAllRead}
-                className="flex items-center gap-1.5 bg-[#1e40af] text-white px-3 h-9 rounded-lg hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-xs active:scale-95 shrink-0"
-              >
-                <Check size={14} />
-                <span>تحديد الكل كمقروء</span>
-              </button>
-            )}
           </div>
         </div>
 
@@ -590,17 +607,6 @@ export default function Notifications() {
                               <ExternalLink size={12} />
                             </button>
                           )}
-
-                          {!notification.isRead && (
-                            <button
-                              type="button"
-                              onClick={() => handleMarkRead(notification.id)}
-                              className="p-1.5 text-blue-600 hover:text-white hover:bg-blue-600 bg-blue-50 border border-blue-200/60 rounded-lg transition-all shrink-0 active:scale-95"
-                              title="تحديد كمقروء"
-                            >
-                              <Check size={15} />
-                            </button>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -608,6 +614,17 @@ export default function Notifications() {
                 </div>
               </div>
             ))
+          )}
+          {filteredItems.length > visibleLimit && (
+            <div className="pt-2 pb-1 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setVisibleLimit((prev) => prev + PAGE_SIZE)}
+                className="px-5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 shadow-2xs transition-colors cursor-pointer"
+              >
+                عرض المزيد ({filteredItems.length - visibleLimit} إشعار متبقي)
+              </button>
+            </div>
           )}
         </div>
 

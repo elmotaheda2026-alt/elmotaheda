@@ -6,6 +6,7 @@ export type Permission =
   | 'payments:read'
   | 'payments:write'
   | 'payments:reverse'
+  | 'payments:early_settlement'
   | 'reports:read'
   | 'closing:write'
   | 'users:manage'
@@ -23,7 +24,7 @@ export interface User {
   username: string;
   password: string;
   role: 'admin' | 'manager' | 'accountant' | 'user' | 'collector' | 'reviewer' | 'finance_manager';
-  permissions?: UserPermissions;
+  permissions?: UserPermissions | null;
   phone?: string;
   avatar?: string;
   createdAt: string;
@@ -238,7 +239,7 @@ export interface Payment {
   type: 'in' | 'out';
   amount: number;
   referenceId: string;
-  referenceType: 'customer' | 'supplier' | 'sale' | 'purchase' | 'other';
+  referenceType: 'customer' | 'supplier' | 'sale' | 'purchase' | 'expense' | 'internal_transfer' | 'other';
   description: string;
   date: string;
   createdBy: string;
@@ -252,7 +253,7 @@ export interface Payment {
   receiptNumber?: string;
   voidRef?: string;
   approvedBy?: string;
-  channel?: 'cash' | 'card' | 'transfer' | 'wallet' | 'other';
+  channel?: string;
   status?: 'posted' | 'voided';
   isEarlySettlement?: boolean;
   settlementDiscount?: number;
@@ -320,8 +321,17 @@ export interface Expense {
   amount: number;
   date: string;
   receipt?: string;
+  channel?: Payment['channel'];
   createdBy: string;
   createdAt: string;
+}
+
+export interface PaymentChannelConfig {
+  id: string;
+  label: string;
+  icon: 'cash' | 'wallet' | 'bank' | 'instapay' | 'card';
+  color: 'emerald' | 'rose' | 'blue' | 'violet' | 'amber' | 'slate';
+  isDefault?: boolean;
 }
 
 export interface Setting {
@@ -351,6 +361,7 @@ export interface Setting {
   whatsappAntiBanVariation?: boolean;
   whatsappAutoSkipInvalid?: boolean;
   rolePermissions?: Partial<Record<User['role'], Permission[]>>;
+  paymentChannels?: PaymentChannelConfig[];
   isConfigured?: boolean;
 }
 
@@ -409,6 +420,12 @@ export interface Shareholder {
   currentBalance: number;
   joinedDate?: string;
   isFounder?: boolean;
+  includeWarehouseProfit?: boolean;
+  payoutPreference?: 'cash' | 'capitalize' | 'ask';
+  payoutCycleMonths?: number;
+  payoutNoticeDays?: number;
+  nextPayoutDate?: string | null;
+  noticeDeadlineDate?: string | null;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -423,6 +440,7 @@ export interface ShareholderTransaction {
   date: string;
   displayDate?: string;
   description: string;
+  channel?: Payment['channel'];
   createdBy: string;
   createdAt: string;
   runningCapital?: number;

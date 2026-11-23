@@ -3,6 +3,7 @@ import { Plus, Edit, Trash2, Search, UserCheck, Phone } from 'lucide-react';
 import { SalesRep } from '../types';
 import { getSalesReps, createSalesRep, updateSalesRep, deleteSalesRep, syncSalesReps } from '../lib/storage';
 import { isApiMode } from '../lib/apiClient';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
 import { hasPermission, isAdmin } from '../lib/permissions';
@@ -36,6 +37,10 @@ export default function SalesReps() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useRealtimeSync(['sales-reps', 'sales'], () => {
+    void loadData();
+  });
 
   useEffect(() => {
     searchInputRef.current?.focus();

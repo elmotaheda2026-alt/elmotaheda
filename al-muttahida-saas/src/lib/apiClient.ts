@@ -58,11 +58,17 @@ export function setServerApiUrl(url: string): string {
     }
   }
   localStorage.setItem('server_api_url', cleanUrl);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('erp:api-url-changed'));
+  }
   return cleanUrl;
 }
 
 export function clearServerApiUrl(): void {
   localStorage.removeItem('server_api_url');
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('erp:api-url-changed'));
+  }
 }
 
 export function getServerApiUrl(): string {
@@ -151,6 +157,9 @@ export function emitApiHealth(connected: boolean) {
     } catch {
       // Ignore storage removal errors
     }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('auth:session-expired'));
+    }
   }
 
   export function setApiSession(token: string, user: unknown) {
@@ -162,11 +171,18 @@ export function emitApiHealth(connected: boolean) {
     } catch {
       // Ignore storage removal errors
     }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('erp:api-url-changed'));
+    }
   }
 
   export function getApiUser<T>() {
     const user = sessionStorage.getItem(API_USER_KEY);
     return user ? JSON.parse(user) as T : null;
+  }
+
+  export function updateApiUser(user: unknown) {
+    sessionStorage.setItem(API_USER_KEY, JSON.stringify(user));
   }
 
   type PaginatedResponse<T> = T[] | {
@@ -223,6 +239,7 @@ export function emitApiHealth(connected: boolean) {
     let response: Response;
     try {
       response = await fetch(`${base}${path}`, {
+        cache: 'no-store',
         ...options,
         headers,
         signal: options.signal || (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(12000) : undefined),
@@ -369,10 +386,11 @@ export function emitApiHealth(connected: boolean) {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-    listPayments: (filters: { date?: string; search?: string; limit?: number } = {}) => {
+    listPayments: (filters: { date?: string; search?: string; channel?: string; limit?: number } = {}) => {
       const params = new URLSearchParams();
       if (filters.date) params.set('date', filters.date);
       if (filters.search) params.set('search', filters.search);
+      if (filters.channel) params.set('channel', filters.channel);
       if (filters.limit) {
         params.set('page', '1');
         params.set('limit', String(filters.limit));
@@ -380,25 +398,31 @@ export function emitApiHealth(connected: boolean) {
       const query = params.toString();
       return requestArray<any>(`/payments${query ? `?${query}` : ''}`, 'payments');
     },
-    listPaymentsPaged: (filters: { page?: number; limit?: number; date?: string; search?: string } = {}) => {
+    listPaymentsPaged: (filters: { page?: number; limit?: number; date?: string; search?: string; channel?: string } = {}) => {
       const params = new URLSearchParams({ includeMeta: '1' });
       params.set('page', String(filters.page || 1));
       params.set('limit', String(filters.limit || 100));
       if (filters.date) params.set('date', filters.date);
       if (filters.search) params.set('search', filters.search);
+      if (filters.channel) params.set('channel', filters.channel);
       return request<{ total: number; page: number; limit: number; totalPages: number; payments: any[] }>(`/payments?${params.toString()}`);
     },
     getPaymentsSummary: (date?: string) =>
       request<{
         totalCount: number;
-        totalIn: number;
-        totalOut: number;
-        totalExpenses: number;
-        netCash: number;
+        todayCount?: number;
+        totalIn: number | null;
+        totalOut: number | null;
+        totalExpenses: number | null;
+        netCash: number | null;
         todayIn: number;
         todayOut: number;
         todayExpenses: number;
         todayNet: number;
+        channels?: Record<
+          string,
+          { balance: number | null; totalIn: number | null; totalOut: number | null; todayIn: number; todayOut: number; todayNet: number }
+        >;
       }>(`/payments/summary${date ? `?date=${encodeURIComponent(date)}` : ''}`),
     createPayment: (payload: any) => request<{ id: string; receiptNumber: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
     updatePayment: (id: string, payload: { amount: number; date: string; description?: string }) =>
@@ -475,6 +499,26 @@ export function emitApiHealth(connected: boolean) {
     createShareholder: (payload: any) => request<{ id: string }>('/shareholders', { method: 'POST', body: JSON.stringify(payload) }),
     updateShareholder: (id: string, payload: any) => request<{ message: string }>(`/shareholders/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
     deleteShareholder: (id: string) => request<{ message: string }>(`/shareholders/${id}`, { method: 'DELETE' }),
+    updateShareholderPayoutPreference: (
+      id: string,
+      payload: {
+        payoutPreference: 'cash' | 'capitalize' | 'ask';
+        payoutCycleMonths?: number;
+        payoutNoticeDays?: number;
+        nextPayoutDate?: string | null;
+      }
+    ) =>
+      request<{
+        message: string;
+        payoutPreference: 'cash' | 'capitalize' | 'ask';
+        payoutCycleMonths: number;
+        payoutNoticeDays: number;
+        nextPayoutDate: string | null;
+        noticeDeadlineDate: string | null;
+      }>(`/shareholders/${id}/payout-preference`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
     listShareholderTransactions: () => requestArray<any>('/shareholders/transactions', 'shareholder transactions'),
     createShareholderTransaction: (payload: any) => request<{ id: string }>('/shareholders/transactions', { method: 'POST', body: JSON.stringify(payload) }),
     deleteShareholderTransaction: (id: string) => request<{ message: string }>(`/shareholders/transactions/${id}`, { method: 'DELETE' }),
@@ -509,14 +553,48 @@ export function emitApiHealth(connected: boolean) {
         method: 'PUT',
         body: JSON.stringify({ rolePermissions }),
       }),
+    updatePaymentChannels: (
+      paymentChannels: Array<{
+        id: string;
+        label: string;
+        icon: 'cash' | 'wallet' | 'bank' | 'instapay' | 'card';
+        color: 'emerald' | 'rose' | 'blue' | 'violet' | 'amber' | 'slate';
+        isDefault?: boolean;
+      }>,
+    ) =>
+      request<{
+        message: string;
+        paymentChannels: Array<{
+          id: string;
+          label: string;
+          icon: 'cash' | 'wallet' | 'bank' | 'instapay' | 'card';
+          color: 'emerald' | 'rose' | 'blue' | 'violet' | 'amber' | 'slate';
+          isDefault?: boolean;
+        }>;
+      }>('/settings/payment-channels', {
+        method: 'PUT',
+        body: JSON.stringify({ paymentChannels }),
+      }),
     getOpeningBalances: () => request<any>('/settings/opening-balances'),
     updateOpeningBalances: (payload: any) => request<{ message: string }>('/settings/opening-balances', { method: 'PUT', body: JSON.stringify(payload) }),
     clearAllData: () => request<{ message: string }>('/settings/clear-data', { method: 'POST' }),
-    exportBackup: () => request<any>('/settings/backup'),
-    restoreBackup: (payload: any) => request<{ message: string }>('/settings/restore-backup', { method: 'POST', body: JSON.stringify(payload) }),
+    exportBackup: () =>
+      request<any>('/settings/backup', {
+        signal: typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(300_000) : undefined,
+      }),
+    restoreBackup: (payload: any) =>
+      request<{ message: string; restoredCounts?: Record<string, number> }>('/settings/restore-backup', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal: typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(300_000) : undefined,
+      }),
     getAutoBackupConfig: () => request<any>('/settings/auto-backup'),
     updateAutoBackupConfig: (payload: any) => request<any>('/settings/auto-backup', { method: 'PUT', body: JSON.stringify(payload) }),
-    runAutoBackupNow: () => request<any>('/settings/auto-backup/run', { method: 'POST' }),
+    runAutoBackupNow: () =>
+      request<any>('/settings/auto-backup/run', {
+        method: 'POST',
+        signal: typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(300_000) : undefined,
+      }),
 
     // Notifications
     listNotifications: () => requestArray<any>('/notifications', 'notifications'),
@@ -559,6 +637,19 @@ export function emitApiHealth(connected: boolean) {
       request<any>(`/document-templates/${id}/reset`, { method: 'POST' }),
     deleteDocumentTemplate: (id: string) =>
       request<{ message: string }>(`/document-templates/${id}`, { method: 'DELETE' }),
+
+    // Current Authenticated Session Info
+    getMe: () =>
+      request<{
+        user: {
+          id: string;
+          username?: string;
+          name: string;
+          role: string;
+          permissions?: Record<string, boolean> | null;
+        };
+        rolePermissions?: Record<string, string[]>;
+      }>('/auth/me'),
   };
 
 

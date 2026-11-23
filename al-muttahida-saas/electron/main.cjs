@@ -52,9 +52,10 @@ process.on('uncaughtException', (err) => {
   } catch (_) {}
 });
 
-// Prevent Chromium window occlusion / audio service stalls on Windows while keeping GPU acceleration enabled on Windows 10/11
+// Prevent Chromium window occlusion, DirectComposition sleep-blank textures, and audio service stalls on Windows
 if (isWindows) {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,AudioServiceOutOfProcess');
+  app.commandLine.appendSwitch('disable-direct-composition');
 }
 
 // Configure Chromium compatibility flags for Windows 7 / 32-bit / Low-spec GPU
@@ -67,10 +68,7 @@ if (isLegacyWindows || is32Bit || process.argv.includes('--legacy-compat') || pr
   app.commandLine.appendSwitch('disable-gpu-compositing');
   app.commandLine.appendSwitch('disable-gpu-rasterization');
   app.commandLine.appendSwitch('disable-software-rasterizer');
-  app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,D3D11Experimental,AudioServiceOutOfProcess');
-  app.commandLine.appendSwitch('ignore-certificate-errors');
-  app.commandLine.appendSwitch('allow-insecure-localhost');
 }
 
 const CONFIG_FILE = path.join(getAppDataDir(), 'config.json');
@@ -82,8 +80,8 @@ let currentApiUrl = 'http://127.0.0.1:4000';
 
 function ensureFirewallRules() {
   if (process.platform !== 'win32') return;
-  const cmdTcp = 'netsh advfirewall firewall add rule name="AlMuttahida ERP Ports TCP" dir=in action=allow protocol=TCP localport=1433,4000,5000,5173';
-  const cmdUdp = 'netsh advfirewall firewall add rule name="AlMuttahida ERP Ports UDP" dir=in action=allow protocol=UDP localport=4001';
+  const cmdTcp = 'netsh advfirewall firewall show rule name="AlMuttahida ERP Ports TCP" >nul 2>&1 || netsh advfirewall firewall add rule name="AlMuttahida ERP Ports TCP" dir=in action=allow protocol=TCP localport=1433,4000,5000,5173';
+  const cmdUdp = 'netsh advfirewall firewall show rule name="AlMuttahida ERP Ports UDP" >nul 2>&1 || netsh advfirewall firewall add rule name="AlMuttahida ERP Ports UDP" dir=in action=allow protocol=UDP localport=4001';
   exec(`${cmdTcp} & ${cmdUdp}`, (error) => {
     if (error) {
       console.warn('Firewall rule notice (requires admin if not previously granted):', error.message);
@@ -142,16 +140,20 @@ function saveConfig(config) {
     const merged = { ...existing, ...config };
     const content = JSON.stringify(merged, null, 2);
 
-    // 1. Save in %PROGRAMDATA%
-    const pdConfig = getProgramDataConfigFile();
-    const pdDir = path.dirname(pdConfig);
-    if (!fs.existsSync(pdDir)) fs.mkdirSync(pdDir, { recursive: true });
-    fs.writeFileSync(pdConfig, content, 'utf-8');
-
-    // 2. Also mirror to %APPDATA%
+    // 1. Always persist in %APPDATA% (user-writable)
     const appDir = path.dirname(CONFIG_FILE);
     if (!fs.existsSync(appDir)) fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(CONFIG_FILE, content, 'utf-8');
+
+    // 2. Best-effort mirror to %PROGRAMDATA% without failing if non-admin lacks write ACL
+    try {
+      const pdConfig = getProgramDataConfigFile();
+      const pdDir = path.dirname(pdConfig);
+      if (!fs.existsSync(pdDir)) fs.mkdirSync(pdDir, { recursive: true });
+      fs.writeFileSync(pdConfig, content, 'utf-8');
+    } catch (pdErr) {
+      console.warn('ProgramData config mirror skipped:', pdErr.message);
+    }
   } catch (e) {
     console.error('Could not save config:', e.message);
   }
@@ -180,7 +182,7 @@ ipcMain.handle('select-directory', async () => {
     const parent = mainWindow || setupWindow;
     const result = await dialog.showOpenDialog(parent, {
       title: 'اختر مجلد حفظ النسخ الاحتياطية التلقائية',
-      defaultPath: 'D:\\',
+      defaultPath: fs.existsSync('D:\\') ? 'D:\\' : app.getPath('documents'),
       properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
@@ -193,6 +195,45 @@ ipcMain.handle('select-directory', async () => {
   }
 });
 
+function reloadMainWindowSafely() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const isDevMode = process.env.NODE_ENV === 'development';
+  const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
+  try {
+    if (!isDevMode && fs.existsSync(indexPath)) {
+      mainWindow.loadFile(indexPath);
+    } else if (isDevMode) {
+      mainWindow.loadURL('http://localhost:5173');
+    } else {
+      mainWindow.webContents.reloadIgnoringCache();
+    }
+  } catch (err) {
+    console.warn('[Main Window] Safe reload fallback:', err?.message || err);
+    try {
+      mainWindow.webContents.reloadIgnoringCache();
+    } catch (_) {}
+  }
+}
+
+function forceWindowRepaint() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.invalidate();
+  } catch (_) {}
+  try {
+    if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+      mainWindow.setOpacity(0.999);
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            mainWindow.setOpacity(1);
+          } catch (_) {}
+        }
+      }, 60);
+    }
+  } catch (_) {}
+}
+
 async function createMainWindow(apiBaseUrl) {
   currentApiUrl = apiBaseUrl;
 
@@ -202,7 +243,7 @@ async function createMainWindow(apiBaseUrl) {
     minWidth: 1024,
     minHeight: 700,
     show: false,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
     icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
@@ -211,6 +252,17 @@ async function createMainWindow(apiBaseUrl) {
       preload: path.join(__dirname, 'preload-main.cjs'),
     },
     title: 'شركة المتحدة للتجارة والتوريدات',
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, navUrl) => {
+    const isAllowedLocal =
+      navUrl.startsWith('file://') ||
+      navUrl.startsWith('http://localhost:') ||
+      navUrl.startsWith('http://127.0.0.1:');
+    if (!isAllowedLocal) {
+      event.preventDefault();
+    }
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -226,18 +278,15 @@ async function createMainWindow(apiBaseUrl) {
     }
   }, 800);
 
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.warn(`[Main Window] Renderer gone (${details?.reason}); reloading...`);
-    if (details?.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.reload();
+  mainWindow.on('focus', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.focus();
     }
   });
 
   mainWindow.on('unresponsive', () => {
     console.warn('[Main Window] Window unresponsive; reloading...');
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.reload();
-    }
+    reloadMainWindowSafely();
   });
 
   // If page load fails, retry after a short delay instead of staying blank
@@ -258,16 +307,10 @@ async function createMainWindow(apiBaseUrl) {
   // Recover automatically if renderer process crashes instead of leaving a white screen
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.warn(`[Main Window] Renderer process gone (${details?.reason}). Reloading...`);
+    if (details?.reason === 'clean-exit') return;
     setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
-        if (fs.existsSync(indexPath)) {
-          mainWindow.loadFile(indexPath);
-        } else {
-          mainWindow.reload();
-        }
-      }
-    }, 800);
+      reloadMainWindowSafely();
+    }, 600);
   });
 
   const isDev = process.env.NODE_ENV === 'development';
@@ -285,10 +328,13 @@ async function createMainWindow(apiBaseUrl) {
     }
   }
 
-  // DevTools shortcut (Ctrl+Shift+I / F12) and reload shortcut (F5 / Ctrl+R)
+  // DevTools shortcut (development only) and reload shortcut (F5 / Ctrl+R)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown') {
-      if ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12') {
+      if (
+        (!app.isPackaged || process.env.NODE_ENV === 'development') &&
+        ((input.control && input.shift && input.key.toLowerCase() === 'i') || input.key === 'F12')
+      ) {
         mainWindow.webContents.toggleDevTools();
         event.preventDefault();
       } else if (input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r')) {
@@ -309,54 +355,7 @@ async function createMainWindow(apiBaseUrl) {
       whatsappWindow = null;
     }
   });
-
-  // Handle render-process-gone (GPU/Renderer crash on sleep or memory pressure)
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.warn('[Main Window] Render process gone:', details.reason);
-    if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
-      setTimeout(() => {
-        try { mainWindow.webContents.reload(); } catch (_) {}
-      }, 1000);
-    }
-  });
 }
-
-// ── Power Monitor: Sleep / Resume Recovery (Prevents White Screen) ──
-app.whenReady().then(() => {
-  if (powerMonitor) {
-    powerMonitor.on('resume', async () => {
-      console.log('[PowerMonitor] System resumed from sleep. Recovering UI and backend connection...');
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        try {
-          mainWindow.webContents.invalidate();
-        } catch (_) {}
-
-        if (currentApiUrl) {
-          let healthy = false;
-          for (let i = 0; i < 5; i++) {
-            try {
-              await checkHealth(`${currentApiUrl}/health`);
-              healthy = true;
-              break;
-            } catch (_) {
-              await new Promise((r) => setTimeout(r, 600));
-            }
-          }
-          if (!healthy) {
-            console.warn('[PowerMonitor] Backend unreachable after resume. Reloading window to reconnect...');
-            try { mainWindow.webContents.reload(); } catch (_) {}
-          }
-        }
-      }
-    });
-
-    powerMonitor.on('unlock-screen', () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        try { mainWindow.webContents.invalidate(); } catch (_) {}
-      }
-    });
-  }
-});
 
 // ── IPC: Setup Window Helpers ────────────────────────────────────
 
@@ -442,6 +441,10 @@ function openPrintPreviewFromPdfBuffer(pdfBuffer, title, options = {}) {
   previewWin.loadURL(`file:///${tempPdfPath.replace(/\\/g, '/')}`);
   previewWin.on('closed', () => {
     fs.unlink(tempPdfPath, () => {});
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.focus();
+      mainWindow.webContents.focus();
+    }
   });
 }
 
@@ -624,14 +627,15 @@ function broadcastSqlProgress(event, payload) {
 
 function downloadInstallerWithProgress({ url, targetPath, targetLabel, targetKey, fallbackBytes, event }) {
   const https = require('https');
-  const http = require('http');
   const tmpPath = `${targetPath}.download`;
 
   return new Promise((resolve, reject) => {
     const getWithRedirects = (currentUrl, redirectsLeft = 6) => {
       if (redirectsLeft <= 0) return reject(new Error('تجاوز عدد التحويلات المسموح بها'));
-      const client = currentUrl.startsWith('https') ? https : http;
-      const req = client.get(currentUrl, (response) => {
+      if (!String(currentUrl).startsWith('https://')) {
+        return reject(new Error('رابط التحميل يجب أن يستخدم اتصال HTTPS آمن'));
+      }
+      const req = https.get(currentUrl, (response) => {
         if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
           let nextUrl = response.headers.location;
           if (!nextUrl.startsWith('http')) {
@@ -1242,14 +1246,52 @@ function sendUpdaterStatus(payload) {
   }
 }
 
+function isAllowedUpdateUrl(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === 'https:') return true;
+    if (parsed.protocol === 'http:') {
+      const h = parsed.hostname;
+      return (
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        /^192\.168\.\d{1,3}\.\d{1,3}$/.test(h) ||
+        /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
+      );
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function resolveUpdateUrl() {
   const cfg = appConfig || loadConfig();
   const customUrl = (process.env.UPDATE_URL || cfg?.updateUrl || '').trim();
-  return customUrl || null;
+  return isAllowedUpdateUrl(customUrl) ? customUrl : null;
+}
+
+function prepareForUpdateInstall() {
+  isAppQuitting = true;
+  stopWhatsappLoginWatcher();
+  stopBackend();
+  for (const refName of ['whatsappWindow', 'setupWindow', 'mainWindow']) {
+    try {
+      const win = refName === 'whatsappWindow' ? whatsappWindow : refName === 'setupWindow' ? setupWindow : mainWindow;
+      if (win && !win.isDestroyed()) {
+        win.removeAllListeners('close');
+        win.destroy();
+      }
+    } catch (_) {}
+  }
+  whatsappWindow = null;
+  setupWindow = null;
+  mainWindow = null;
 }
 
 function setupAutoUpdater() {
-  if (!autoUpdater || !app.isPackaged) return;
+  if (!autoUpdater || !app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
 
   try {
     autoUpdater.autoDownload = true;
@@ -1283,6 +1325,10 @@ function setupAutoUpdater() {
       sendUpdaterStatus({ status: 'downloaded', version: info?.version });
     });
 
+    autoUpdater.on('before-quit-for-update', () => {
+      prepareForUpdateInstall();
+    });
+
     autoUpdater.on('error', (err) => {
       console.warn('[AutoUpdater] Error:', err?.message || err);
       sendUpdaterStatus({ status: 'error', message: err?.message || 'فشل فحص التحديثات' });
@@ -1308,6 +1354,9 @@ ipcMain.handle('get-update-url', () => resolveUpdateUrl() || '');
 
 ipcMain.handle('set-update-url', (_event, url) => {
   const cleanUrl = typeof url === 'string' ? url.trim() : '';
+  if (cleanUrl && !isAllowedUpdateUrl(cleanUrl)) {
+    return { ok: false, error: 'رابط التحديث غير صالح؛ يجب أن يستخدم HTTPS أو عنوان شبكة محلية موثوق.' };
+  }
   saveConfig({ updateUrl: cleanUrl || null });
   appConfig = loadConfig();
   if (autoUpdater && app.isPackaged && cleanUrl) {
@@ -1344,10 +1393,10 @@ ipcMain.handle('check-for-updates', async () => {
 
 ipcMain.handle('install-update', () => {
   if (!autoUpdater || !app.isPackaged) return { ok: false };
-  stopBackend();
-  setImmediate(() => {
-    autoUpdater.quitAndInstall(false, true);
-  });
+  prepareForUpdateInstall();
+  setTimeout(() => {
+    autoUpdater.quitAndInstall(true, true);
+  }, 300);
   return { ok: true };
 });
 
@@ -1592,30 +1641,59 @@ app.whenReady().then(() => {
   initAndLaunch();
   setupAutoUpdater();
 
-  const repaintMainWindow = () => {
+  let resumeTimer = null;
+
+  const verifyMainWindowAfterWake = async () => {
     if (appConfig?.mode !== 'client') {
       ensureBackendRunning(Number(appConfig?.port || 4000)).catch(() => {});
     }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try {
-        mainWindow.webContents.invalidate();
-      } catch (_) {}
-      mainWindow.webContents
-        .executeJavaScript('Boolean(document.getElementById("root") && document.getElementById("root").childElementCount > 0)')
-        .then((hasContent) => {
-          if (!hasContent && mainWindow && !mainWindow.isDestroyed()) {
-            console.warn('[Main Window] Blank DOM detected on resume/unlock; reloading...');
-            mainWindow.webContents.reload();
-          }
-        })
-        .catch(() => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            console.warn('[Main Window] Renderer unresponsive on resume/unlock; reloading...');
-            mainWindow.webContents.reload();
-          }
-        });
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    forceWindowRepaint();
+    if (mainWindow.isFocused()) {
+      mainWindow.webContents.focus();
+    }
+
+    try {
+      const hasContent = await Promise.race([
+        mainWindow.webContents.executeJavaScript(
+          'Boolean(document.getElementById("root") && document.getElementById("root").childElementCount > 0 && document.body && document.body.innerText.trim().length > 0)'
+        ),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('renderer-timeout')), 3000)),
+      ]);
+      if (!hasContent && mainWindow && !mainWindow.isDestroyed()) {
+        console.warn('[Main Window] Blank DOM detected on resume/unlock; reloading safely...');
+        reloadMainWindowSafely();
+      }
+    } catch (err) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.warn(`[Main Window] Renderer check failed on resume/unlock (${err?.message || 'timeout'}); reloading safely...`);
+        reloadMainWindowSafely();
+      }
     }
   };
+
+  const repaintMainWindow = () => {
+    if (resumeTimer) {
+      clearTimeout(resumeTimer);
+    }
+    // Wait briefly so Windows display driver & network NIC finish waking from sleep
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null;
+      void verifyMainWindowAfterWake();
+    }, 800);
+  };
+
+  app.on('child-process-gone', (_event, details) => {
+    if (details?.type === 'GPU' && mainWindow && !mainWindow.isDestroyed()) {
+      console.warn(`[Main Window] GPU process gone (${details?.reason}); forcing repaint & health check...`);
+      setTimeout(() => {
+        forceWindowRepaint();
+        void verifyMainWindowAfterWake();
+      }, 500);
+    }
+  });
+
   powerMonitor.on('unlock-screen', repaintMainWindow);
   powerMonitor.on('resume', repaintMainWindow);
 

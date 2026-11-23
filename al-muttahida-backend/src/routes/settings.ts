@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { dbPromise } from '../db.js';
-import { requireAdmin, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
+import { requireAdmin, requireAnyPermission, requireAuth, requirePermission, type AuthedRequest } from '../middleware/auth.js';
 import { audit } from '../audit.js';
-import { getRolePermissions, setRolePermissions, validPermissions } from '../permissions.js';
+import { clearNonAdminUserPermissionOverrides, getRolePermissions, hasPermission, setRolePermissions, validPermissions } from '../permissions.js';
 import { broadcastDataChange } from '../realtime.js';
 import type { Permission, UserRole } from '../types.js';
 
@@ -38,6 +38,59 @@ const settingsSchema = z.object({
   whatsappAutoSkipInvalid: z.boolean().optional(),
 });
 
+export interface PaymentChannelSettingItem {
+  id: string;
+  label: string;
+  icon: 'cash' | 'wallet' | 'bank' | 'instapay' | 'card';
+  color: 'emerald' | 'rose' | 'blue' | 'violet' | 'amber' | 'slate';
+  isDefault?: boolean;
+}
+
+export const DEFAULT_PAYMENT_CHANNELS: PaymentChannelSettingItem[] = [
+  { id: 'cash', label: 'الدرج (كاش)', icon: 'cash', color: 'emerald', isDefault: true },
+];
+
+const paymentChannelItemSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(80),
+  icon: z.enum(['cash', 'wallet', 'bank', 'instapay', 'card']).default('wallet'),
+  color: z.enum(['emerald', 'rose', 'blue', 'violet', 'amber', 'slate']).default('blue'),
+  isDefault: z.boolean().optional(),
+});
+
+export function parsePaymentChannelsJson(raw?: string | null): PaymentChannelSettingItem[] {
+  let list: PaymentChannelSettingItem[] = [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const seen = new Set<string>();
+        for (const item of parsed) {
+          const checked = paymentChannelItemSchema.safeParse(item);
+          if (!checked.success) continue;
+          const cleanId = checked.data.id.trim();
+          if (!cleanId || seen.has(cleanId)) continue;
+          seen.add(cleanId);
+          list.push({
+            ...checked.data,
+            id: cleanId,
+            isDefault: cleanId === 'cash' ? true : undefined,
+          });
+        }
+      }
+    } catch {
+      list = [];
+    }
+  }
+
+  const cashIdx = list.findIndex((c) => c.id === 'cash');
+  if (cashIdx === -1) {
+    return [{ ...DEFAULT_PAYMENT_CHANNELS[0] }, ...list];
+  }
+  const cashItem: PaymentChannelSettingItem = { ...list[cashIdx], isDefault: true };
+  return [cashItem, ...list.filter((_, idx) => idx !== cashIdx)];
+}
+
 async function ensureWhatsappConfigColumn(db: any) {
   await db.run(`
     IF COL_LENGTH('settings', 'whatsapp_config_json') IS NULL
@@ -47,6 +100,10 @@ async function ensureWhatsappConfigColumn(db: any) {
     IF COL_LENGTH('settings', 'role_permissions_json') IS NULL
     BEGIN
       ALTER TABLE settings ADD role_permissions_json NVARCHAR(MAX) NULL;
+    END
+    IF COL_LENGTH('settings', 'payment_channels_json') IS NULL
+    BEGIN
+      ALTER TABLE settings ADD payment_channels_json NVARCHAR(MAX) NULL;
     END
   `);
 }
@@ -107,9 +164,9 @@ router.get('/', async (req: AuthedRequest, res) => {
     const waConfig = parseWhatsappConfig(settings.whatsapp_config_json);
     const savedRolePerms = parseRolePermissionsJson(settings.role_permissions_json);
     const effectiveRolePermissions = savedRolePerms ? setRolePermissions(savedRolePerms) : getRolePermissions();
-    const canManageSettings =
-      req.user?.role === 'admin' ||
-      (Array.isArray(req.user?.permissions) && req.user.permissions.includes('settings:manage'));
+    const canManageSettings = Boolean(
+      req.user && hasPermission(req.user.role, 'settings:manage', req.user.permissions)
+    );
 
     return res.json({
       companyName: settings.company_name,
@@ -139,6 +196,7 @@ router.get('/', async (req: AuthedRequest, res) => {
       whatsappAntiBanVariation: waConfig.whatsappAntiBanVariation !== false,
       whatsappAutoSkipInvalid: waConfig.whatsappAutoSkipInvalid !== false,
       rolePermissions: effectiveRolePermissions,
+      paymentChannels: parsePaymentChannelsJson(settings.payment_channels_json),
     });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -216,7 +274,7 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
 });
 
 // GET /settings/opening-balances
-router.get('/opening-balances', async (_req, res) => {
+router.get('/opening-balances', requireAnyPermission('settings:manage', 'reports:read'), async (_req, res) => {
   try {
     const db = await dbPromise;
     const settings = await db.get<any>('SELECT TOP 1 starting_cash_balance, starting_receivables, starting_payables, starting_inventory_value FROM settings');
@@ -315,6 +373,7 @@ const rolePermissionsUpdateSchema = z.object({
     z.enum(['admin', 'manager', 'accountant', 'user', 'collector', 'reviewer', 'finance_manager']),
     z.array(z.string())
   ),
+  applyToExistingUsers: z.boolean().optional().default(true),
 });
 
 // PUT /settings/role-permissions (Admin only)
@@ -357,9 +416,59 @@ router.put('/role-permissions', requireAdmin, async (req: AuthedRequest, res) =>
       );
     }
 
+    if (parsed.data.applyToExistingUsers !== false) {
+      await db.run("UPDATE users SET permissions = NULL WHERE role <> 'admin'");
+      clearNonAdminUserPermissionOverrides();
+    }
+
     await audit('settings.role_permissions.update', 'settings', 'role_permissions', req.user?.name || 'admin', updatedMatrix);
     broadcastDataChange('settings', 'update');
+    broadcastDataChange('users', 'update');
     return res.json({ message: 'تم تحديث صلاحيات الأدوار بنجاح', rolePermissions: updatedMatrix });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+const paymentChannelsUpdateSchema = z.object({
+  paymentChannels: z.array(paymentChannelItemSchema).min(1).max(20),
+});
+
+// PUT /settings/payment-channels
+router.put('/payment-channels', requirePermission('settings:manage'), async (req: AuthedRequest, res) => {
+  const parsed = paymentChannelsUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات قنوات الدفع غير صالحة', errors: parsed.error.format() });
+  }
+
+  try {
+    const db = await dbPromise;
+    await ensureWhatsappConfigColumn(db);
+
+    const sanitized = parsePaymentChannelsJson(JSON.stringify(parsed.data.paymentChannels));
+    const jsonPayload = JSON.stringify(sanitized);
+
+    const existing = await db.get('SELECT TOP 1 company_name FROM settings');
+    if (existing) {
+      await db.run('UPDATE settings SET payment_channels_json = ?', jsonPayload);
+    } else {
+      await db.run(
+        `INSERT INTO settings (company_name, company_address, company_phone, company_email, tax_rate, currency, invoice_prefix, invoice_footer, payment_channels_json)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+        'شركة المتحدة',
+        'الشارع المقابل للبوابة الخلفية للمستشفى العام',
+        '01001207474',
+        'info@almuttahida.com',
+        'جنيه',
+        'INV',
+        'شكراً للتعامل معنا - شركة المتحدة',
+        jsonPayload,
+      );
+    }
+
+    await audit('settings.payment_channels.update', 'settings', 'payment_channels', req.user?.name || 'system', sanitized);
+    broadcastDataChange('settings', 'update');
+    return res.json({ message: 'تم حفظ قنوات الدفع بنجاح', paymentChannels: sanitized });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { sanitizeTemplateHtml } from '../lib/htmlUtils';
 import {
   FileText,
   Plus,
@@ -37,6 +38,7 @@ import {
 } from '../lib/documentTemplates';
 import { api, isApiMode } from '../lib/apiClient';
 import { Customer, Sale } from '../types';
+import { useDialog } from '../context/DialogContext';
 
 const SAMPLE_CUSTOMER: Customer = {
   id: 'sample_c1',
@@ -115,6 +117,7 @@ const QUICK_VARIABLES = [
 ];
 
 export default function DocumentTemplatesManager() {
+  const { confirmDialog } = useDialog();
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -157,7 +160,7 @@ export default function DocumentTemplatesManager() {
 
   useEffect(() => {
     if ((isNewMode || editingTemplate) && editorMode === 'visual' && visualEditorRef.current) {
-      visualEditorRef.current.innerHTML = tokensToVisualChips(formHtml);
+      visualEditorRef.current.innerHTML = sanitizeTemplateHtml(tokensToVisualChips(formHtml));
       savedRangeRef.current = null;
       setSelectedTextNotice('');
     }
@@ -166,7 +169,7 @@ export default function DocumentTemplatesManager() {
 
   const syncFromVisualEditor = (): string => {
     if (visualEditorRef.current) {
-      const cleanHtml = visualChipsToTokens(visualEditorRef.current.innerHTML);
+      const cleanHtml = sanitizeTemplateHtml(visualChipsToTokens(visualEditorRef.current.innerHTML));
       setFormHtml(cleanHtml);
       return cleanHtml;
     }
@@ -399,7 +402,12 @@ export default function DocumentTemplatesManager() {
   };
 
   const handleResetBuiltin = async (tpl: DocumentTemplate) => {
-    if (!window.confirm(`هل تريد استرجاع الشكل الأصلي لمستند "${tpl.name}"؟`)) return;
+    const ok = await confirmDialog({
+      title: 'استرجاع الشكل الأصلي',
+      message: `هل تريد استرجاع الشكل الأصلي لمستند "${tpl.name}"؟`,
+      type: 'warning',
+    });
+    if (!ok) return;
     try {
       if (isApiMode()) {
         await api.resetDocumentTemplate(tpl.id);
@@ -419,7 +427,12 @@ export default function DocumentTemplatesManager() {
 
   const handleDeleteTemplate = async (tpl: DocumentTemplate) => {
     if (tpl.isBuiltin) return;
-    if (!window.confirm(`هل أنت متأكد من حذف المستند "${tpl.name}"؟`)) return;
+    const ok = await confirmDialog({
+      title: 'حذف المستند',
+      message: `هل أنت متأكد من حذف المستند "${tpl.name}"؟`,
+      type: 'danger',
+    });
+    if (!ok) return;
     try {
       if (isApiMode()) {
         await api.deleteDocumentTemplate(tpl.id);

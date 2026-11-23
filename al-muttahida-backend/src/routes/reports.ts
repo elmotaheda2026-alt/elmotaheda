@@ -14,119 +14,131 @@ const cairoToday = () => new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 }).format(new Date());
 
-router.get('/aging', async (req, res) => {
-  const referenceDate = String(req.query.date || cairoToday());
-  const referenceTime = new Date(referenceDate).getTime();
-  const db = await dbPromise;
-  const schedules = await db.all<{
-    sale_id: string;
-    invoice_number: string;
-    customer_name: string;
-    due_date: string;
-    amount: number;
-    paid_amount: number;
-  }>(
-    `SELECT s.id as sale_id, s.invoice_number, s.customer_name, sch.due_date, sch.amount, sch.paid_amount
+router.get('/aging', async (req, res, next) => {
+  try {
+    const referenceDate = String(req.query.date || cairoToday());
+    const referenceTime = new Date(referenceDate).getTime();
+    const db = await dbPromise;
+    const schedules = await db.all<{
+      sale_id: string;
+      invoice_number: string;
+      customer_name: string;
+      due_date: string;
+      amount: number;
+      paid_amount: number;
+    }>(
+      `SELECT s.id as sale_id, s.invoice_number, s.customer_name, sch.due_date, sch.amount, sch.paid_amount
      FROM installment_schedules sch
      JOIN sales s ON s.id = sch.sale_id
      WHERE (sch.amount - sch.paid_amount) > 0`,
-  );
+    );
 
-  const scheduledRows = schedules
-    .map((row) => {
-      const dueTime = new Date(row.due_date).getTime();
-      if (Number.isNaN(dueTime) || dueTime > referenceTime) return null;
-      const dpd = Math.floor((referenceTime - dueTime) / dayMs);
-      const bucket = dpd <= 30 ? '0-30' : dpd <= 60 ? '31-60' : dpd <= 90 ? '61-90' : '90+';
-      return {
-        saleId: row.sale_id,
-        invoiceNumber: row.invoice_number,
-        customerName: row.customer_name,
-        remaining: Number((Number(row.amount || 0) - Number(row.paid_amount || 0)).toFixed(2)),
-        dpd,
-        bucket,
-        dueDate: row.due_date,
-      };
-    })
-    .filter(Boolean);
+    const scheduledRows = schedules
+      .map((row) => {
+        const dueTime = new Date(row.due_date).getTime();
+        if (Number.isNaN(dueTime) || dueTime > referenceTime) return null;
+        const dpd = Math.floor((referenceTime - dueTime) / dayMs);
+        const bucket = dpd <= 30 ? '0-30' : dpd <= 60 ? '31-60' : dpd <= 90 ? '61-90' : '90+';
+        return {
+          saleId: row.sale_id,
+          invoiceNumber: row.invoice_number,
+          customerName: row.customer_name,
+          remaining: Number((Number(row.amount || 0) - Number(row.paid_amount || 0)).toFixed(2)),
+          dpd,
+          bucket,
+          dueDate: row.due_date,
+        };
+      })
+      .filter(Boolean);
 
-  const unscheduled = await db.all<{
-    id: string;
-    invoice_number: string;
-    customer_name: string;
-    remaining: number;
-    date: string;
-  }>(
-    `SELECT s.id, s.invoice_number, s.customer_name, s.remaining, s.date
+    const unscheduled = await db.all<{
+      id: string;
+      invoice_number: string;
+      customer_name: string;
+      remaining: number;
+      date: string;
+    }>(
+      `SELECT s.id, s.invoice_number, s.customer_name, s.remaining, s.date
      FROM sales s
      WHERE s.remaining > 0
        AND NOT EXISTS (SELECT 1 FROM installment_schedules sch WHERE sch.sale_id = s.id)`,
-  );
+    );
 
-  const unscheduledRows = unscheduled
-    .map((row) => {
-      const dueTime = new Date(row.date).getTime();
-      if (Number.isNaN(dueTime) || dueTime > referenceTime) return null;
-      const dpd = Math.floor((referenceTime - dueTime) / dayMs);
-      const bucket = dpd <= 30 ? '0-30' : dpd <= 60 ? '31-60' : dpd <= 90 ? '61-90' : '90+';
-      return {
-        saleId: row.id,
-        invoiceNumber: row.invoice_number,
-        customerName: row.customer_name,
-        remaining: Number(row.remaining || 0),
-        dpd,
-        bucket,
-        dueDate: row.date,
-      };
-    })
-    .filter(Boolean);
+    const unscheduledRows = unscheduled
+      .map((row) => {
+        const dueTime = new Date(row.date).getTime();
+        if (Number.isNaN(dueTime) || dueTime > referenceTime) return null;
+        const dpd = Math.floor((referenceTime - dueTime) / dayMs);
+        const bucket = dpd <= 30 ? '0-30' : dpd <= 60 ? '31-60' : dpd <= 90 ? '61-90' : '90+';
+        return {
+          saleId: row.id,
+          invoiceNumber: row.invoice_number,
+          customerName: row.customer_name,
+          remaining: Number(row.remaining || 0),
+          dpd,
+          bucket,
+          dueDate: row.date,
+        };
+      })
+      .filter(Boolean);
 
-  return res.json([...scheduledRows, ...unscheduledRows]);
+    return res.json([...scheduledRows, ...unscheduledRows]);
+  } catch (err) {
+    return next(err);
+  }
 });
 
-router.get('/collection-rate', async (req, res) => {
-  const startDate = req.query.startDate ? String(req.query.startDate) : null;
-  const endDate = req.query.endDate ? String(req.query.endDate) : null;
-  const db = await dbPromise;
-  const saleFilter = buildDateFilter('date', startDate, endDate);
-  const payFilter = buildDateFilter('p.date', startDate, endDate);
-  const billed = await db.get<{ total: number }>(
-    `SELECT COALESCE(SUM(CASE WHEN status = 'settled_early' THEN paid ELSE total END),0) as total FROM sales WHERE status <> 'cancelled'${saleFilter.clause}`,
-    ...saleFilter.args,
-  );
-  const collected = await db.get<{ total: number }>(
-    `SELECT COALESCE(SUM(p.amount),0) as total
+router.get('/collection-rate', async (req, res, next) => {
+  try {
+    const startDate = req.query.startDate ? String(req.query.startDate) : null;
+    const endDate = req.query.endDate ? String(req.query.endDate) : null;
+    const db = await dbPromise;
+    const saleFilter = buildDateFilter('date', startDate, endDate);
+    const payFilter = buildDateFilter('p.date', startDate, endDate);
+    const billed = await db.get<{ total: number }>(
+      `SELECT COALESCE(SUM(CASE WHEN status = 'settled_early' THEN paid ELSE total END),0) as total FROM sales WHERE status <> 'cancelled'${saleFilter.clause}`,
+      ...saleFilter.args,
+    );
+    const collected = await db.get<{ total: number }>(
+      `SELECT COALESCE(SUM(p.amount),0) as total
      FROM payments p
      WHERE p.type='in'
        AND p.status='posted'
        AND (p.sale_id IS NOT NULL OR p.reference_type='sale' OR p.invoice_number IS NOT NULL)
        ${payFilter.clause}`,
-    ...payFilter.args,
-  );
-  const billedValue = billed?.total || 0;
-  const collectedValue = collected?.total || 0;
-  return res.json({
-    billed: billedValue,
-    collected: collectedValue,
-    rate: billedValue > 0 ? Number(((collectedValue / billedValue) * 100).toFixed(2)) : 0,
-  });
+      ...payFilter.args,
+    );
+    const billedValue = billed?.total || 0;
+    const collectedValue = collected?.total || 0;
+    return res.json({
+      billed: billedValue,
+      collected: collectedValue,
+      rate: billedValue > 0 ? Number(((collectedValue / billedValue) * 100).toFixed(2)) : 0,
+    });
+  } catch (err) {
+    return next(err);
+  }
 });
 
-router.get('/daily-cash', async (req, res) => {
-  const date = String(req.query.date || cairoToday()).slice(0, 10);
-  const db = await dbPromise;
-  const dateExpr = normalizedSqlDate('date');
-  const incoming = await db.get<{ total: number }>(
-    `SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='in' AND status='posted' AND ${dateExpr} = TRY_CONVERT(DATE, ?)`,
-    date,
-  );
-  const outgoing = await db.get<{ total: number }>(
-    `SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='out' AND status='posted' AND ${dateExpr} = TRY_CONVERT(DATE, ?)`,
-    date,
-  );
-  const cashIn = incoming?.total || 0;
-  const cashOut = outgoing?.total || 0;
-  return res.json({ date, cashIn, cashOut, net: cashIn - cashOut });
+router.get('/daily-cash', async (req, res, next) => {
+  try {
+    const date = String(req.query.date || cairoToday()).slice(0, 10);
+    const db = await dbPromise;
+    const dateExpr = normalizedSqlDate('date');
+    const incoming = await db.get<{ total: number }>(
+      `SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='in' AND status='posted' AND COALESCE(reference_type, '') != 'internal_transfer' AND ${dateExpr} = TRY_CONVERT(DATE, ?)`,
+      date,
+    );
+    const outgoing = await db.get<{ total: number }>(
+      `SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='out' AND status='posted' AND COALESCE(reference_type, '') != 'internal_transfer' AND ${dateExpr} = TRY_CONVERT(DATE, ?)`,
+      date,
+    );
+    const cashIn = incoming?.total || 0;
+    const cashOut = outgoing?.total || 0;
+    return res.json({ date, cashIn, cashOut, net: cashIn - cashOut });
+  } catch (err) {
+    return next(err);
+  }
 });
 
 
@@ -180,6 +192,11 @@ router.get('/dashboard/metrics', async (req, res) => {
         s.total,
         s.paid,
         CASE WHEN s.status = 'settled_early' THEN s.paid ELSE s.total END AS eff_total,
+        COUNT(si.id) AS item_count,
+        COALESCE(SUM(
+          si.quantity * COALESCE(si.unit_price, 0) *
+          (1.0 - (CASE WHEN COALESCE(si.discount, 0) < 0 THEN 0 WHEN COALESCE(si.discount, 0) > 100 THEN 100 ELSE COALESCE(si.discount, 0) END) / 100.0)
+        ), 0) AS cash_base,
         CASE
           WHEN COUNT(si.id) > 0
             THEN SUM(si.quantity * COALESCE(NULLIF(si.unit_cost, 0), pr.purchase_price, 0))
@@ -210,21 +227,33 @@ router.get('/dashboard/metrics', async (req, res) => {
     realizedCashSummary,
   ] = await Promise.all([
     db.get<{ baseline_capital: number }>('SELECT TOP 1 baseline_capital FROM settings'),
-    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted'"),
-    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
     db.get<MetricRow>('SELECT COALESCE(SUM(quantity * purchase_price),0) AS total FROM products'),
     db.get<MetricRow>('SELECT COALESCE(SUM(balance),0) AS total FROM customers'),
     db.get<MetricRow>('SELECT COALESCE(SUM(balance),0) AS total FROM suppliers'),
     db.get<MetricRow>('SELECT COALESCE(SUM(capital),0) AS total FROM shareholders'),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'capital_deposit'"),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'capital_withdrawal'"),
-    db.get<{ gross_sales: number; eff_sales: number; early_discounts: number; cogs: number }>(
+    db.get<{ gross_sales: number; eff_sales: number; early_discounts: number; cogs: number; warehouse_profit: number }>(
       `${saleCostCte}
        SELECT
          COALESCE(SUM(total), 0) AS gross_sales,
          COALESCE(SUM(eff_total), 0) AS eff_sales,
          COALESCE(SUM(total - eff_total), 0) AS early_discounts,
-         COALESCE(SUM(sale_cost), 0) AS cogs
+         COALESCE(SUM(sale_cost), 0) AS cogs,
+         COALESCE(SUM(
+           CASE
+             WHEN eff_total <= sale_cost THEN 0
+             ELSE
+               CASE
+                 WHEN (CASE WHEN item_count > 0 THEN (CASE WHEN cash_base < total THEN cash_base ELSE total END) ELSE sale_cost END) <= sale_cost THEN 0
+                 WHEN ((CASE WHEN item_count > 0 THEN (CASE WHEN cash_base < total THEN cash_base ELSE total END) ELSE sale_cost END) - sale_cost) < (eff_total - sale_cost)
+                   THEN ((CASE WHEN item_count > 0 THEN (CASE WHEN cash_base < total THEN cash_base ELSE total END) ELSE sale_cost END) - sale_cost)
+                 ELSE (eff_total - sale_cost)
+               END
+           END
+         ), 0) AS warehouse_profit
        FROM sale_costs s
        WHERE 1 = 1${salesPeriod.clause}`,
       ...salesPeriod.args,
@@ -281,6 +310,8 @@ router.get('/dashboard/metrics', async (req, res) => {
   const periodEarlySettlementDiscounts = money(periodSalesSummary?.early_discounts);
   const periodCogs = money(periodSalesSummary?.cogs);
   const periodGrossProfit = money(periodEffSales - periodCogs);
+  const periodWarehouseProfit = money(periodSalesSummary?.warehouse_profit);
+  const periodFinancingProfit = money(Math.max(0, periodGrossProfit - periodWarehouseProfit));
   const periodExpensesTotal = money(periodExpenses?.total);
   const periodOperatingNetProfit = money(periodGrossProfit - periodExpensesTotal);
   const realizedCashCollections = money(realizedCashSummary?.cash_collected);
@@ -316,6 +347,8 @@ router.get('/dashboard/metrics', async (req, res) => {
     periodSales: periodEffSales,
     periodCostOfGoodsSold: periodCogs,
     periodGrossProfit,
+    periodWarehouseProfit,
+    periodFinancingProfit,
     periodOperatingNetProfit,
     periodExpenses: periodExpensesTotal,
     monthlyAverageExpenses: money(periodExpensesTotal / monthSpan),

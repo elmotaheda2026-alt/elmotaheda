@@ -50,7 +50,7 @@ export async function createExpense(expense: Omit<Expense, 'id' | 'createdAt'>):
     createdBy: expense.createdBy || 'current_user',
     referenceId: newExpense.id,
     referenceType: 'expense',
-    channel: 'cash',
+    channel: expense.channel || 'cash',
   };
   payments.push(cashOutPayment);
   setStorage(DB_KEYS.PAYMENTS, payments);
@@ -85,6 +85,7 @@ export async function updateExpense(id: string, data: Partial<Omit<Expense, 'id'
           amount: updated.amount,
           date: updated.date,
           description: `مصروفات - ${updated.category}: ${updated.description}`,
+          channel: updated.channel || p.channel || 'cash',
         }
       : p
   );
