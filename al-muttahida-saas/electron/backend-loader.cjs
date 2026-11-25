@@ -115,12 +115,26 @@ function startBackend() {
       return reject(new Error('Could not find backend server files. Expected server.js in resources/backend.'));
     }
 
-    // Prepare log directory
+    // Prepare log directory with automatic size-capped rotation (max 5 MB active + 5 MB previous)
     const logDir = path.join(getAppDataDir(), 'logs');
     try {
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     } catch (_) {}
     const logFilePath = path.join(logDir, 'backend.log');
+    const prevLogFilePath = path.join(logDir, 'backend.old.log');
+    const MAX_LOG_BYTES = 5 * 1024 * 1024;
+    let approxLogBytes = 0;
+    try {
+      if (fs.existsSync(logFilePath)) {
+        const stat = fs.statSync(logFilePath);
+        approxLogBytes = stat.size;
+        if (stat.size >= MAX_LOG_BYTES) {
+          try { if (fs.existsSync(prevLogFilePath)) fs.unlinkSync(prevLogFilePath); } catch (_) {}
+          fs.renameSync(logFilePath, prevLogFilePath);
+          approxLogBytes = 0;
+        }
+      }
+    } catch (_) {}
 
     const env = {
       PORT: '4000',
@@ -205,10 +219,22 @@ function startBackend() {
     let started = false;
     const stderrLogs = [];
 
+    let rotatingLog = false;
     const appendLog = (msg) => {
-      try {
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] ${msg}\n`);
-      } catch (_) {}
+      const line = `[${new Date().toISOString()}] ${msg}\n`;
+      approxLogBytes += Buffer.byteLength(line, 'utf8');
+      if (approxLogBytes >= MAX_LOG_BYTES && !rotatingLog) {
+        rotatingLog = true;
+        try {
+          if (fs.existsSync(prevLogFilePath)) fs.unlinkSync(prevLogFilePath);
+          if (fs.existsSync(logFilePath)) fs.renameSync(logFilePath, prevLogFilePath);
+          approxLogBytes = Buffer.byteLength(line, 'utf8');
+        } catch (_) {
+        } finally {
+          rotatingLog = false;
+        }
+      }
+      fs.appendFile(logFilePath, line, () => {});
     };
 
     backendProcess.stdout.on('data', (data) => {

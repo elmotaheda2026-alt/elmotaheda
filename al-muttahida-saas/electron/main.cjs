@@ -48,7 +48,13 @@ process.on('uncaughtException', (err) => {
   try {
     const logDir = path.join(getAppDataDir(), 'logs');
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    fs.appendFileSync(path.join(logDir, 'error.log'), `[${new Date().toISOString()}] ${err.stack || err}\n`);
+    const errLog = path.join(logDir, 'error.log');
+    if (fs.existsSync(errLog) && fs.statSync(errLog).size >= 2 * 1024 * 1024) {
+      const prevErrLog = path.join(logDir, 'error.old.log');
+      try { if (fs.existsSync(prevErrLog)) fs.unlinkSync(prevErrLog); } catch (_) {}
+      fs.renameSync(errLog, prevErrLog);
+    }
+    fs.appendFile(errLog, `[${new Date().toISOString()}] ${err.stack || err}\n`, () => {});
   } catch (_) {}
 });
 

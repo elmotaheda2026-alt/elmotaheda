@@ -183,22 +183,21 @@ export default function Accounts() {
       setLoading(true);
       setError(null);
       try {
-        const [data, paymentsList, expensesList] = await Promise.all([
-          isApiMode() ? api.getDashboardMetrics({ startDate, endDate }) : Promise.resolve(null),
-          isApiMode() ? api.listPayments({ limit: 10000 }) : Promise.resolve(getPayments()),
-          isApiMode() ? api.listExpenses() : Promise.resolve(getExpenses()),
-        ]);
-
-        if (!active) return;
-
-        // Cumulative Cash Balance (All historical cash inflows minus all historical cash outflows)
-        const ob = getOpeningBalances();
-        const totalCashBalance = calculateTotalCashBalance(paymentsList, expensesList, ob.startingCashBalance);
-        const totalAllTimeExpenses = Array.isArray(expensesList)
-          ? expensesList.reduce((sum, exp: any) => sum + (Number(exp?.amount) || 0), 0)
-          : 0;
-
-        setMetrics(normalizeMetrics(data, totalCashBalance, totalAllTimeExpenses));
+        if (isApiMode()) {
+          const data = await api.getDashboardMetrics({ startDate, endDate });
+          if (!active) return;
+          setMetrics(normalizeMetrics(data));
+        } else {
+          const paymentsList = getPayments();
+          const expensesList = getExpenses();
+          if (!active) return;
+          const ob = getOpeningBalances();
+          const totalCashBalance = calculateTotalCashBalance(paymentsList, expensesList, ob.startingCashBalance);
+          const totalAllTimeExpenses = Array.isArray(expensesList)
+            ? expensesList.reduce((sum, exp: any) => sum + (Number(exp?.amount) || 0), 0)
+            : 0;
+          setMetrics(normalizeMetrics(null, totalCashBalance, totalAllTimeExpenses));
+        }
       } catch (err) {
         console.error('Financial dashboard metrics request failed:', err);
         if (!active) return;

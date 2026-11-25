@@ -689,6 +689,29 @@ export async function initDb(): Promise<void> {
     tax DECIMAL(18,2) NOT NULL,
     total DECIMAL(18,2) NOT NULL
   );
+
+  -- 6b. Sale Guarantors (Contract-level guarantors + immutable replacement history)
+  IF OBJECT_ID('sale_guarantors', 'U') IS NULL
+  CREATE TABLE sale_guarantors (
+    id NVARCHAR(64) PRIMARY KEY,
+    sale_id NVARCHAR(64) NOT NULL,
+    slot INT NOT NULL DEFAULT 1,
+    name NVARCHAR(200) NOT NULL,
+    phone NVARCHAR(50),
+    national_id NVARCHAR(50),
+    address NVARCHAR(500),
+    relationship NVARCHAR(100),
+    status NVARCHAR(20) NOT NULL DEFAULT 'active',
+    replaced_at NVARCHAR(40) NULL,
+    replaced_by NVARCHAR(200) NULL,
+    replace_reason NVARCHAR(500) NULL,
+    remaining_at_replace DECIMAL(18,2) NULL,
+    created_at NVARCHAR(40) NOT NULL,
+    updated_at NVARCHAR(40) NOT NULL
+  );
+
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_sale_guarantors_sale_id' AND object_id = OBJECT_ID('sale_guarantors'))
+    CREATE INDEX idx_sale_guarantors_sale_id ON sale_guarantors (sale_id, status, slot);
   IF COL_LENGTH('sale_items', 'unit_cost') IS NULL ALTER TABLE sale_items ADD unit_cost DECIMAL(18,2) NOT NULL DEFAULT 0;
   IF COL_LENGTH('sale_items', 'fulfillment_type') IS NULL ALTER TABLE sale_items ADD fulfillment_type NVARCHAR(20) NULL DEFAULT 'on_demand';
   IF COL_LENGTH('sale_items', 'product_name') IS NOT NULL ALTER TABLE sale_items ALTER COLUMN product_name NVARCHAR(MAX);
@@ -1170,17 +1193,62 @@ export async function initDb(): Promise<void> {
     console.error('Error seeding default admin user:', err);
   }
 
-  // Migrate existing products to on_demand and zero quantity (as warehouse concept is removed)
-  // Only update rows that actually need changing to avoid unnecessary table locks and disk I/O.
+  // Note: Legacy migration that zeroed stocked products has been removed to preserve warehouse inventory.
+
+  // Zero-data-loss migration: copy existing customer guarantors into sale_guarantors for existing sales
   try {
-    const result = await db.run(
-      "UPDATE products SET fulfillment_type = 'on_demand', quantity = 0 WHERE fulfillment_type <> 'on_demand' OR quantity <> 0"
+    const salesNeedingGuarantors = await db.all<{ id: string; created_at: string; guarantors: string }>(
+      `SELECT s.id, s.created_at, c.guarantors
+       FROM sales s
+       INNER JOIN customers c ON c.id = s.customer_id
+       WHERE c.guarantors IS NOT NULL
+         AND LEN(c.guarantors) > 4
+         AND NOT EXISTS (SELECT 1 FROM sale_guarantors sg WHERE sg.sale_id = s.id)`
     );
-    // eslint-disable-next-line no-console
-    console.log(`Boot migration: ${result.rowsAffected?.[0] ?? 0} products needed updating.`);
+    let migratedGuarantorsCount = 0;
+    const nowIso = new Date().toISOString();
+    for (const row of salesNeedingGuarantors) {
+      let parsed: any[] = [];
+      try {
+        const raw = JSON.parse(row.guarantors);
+        if (Array.isArray(raw)) parsed = raw;
+      } catch {
+        continue;
+      }
+      for (let i = 0; i < Math.min(parsed.length, 3); i++) {
+        const g = parsed[i];
+        if (!g || typeof g !== 'object') continue;
+        const name = String(g.name || '').trim();
+        const phone = String(g.phone || '').trim();
+        const nationalId = String(g.nationalId || '').trim();
+        if (!name && !phone && !nationalId) continue;
+        const sgId = `sg_${row.id}_${i + 1}_${Math.random().toString(36).slice(2, 8)}`;
+        const createdAt = row.created_at || nowIso;
+        await db.run(
+          `INSERT INTO sale_guarantors (
+            id, sale_id, slot, name, phone, national_id, address, relationship, status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+          sgId,
+          row.id,
+          i + 1,
+          name || 'ضامن',
+          phone,
+          nationalId,
+          String(g.address || '').trim(),
+          String(g.relationship || '').trim(),
+          createdAt,
+          nowIso,
+        );
+        migratedGuarantorsCount++;
+      }
+    }
+    if (migratedGuarantorsCount > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`Boot migration: migrated ${migratedGuarantorsCount} guarantors to sale_guarantors.`);
+    }
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('Error migrating products to on_demand:', err);
+    console.error('Error migrating customer guarantors to sale_guarantors:', err);
   }
 
   // â”€â”€ Dashboard Metrics Cache (pre-aggregation for fast boot) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

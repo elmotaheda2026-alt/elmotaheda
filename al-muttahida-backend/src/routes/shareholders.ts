@@ -2301,6 +2301,28 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
       }
       shareholderName = shareholder.name;
 
+      // Re-verify withdrawal limits inside the locked transaction to prevent concurrent over-withdrawals
+      if (data.type === 'capital_withdrawal') {
+        const liveCapital = roundMoney(Number(shareholder.capital || 0));
+        if (roundMoney(data.amount) > roundMoney(liveCapital + 0.01)) {
+          const err: any = new Error(`المبلغ المطلوب سحبه من رأس المال (${data.amount}) يتجاوز رأس المال الفعلي (${liveCapital})`);
+          err.statusCode = 400;
+          throw err;
+        }
+      } else if (data.type === 'profit_withdrawal') {
+        const liveWithdrawnRow = await txDb.get(
+          "SELECT COALESCE(SUM(amount), 0) AS total FROM shareholder_transactions WHERE shareholder_id = ? AND type = 'profit_withdrawal'",
+          data.shareholderId,
+        );
+        const alreadyWithdrawn = roundMoney(Number(liveWithdrawnRow?.total || 0));
+        const liveAvailable = roundMoney(Math.max(0, livePartner.lifetimeNetEntitlement - alreadyWithdrawn));
+        if (roundMoney(data.amount) > roundMoney(liveAvailable + 0.01)) {
+          const err: any = new Error(`المبلغ المطلوب سحبه (${data.amount}) يتجاوز الأرباح المتاحة للسحب (${liveAvailable})`);
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+
       // Strictly separate Capital vs Retained Profits / Balance mutations
       if (data.type === 'capital_deposit') {
         await txDb.run(
@@ -2409,7 +2431,8 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
     }
     return res.status(201).json({ id });
   } catch (error: any) {
-    return res.status(error.message === 'Shareholder not found' ? 404 : 500).json({ message: error.message || 'Database error' });
+    const status = error.statusCode || (error.message === 'Shareholder not found' ? 404 : 500);
+    return res.status(status).json({ message: error.message || 'Database error' });
   }
 });
 

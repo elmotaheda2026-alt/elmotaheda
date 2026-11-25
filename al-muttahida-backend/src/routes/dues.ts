@@ -69,10 +69,10 @@ export async function getCollectionDues(params: {
 
   // 1. Status Filtering
   if (statusFilter === 'unpaid') {
-    whereParts.push("status <> 'paid'");
+    whereParts.push("status NOT IN ('paid', 'settled_early')");
     whereParts.push('remaining_amount >= 1.0');
   } else if (statusFilter === 'paid') {
-    whereParts.push("(status = 'paid' OR remaining_amount < 1.0)");
+    whereParts.push("(status IN ('paid', 'settled_early') OR remaining_amount < 1.0)");
   }
   // If 'all', do not constrain status
 
@@ -258,7 +258,7 @@ export async function getCollectionDues(params: {
         WHERE status = 'posted' AND type = 'in' AND customer_id IS NOT NULL
         GROUP BY customer_id
       ) p_cust ON p_cust.customer_id = s.customer_id
-      WHERE s.status <> 'cancelled'
+      WHERE s.status NOT IN ('cancelled', 'settled_early')
 
       UNION ALL
 
@@ -327,7 +327,7 @@ export async function getCollectionDues(params: {
         WHERE status = 'posted' AND type = 'in' AND customer_id IS NOT NULL
         GROUP BY customer_id
       ) p_cust ON p_cust.customer_id = s.customer_id
-      WHERE s.status <> 'cancelled'
+      WHERE s.status NOT IN ('cancelled', 'settled_early')
         AND NOT EXISTS (
           SELECT 1 FROM installment_schedules WITH (NOLOCK) WHERE sale_id = s.id
         )

@@ -14,17 +14,10 @@ import { DatePicker } from '../components/DatePicker';
 import { formatWholeCurrency } from '../lib/utils';
 import { api, isApiMode } from '../lib/apiClient';
 import { useRealtimeSync } from '../lib/realtimeSync';
+import PersonRiskAlert from '../components/PersonRiskAlert';
 
 const CUSTOMER_RENDER_LIMIT = 40;
 const SEARCH_MODAL_LIMIT = 50;
-
-const initialGuarantor: Guarantor = {
-  name: '',
-  address: '',
-  nationalId: '',
-  phone: '',
-  relationship: ''
-};
 
 const compressImageFile = (file: File, maxWidth = 1280, maxHeight = 960, quality = 0.82): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -240,21 +233,39 @@ export default function Customers() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewImage, webcamSide]);
 
+  const [serverNextCustomerNumber, setServerNextCustomerNumber] = useState('');
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+
+  useEffect(() => {
+    if (!showForm || isEditing || !isApiMode()) return;
+    let cancelled = false;
+    api.getNextCustomerNumber()
+      .then((res) => {
+        if (!cancelled && res?.customerNumber) {
+          setServerNextCustomerNumber(res.customerNumber);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showForm, isEditing]);
+
   const nextGeneratedCustomerNumber = useMemo(() => {
     if (!showForm || isEditing) return '';
-    console.time('Customers.generateCustomerNumber');
+    if (isApiMode() && serverNextCustomerNumber) return serverNextCustomerNumber;
     const maxNum = customers.reduce((max, c) => {
       const num = parseInt(c.customerNumber?.replace('C-', '') || '0');
       return num > max ? num : max;
     }, 0);
-    const nextNumber = `C-${String(maxNum + 1).padStart(4, '0')}`;
-    console.timeEnd('Customers.generateCustomerNumber');
-    return nextNumber;
-  }, [customers, isEditing, showForm]);
+    return `C-${String(maxNum + 1).padStart(4, '0')}`;
+  }, [customers, isEditing, showForm, serverNextCustomerNumber]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingCustomer) return;
     setError(null);
+    setIsSavingCustomer(true);
 
     const customerData: Partial<Customer> = {
       name: formData.name,
@@ -295,6 +306,8 @@ export default function Customers() {
       handleClose();
     } catch (err: any) {
       setError(err.message || 'حدث خطأ أثناء حفظ بيانات العميل. يرجى التحقق من صحة البيانات المدخلة.');
+    } finally {
+      setIsSavingCustomer(false);
     }
   };
 
@@ -359,9 +372,7 @@ export default function Customers() {
     }
     const allSales = getSales();
     const linkedSales = allSales.filter(
-      (s) =>
-        s.status !== 'cancelled' &&
-        (s.customerId === id || (customer && s.customerName?.trim() === customer.name?.trim()))
+      (s) => s.status !== 'cancelled' && s.customerId === id
     );
 
     if (linkedSales.length > 0) {
@@ -505,7 +516,7 @@ export default function Customers() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'F2') {
         event.preventDefault();
-        handleNew();
+        if (canModify) handleNew();
       }
       if (event.key === 'F5') {
         event.preventDefault();
@@ -534,16 +545,6 @@ export default function Customers() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewImage, webcamSide, searchModal, showForm]);
-
-  const updateGuarantor = (index: number, field: keyof Guarantor, value: string) => {
-    const cleanedValue = (field === 'phone' || field === 'nationalId') ? value.replace(/\D/g, '') : value;
-    const newGuarantors = [...formData.guarantors] as [Guarantor | null, Guarantor | null, Guarantor | null];
-    if (!newGuarantors[index]) {
-      newGuarantors[index] = { ...initialGuarantor };
-    }
-    newGuarantors[index] = { ...newGuarantors[index]!, [field]: cleanedValue };
-    setFormData({ ...formData, guarantors: newGuarantors });
-  };
 
   const handleNationalIdChange = (value: string) => {
     const nationalId = value.replace(/\D/g, '').slice(0, 14);
@@ -750,8 +751,8 @@ export default function Customers() {
               visibleCustomers.map((customer) => (
                 <div
                   key={`mob-${customer.id}`}
-                  onClick={() => handleEdit(customer)}
-                  className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5 cursor-pointer"
+                  onClick={() => canModify && handleEdit(customer)}
+                  className={`bg-white border border-slate-200 rounded-2xl p-3.5 shadow-2xs space-y-2.5 ${canModify ? 'cursor-pointer' : ''}`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-start gap-2.5 min-w-0">
@@ -853,9 +854,9 @@ export default function Customers() {
                   visibleCustomers.map(customer => (
                     <tr
                       key={customer.id}
-                      onDoubleClick={() => handleEdit(customer)}
-                      title="انقر مرتين للتعديل"
-                      className="group cursor-pointer hover:bg-slate-50 transition-colors"
+                      onDoubleClick={() => canModify && handleEdit(customer)}
+                      title={canModify ? 'انقر مرتين للتعديل' : undefined}
+                      className={`group hover:bg-slate-50 transition-colors ${canModify ? 'cursor-pointer' : ''}`}
                     >
                       <td className="py-2.5 px-4">
                         <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-blue-50 text-blue-700 font-mono border border-blue-100">
@@ -1492,6 +1493,14 @@ export default function Customers() {
                       <FileText size={18} className="text-indigo-600" />
                       البيانات الثبوتية والمالية
                     </h3>
+                    <div className="mb-3">
+                      <PersonRiskAlert
+                        nationalId={formData.nationalId}
+                        phone={formData.phone}
+                        excludeCustomerId={isEditing ? selectedCustomer?.id : undefined}
+                        context="customer"
+                      />
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-600 mb-1">الرقم القومى *</label>
@@ -1543,135 +1552,10 @@ export default function Customers() {
                     />
                   </div>
 
-                  {/* Guarantors Section */}
-                  <div className="border border-gray-300 rounded-xl p-4">
-                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                      <Users size={18} className="text-indigo-600" />
-                      الضامنين
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                      {/* Guarantor 1 */}
-                      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
-                        <h4 className="font-medium text-gray-700">الضامن الأول</h4>
-                        <input
-                          type="text"
-                          placeholder="الاسم"
-                          value={formData.guarantors[0]?.name || ''}
-                          onChange={(e) => updateGuarantor(0, 'name', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="العنوان"
-                          value={formData.guarantors[0]?.address || ''}
-                          onChange={(e) => updateGuarantor(0, 'address', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="الرقم القومى"
-                          value={formData.guarantors[0]?.nationalId || ''}
-                          onChange={(e) => updateGuarantor(0, 'nationalId', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="tel"
-                          placeholder="رقم الهاتف"
-                          value={formData.guarantors[0]?.phone || ''}
-                          onChange={(e) => updateGuarantor(0, 'phone', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="صلة القرابة"
-                          value={formData.guarantors[0]?.relationship || ''}
-                          onChange={(e) => updateGuarantor(0, 'relationship', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                      </div>
-
-                      {/* Guarantor 2 */}
-                      <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
-                        <h4 className="font-medium text-gray-700">الضامن الثانى</h4>
-                        <input
-                          type="text"
-                          placeholder="الاسم"
-                          value={formData.guarantors[1]?.name || ''}
-                          onChange={(e) => updateGuarantor(1, 'name', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="العنوان"
-                          value={formData.guarantors[1]?.address || ''}
-                          onChange={(e) => updateGuarantor(1, 'address', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="الرقم القومى"
-                          value={formData.guarantors[1]?.nationalId || ''}
-                          onChange={(e) => updateGuarantor(1, 'nationalId', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="tel"
-                          placeholder="رقم الهاتف"
-                          value={formData.guarantors[1]?.phone || ''}
-                          onChange={(e) => updateGuarantor(1, 'phone', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="صلة القرابة"
-                          value={formData.guarantors[1]?.relationship || ''}
-                          onChange={(e) => updateGuarantor(1, 'relationship', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Guarantor 3 */}
-                    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
-                      <h4 className="font-medium text-gray-700">الضامن الثالث</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                        <input
-                          type="text"
-                          placeholder="الاسم"
-                          value={formData.guarantors[2]?.name || ''}
-                          onChange={(e) => updateGuarantor(2, 'name', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="العنوان"
-                          value={formData.guarantors[2]?.address || ''}
-                          onChange={(e) => updateGuarantor(2, 'address', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="الرقم القومى"
-                          value={formData.guarantors[2]?.nationalId || ''}
-                          onChange={(e) => updateGuarantor(2, 'nationalId', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="tel"
-                          placeholder="رقم الهاتف"
-                          value={formData.guarantors[2]?.phone || ''}
-                          onChange={(e) => updateGuarantor(2, 'phone', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                        <input
-                          type="text"
-                          placeholder="صلة القرابة"
-                          value={formData.guarantors[2]?.relationship || ''}
-                          onChange={(e) => updateGuarantor(2, 'relationship', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
-                        />
-                      </div>
-                    </div>
+                  {/* Note: Guarantors are now managed per invoice/contract */}
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-xs font-semibold text-blue-800 flex items-center gap-2">
+                    <Users size={16} className="text-blue-600 shrink-0" />
+                    <span>يتم تسجيل الضامنين الآن مع كل فاتورة/عقد بشكل مستقل للحفاظ على السجل القانوني لكل فاتورة.</span>
                   </div>
                 </div>
               </div>
@@ -1687,10 +1571,11 @@ export default function Customers() {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold flex items-center gap-1.5 shadow-2xs"
+                  disabled={isSavingCustomer}
+                  className="px-6 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold flex items-center gap-1.5 shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Save size={16} />
-                  <span>حفظ البيانات</span>
+                  <span>{isSavingCustomer ? 'جاري الحفظ...' : 'حفظ البيانات'}</span>
                 </button>
               </div>
             </form>

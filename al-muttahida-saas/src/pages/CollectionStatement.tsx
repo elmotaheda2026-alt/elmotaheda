@@ -212,6 +212,7 @@ export default function CollectionStatement() {
   const [apiDues, setApiDues] = useState<DueCustomerRow[]>([]);
   const [isDueLoading, setIsDueLoading] = useState(false);
   const [dueError, setDueError] = useState<string | null>(null);
+  const [duesRefreshTick, setDuesRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!isApiMode()) return;
@@ -269,7 +270,7 @@ export default function CollectionStatement() {
       document.removeEventListener('visibilitychange', handleSilentRefresh);
       window.clearInterval(pollInterval);
     };
-  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis, activeTab]);
+  }, [dueFromDate, dueToDate, dueSearchTerm, selectedSalesRepId, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis, activeTab, duesRefreshTick]);
 
   // Dynamic screen-fitting page size
   useEffect(() => {
@@ -330,7 +331,7 @@ export default function CollectionStatement() {
   // Reset pagination when filters change
   useEffect(() => {
     setDueCurrentPage(1);
-  }, [dueSearchTerm, dueFromDate, dueToDate, selectedSalesRepId, hideSuedCustomers, pageSize]);
+  }, [dueSearchTerm, dueFromDate, dueToDate, selectedSalesRepId, hideSuedCustomers, includeOverdue, dueStatusFilter, dueDateBasis, pageSize]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const suggestions = useMemo(() => {
@@ -368,6 +369,7 @@ export default function CollectionStatement() {
 
   useRealtimeSync(['sales', 'payments', 'customers'], () => {
     void loadCollectionData();
+    setDuesRefreshTick((t) => t + 1);
   });
 
   useEffect(() => {
@@ -424,6 +426,7 @@ export default function CollectionStatement() {
         // Re-fetch to sync with server truth
         const apiCustomers = await api.listCustomers();
         setCustomers(apiCustomers);
+        setDuesRefreshTick((t) => t + 1);
       } else {
         await toggleCustomerSued(customerId, nextIsSued, nextIsSued ? now : undefined);
         // Re-read from storage after write
@@ -523,7 +526,7 @@ export default function CollectionStatement() {
           salesRepId,
           salesRepName,
           schedules,
-          guarantors: customer?.guarantors || [],
+          guarantors: (sale.guarantors && sale.guarantors.some(Boolean)) ? sale.guarantors : (customer?.guarantors || []),
           lastPaymentDate: schedules
             .filter((s) => s.paidAt)
             .reduce((latest, s) => (!latest || s.paidAt! > latest ? s.paidAt : latest), undefined as string | undefined),
@@ -575,7 +578,7 @@ export default function CollectionStatement() {
         salesRepId,
         salesRepName,
         schedules,
-        guarantors: customer?.guarantors || [],
+        guarantors: (sale.guarantors && sale.guarantors.some(Boolean)) ? sale.guarantors : (customer?.guarantors || []),
         lastPaymentDate: schedules
           .filter((s) => s.paidAt)
           .reduce((latest, s) => (!latest || s.paidAt! > latest ? s.paidAt : latest), undefined as string | undefined),
@@ -2894,7 +2897,7 @@ function CustomerDetailsModal({
     if (!isOpen || !targetSaleId || !isApiMode()) return;
 
     const existing = sales.find((s) => s.id === targetSaleId);
-    if (existing?.items && existing.items.length > 0) return;
+    if (existing?.items && existing.items.length > 0 && existing.guarantorRecords) return;
 
     api.getSale(targetSaleId)
       .then((fullSale) => {
@@ -3147,11 +3150,18 @@ function CustomerDetailsModal({
             </div>
           </div>
 
-          {/* Guarantors Card */}
+          {/* Guarantors Card (Read-only summary; management moved to Invoices Contract Details) */}
           <div className="bg-amber-50/60 border border-amber-200/80 rounded-xl p-3.5">
-            <div className="flex items-center gap-2 mb-2 text-xs font-black text-amber-900">
-              <Shield size={15} className="text-amber-600" />
-              <span>بيانات الضامنين ({guarantors.length})</span>
+            <div className="flex items-center justify-between gap-2 mb-2 text-xs font-black text-amber-900">
+              <div className="flex items-center gap-2">
+                <Shield size={15} className="text-amber-600" />
+                <span>بيانات الضامنين ({guarantors.length})</span>
+              </div>
+              {Number(matchedSale?.guarantorHistoryCount || 0) > 0 && (
+                <span className="text-[10px] font-bold bg-white border border-amber-200 text-amber-800 px-2 py-0.5 rounded-md">
+                  ضامنون سابقون: {matchedSale?.guarantorHistoryCount}
+                </span>
+              )}
             </div>
             {guarantors.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">

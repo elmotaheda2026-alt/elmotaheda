@@ -375,11 +375,44 @@ export default function Payments() {
   };
 
   const closingDateYYYYMMDD = toYYYYMMDD(closingDate);
+  const [closingServerSummary, setClosingServerSummary] = useState<{
+    date: string;
+    totalIn: number;
+    totalOut: number;
+    net: number;
+    closingBalance: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isApiMode() || !showClosingModal || !closingDateYYYYMMDD) return;
+    let cancelled = false;
+    api
+      .getPaymentsSummary(closingDateYYYYMMDD, { startDate: closingDateYYYYMMDD, endDate: closingDateYYYYMMDD })
+      .then((res) => {
+        if (!cancelled && res?.period) {
+          setClosingServerSummary({
+            date: closingDateYYYYMMDD,
+            totalIn: res.period.totalIn,
+            totalOut: res.period.totalOut,
+            net: res.period.net,
+            closingBalance: res.period.closingBalance,
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showClosingModal, closingDateYYYYMMDD]);
+
   const closingDatePayments = payments.filter((p) => toYYYYMMDD(p.date) === closingDateYYYYMMDD && p.status !== 'voided');
   const closingOperationalPayments = closingDatePayments.filter((p) => p.referenceType !== 'internal_transfer');
-  const closingTotalIn = closingOperationalPayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
-  const closingTotalOut = closingOperationalPayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
-  const closingNet = closingTotalIn - closingTotalOut;
+  const localClosingTotalIn = closingOperationalPayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+  const localClosingTotalOut = closingOperationalPayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+  const hasMatchingServerClosing = isApiMode() && closingServerSummary?.date === closingDateYYYYMMDD;
+  const closingTotalIn = hasMatchingServerClosing ? closingServerSummary.totalIn : localClosingTotalIn;
+  const closingTotalOut = hasMatchingServerClosing ? closingServerSummary.totalOut : localClosingTotalOut;
+  const closingNet = hasMatchingServerClosing ? closingServerSummary.net : closingTotalIn - closingTotalOut;
 
   // Calculate cumulative treasury cash balance up to and including the closing date:
   // Formula: Starting Cash Balance + All Inflows up to closing date - (All Outflows + Standalone Expenses up to closing date)
@@ -409,16 +442,35 @@ export default function Payments() {
     return Math.max(0, startingCash + inflowUpToDate - (paymentOutflowUpToDate + standaloneExpensesUpToDate));
   };
 
-  const expectedTreasuryClosingBalance = calculateAccumulatedCashUpToDate(closingDateYYYYMMDD);
+  const expectedTreasuryClosingBalance = hasMatchingServerClosing
+    ? closingServerSummary.closingBalance
+    : calculateAccumulatedCashUpToDate(closingDateYYYYMMDD);
 
   const handleClosePeriod = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
-      const closingDayCashBalance = expectedTreasuryClosingBalance;
+      let finalTotalIn = closingTotalIn;
+      let finalTotalOut = closingTotalOut;
+      let finalNet = closingNet;
+      let closingDayCashBalance = expectedTreasuryClosingBalance;
+
+      if (isApiMode() && closingDateYYYYMMDD) {
+        const freshSummary = await api.getPaymentsSummary(closingDateYYYYMMDD, {
+          startDate: closingDateYYYYMMDD,
+          endDate: closingDateYYYYMMDD,
+        });
+        if (freshSummary?.period) {
+          finalTotalIn = freshSummary.period.totalIn;
+          finalTotalOut = freshSummary.period.totalOut;
+          finalNet = freshSummary.period.net;
+          closingDayCashBalance = freshSummary.period.closingBalance;
+        }
+      }
+
       await closePeriodApi('daily', closingDate, user?.name || 'مدير النظام', closingNotes, {
-        totalIn: closingTotalIn,
-        totalOut: closingTotalOut,
-        netMovement: closingNet,
+        totalIn: finalTotalIn,
+        totalOut: finalTotalOut,
+        netMovement: finalNet,
         closingBalance: closingDayCashBalance,
       });
       await loadData();
@@ -498,15 +550,29 @@ export default function Payments() {
         while (cursor <= end) {
           const dayStr = toYYYYMMDD(cursor.toISOString());
           if (dayStr && !closedSet.has(dayStr)) {
-            const dayPayments = payments.filter((p) => toYYYYMMDD(p.date) === dayStr && p.status !== 'voided');
-            const yIn = dayPayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
-            const yOut = dayPayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+            let yIn = 0;
+            let yOut = 0;
+            let yNet = 0;
+            let yBalance = 0;
+            if (isApiMode()) {
+              const daySummary = await api.getPaymentsSummary(dayStr, { startDate: dayStr, endDate: dayStr });
+              yIn = daySummary?.period?.totalIn ?? 0;
+              yOut = daySummary?.period?.totalOut ?? 0;
+              yNet = daySummary?.period?.net ?? (yIn - yOut);
+              yBalance = daySummary?.period?.closingBalance ?? 0;
+            } else {
+              const dayPayments = payments.filter((p) => toYYYYMMDD(p.date) === dayStr && p.status !== 'voided' && p.referenceType !== 'internal_transfer');
+              yIn = dayPayments.filter((p) => p.type === 'in').reduce((sum, p) => sum + p.amount, 0);
+              yOut = dayPayments.filter((p) => p.type === 'out').reduce((sum, p) => sum + p.amount, 0);
+              yNet = yIn - yOut;
+              yBalance = calculateAccumulatedCashUpToDate(dayStr);
+            }
             const note = dayStr === yesterdayStr ? 'إغلاق تلقائي عند بدء اليوم الجديد' : 'إغلاق تلقائي للأيام الفائتة';
             await closePeriodApi('daily', dayStr, 'النظام التلقائي', note, {
               totalIn: yIn,
               totalOut: yOut,
-              netMovement: yIn - yOut,
-              closingBalance: calculateAccumulatedCashUpToDate(dayStr),
+              netMovement: yNet,
+              closingBalance: yBalance,
             });
             didCloseAny = true;
           }
@@ -537,11 +603,24 @@ export default function Payments() {
     const timerId = setTimeout(async () => {
       try {
         const todayDate = today();
-        const currentBalance = calculateAccumulatedCashUpToDate(toYYYYMMDD(todayDate));
+        const todayIso = toYYYYMMDD(todayDate);
+        let tIn = closingTotalIn;
+        let tOut = closingTotalOut;
+        let tNet = closingNet;
+        let currentBalance = calculateAccumulatedCashUpToDate(todayIso);
+        if (isApiMode() && todayIso) {
+          const summary = await api.getPaymentsSummary(todayIso, { startDate: todayIso, endDate: todayIso });
+          if (summary?.period) {
+            tIn = summary.period.totalIn;
+            tOut = summary.period.totalOut;
+            tNet = summary.period.net;
+            currentBalance = summary.period.closingBalance;
+          }
+        }
         await closePeriodApi('daily', todayDate, 'النظام التلقائي', 'إغلاق تلقائي في نهاية اليوم (11:59 م)', {
-          totalIn: closingTotalIn,
-          totalOut: closingTotalOut,
-          netMovement: closingNet,
+          totalIn: tIn,
+          totalOut: tOut,
+          netMovement: tNet,
           closingBalance: currentBalance,
         });
         await loadData();
@@ -599,7 +678,7 @@ export default function Payments() {
     ? Number(Math.max(selectedInstallment.amount - selectedInstallment.paidAmount, 0).toFixed(2))
     : 0;
 
-  const pendingSchedules = selectedSchedules.filter((schedule) => schedule.status !== 'paid');
+  const pendingSchedules = selectedSchedules.filter((schedule) => schedule.status !== 'paid' && schedule.status !== 'settled_early');
 
   const totalRemainingUnpaid = selectedSale ? Number(selectedSale.remaining || 0) : 0;
 
@@ -622,9 +701,9 @@ export default function Payments() {
     );
 
     const schedules = selectedSale.financing?.schedules || [];
-    const paidMonths = schedules.filter((s) => s.status === 'paid' || (s.amount > 0 && s.paidAmount >= s.amount)).length;
+    const paidMonths = schedules.filter((s) => s.status === 'paid' || s.status === 'settled_early' || (s.amount > 0 && s.paidAmount >= s.amount)).length;
     const remainingMonths = schedules.length > 0
-      ? schedules.filter((s) => s.status !== 'paid' && !(s.amount > 0 && s.paidAmount >= s.amount)).length
+      ? schedules.filter((s) => s.status !== 'paid' && s.status !== 'settled_early' && !(s.amount > 0 && s.paidAmount >= s.amount)).length
       : Math.max(0, totalMonths - paidMonths);
 
     const basePrice = Number(selectedSale.subtotal) || 0;
@@ -1336,8 +1415,19 @@ export default function Payments() {
     return undefined;
   };
 
-  const openEditInstallmentModal = (schedule: InstallmentSchedule) => {
-    const linkedPmt = getPaymentForSchedule(schedule.id);
+  const openEditInstallmentModal = async (schedule: InstallmentSchedule) => {
+    let linkedPmt = getPaymentForSchedule(schedule.id);
+    if (!linkedPmt && isApiMode() && selectedSale) {
+      try {
+        const fetched = await api.listPayments({ search: selectedSale.invoiceNumber, limit: 100 });
+        const list = Array.isArray(fetched) ? fetched : (fetched as any)?.data || [];
+        linkedPmt =
+          list.find((p: Payment) => isValidInstallmentReceipt(p) && p.installmentId === schedule.id) ||
+          list.find((p: Payment) => isValidInstallmentReceipt(p) && p.saleId === selectedSale.id && schedule.label && p.description?.includes(schedule.label));
+      } catch {
+        // fallback below
+      }
+    }
     if (!linkedPmt) {
       setMessage({ type: 'error', text: 'لم يتم العثور على إيصال تحصيل فعلي مرتبط بهذا القسط.' });
       return;
@@ -1619,8 +1709,20 @@ export default function Payments() {
     }
   };
 
+  const paymentSubmitLockRef = React.useRef(false);
+
   const handleIncomingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (paymentSubmitLockRef.current) return;
+    paymentSubmitLockRef.current = true;
+    try {
+      await handleIncomingSubmitInner();
+    } finally {
+      paymentSubmitLockRef.current = false;
+    }
+  };
+
+  const handleIncomingSubmitInner = async () => {
 
     if (user?.role !== 'admin' && isDateClosed(incomingForm.date)) {
       setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
@@ -1920,6 +2022,16 @@ export default function Payments() {
 
   const handleOutgoingSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (paymentSubmitLockRef.current) return;
+    paymentSubmitLockRef.current = true;
+    try {
+      await handleOutgoingSubmitInner();
+    } finally {
+      paymentSubmitLockRef.current = false;
+    }
+  };
+
+  const handleOutgoingSubmitInner = async () => {
 
     if (user?.role !== 'admin' && isDateClosed(outgoingForm.date)) {
       setMessage({ type: 'error', text: 'لا يمكن إجراء حركة مالية في تاريخ مغلق ماليًا.' });
@@ -3020,7 +3132,7 @@ export default function Payments() {
                                       <td className="px-3 py-3">
                                         <div className="flex items-center gap-1.5 whitespace-nowrap">
                                           <StatusBadge status={schedule.status} />
-                                          {(schedule.paidAmount > 0 || schedule.status === 'paid') && getPaymentForSchedule(schedule.id) && (
+                                          {(schedule.paidAmount > 0 || schedule.status === 'paid') && (isApiMode() || getPaymentForSchedule(schedule.id)) && (
                                             <button
                                               type="button"
                                               onClick={() => openEditInstallmentModal(schedule)}

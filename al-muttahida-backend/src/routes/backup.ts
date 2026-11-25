@@ -35,6 +35,7 @@ const BACKUP_KEY_NAMES = [
   'RESCHEDULE_REQUESTS',
   'CLOSING_PERIODS',
   'DOCUMENT_TEMPLATES',
+  'SALE_GUARANTORS',
 ] as const;
 
 type BackupKey = (typeof BACKUP_KEY_NAMES)[number];
@@ -68,6 +69,7 @@ const tableExportQueries: Record<Exclude<BackupKey, never>, string> = {
   RESCHEDULE_REQUESTS: 'SELECT * FROM reschedule_requests',
   CLOSING_PERIODS: 'SELECT * FROM closing_periods',
   DOCUMENT_TEMPLATES: 'SELECT * FROM document_templates',
+  SALE_GUARANTORS: 'SELECT * FROM sale_guarantors',
 };
 
 function safeStringify(value: unknown): string | null {
@@ -375,6 +377,7 @@ export function generateSqlBackup(backup: BackupFile): string {
     RESCHEDULE_REQUESTS: 'reschedule_requests',
     CLOSING_PERIODS: 'closing_periods',
     DOCUMENT_TEMPLATES: 'document_templates',
+    SALE_GUARANTORS: 'sale_guarantors',
   };
 
   for (const [key, rawRows] of Object.entries(backup.data || {})) {
@@ -548,6 +551,7 @@ export async function restoreBackupInTransaction(
   }));
 
   step('clearing tables');
+  await new sql.Request(trx).query('DELETE FROM sale_guarantors');
   await new sql.Request(trx).query('DELETE FROM sale_items');
   await new sql.Request(trx).query('DELETE FROM installment_schedules');
   await new sql.Request(trx).query('DELETE FROM purchase_items');
@@ -699,6 +703,17 @@ export async function restoreBackupInTransaction(
           restoredCounts.installment_schedules += 1;
         }
       }
+    }
+  }
+
+  step('sale_guarantors');
+  restoredCounts.sale_guarantors = 0;
+  const saleGuarantorColumns = await getTableColumns(trx, 'sale_guarantors');
+  const rawSaleGuarantors = parseRows<any>(payload.data.SALE_GUARANTORS);
+  for (const rawGuarantor of rawSaleGuarantors) {
+    const normalized = normalizeBackupRow(rawGuarantor);
+    if (await insertFilteredRow(trx, 'sale_guarantors', normalized, saleGuarantorColumns)) {
+      restoredCounts.sale_guarantors += 1;
     }
   }
 

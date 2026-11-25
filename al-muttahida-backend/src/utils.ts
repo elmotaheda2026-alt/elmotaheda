@@ -57,17 +57,21 @@ export function formatDateDisplay(dateStr?: string | null): string {
  * Throws an error if the format is invalid.
  */
 export function parseDateInput(dateStr: string): string {
-  // First, try to parse as ISO (fallback for existing clients)
-  const iso = new Date(dateStr);
+  const trimmed = String(dateStr || '').trim();
+  // Check DD/MM/YYYY or DD-MM-YYYY FIRST so 05/11/2026 is always Nov 5 (not May 11!)
+  const dmyMatch = /^([0-3]?\d)[/-]([0-1]?\d)[/-](\d{4})$/.exec(trimmed);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, '0');
+    const month = dmyMatch[2].padStart(2, '0');
+    const year = dmyMatch[3];
+    const parsed = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+
+  // Next, check YYYY-MM-DD (or full ISO)
+  const iso = new Date(trimmed);
   if (!isNaN(iso.getTime())) return iso.toISOString();
 
-  const match = /^([0-3]\d)\/([0-1]\d)\/(\d{4})$/.exec(dateStr.trim());
-  if (!match) {
-    throw new Error('Invalid date format, expected DD/MM/YYYY');
-  }
-  const [_, day, month, year] = match;
-  // Construct ISO string (midnight UTC)
-  const isoString = new Date(`${year}-${month}-${day}T00:00:00.000Z`).toISOString();
-  return isoString;
+  throw new Error('Invalid date format, expected DD/MM/YYYY or YYYY-MM-DD');
 }
 

@@ -347,6 +347,72 @@ export function emitApiHealth(connected: boolean) {
         body: JSON.stringify({ installmentId }),
       }),
     getSale: (id: string) => request<any>(`/sales/${id}`),
+    getLatestCustomerGuarantors: (customerId: string) =>
+      request<{ guarantors: [any, any, any]; source: 'sale' | 'customer' | 'none'; invoiceNumber?: string }>(
+        `/sales/customer/${encodeURIComponent(customerId)}/latest-guarantors`,
+      ),
+    getSaleGuarantors: (saleId: string) =>
+      request<{ guarantors: [any, any, any]; guarantorRecords: any[]; guarantorHistoryCount: number }>(
+        `/sales/${encodeURIComponent(saleId)}/guarantors`,
+      ),
+    replaceSaleGuarantor: (
+      saleId: string,
+      payload: {
+        slot: 1 | 2 | 3;
+        guarantor: { name: string; phone: string; nationalId: string; address: string; relationship: string };
+        reason?: string;
+      },
+    ) =>
+      request<any>(`/sales/${encodeURIComponent(saleId)}/guarantors/replace`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    checkPersonRisk: (params: { nationalId?: string; phone?: string; excludeCustomerId?: string; excludeSaleId?: string }) => {
+      const qs = new URLSearchParams();
+      if (params.nationalId) qs.set('nationalId', params.nationalId);
+      if (params.phone) qs.set('phone', params.phone);
+      if (params.excludeCustomerId) qs.set('excludeCustomerId', params.excludeCustomerId);
+      if (params.excludeSaleId) qs.set('excludeSaleId', params.excludeSaleId);
+      return request<{
+        existingCustomers: Array<{
+          id: string;
+          customerNumber: string;
+          name: string;
+          phone: string;
+          nationalId: string;
+          balance: number;
+          isSued: boolean;
+        }>;
+        activeGuarantees: Array<{
+          saleId: string;
+          slot: number;
+          guarantorName: string;
+          invoiceNumber: string;
+          customerId: string;
+          customerName: string;
+          remaining: number;
+          isSued: boolean;
+          overdueCount: number;
+        }>;
+        totalGuaranteedRemaining: number;
+        hasSuedOrOverdue: boolean;
+      }>(`/sales/check-person-risk?${qs.toString()}`);
+    },
+    transferSaleContract: (
+      saleId: string,
+      payload: {
+        newCustomerId: string;
+        transferDate?: string;
+        installmentMonths?: number;
+        installmentStartDate?: string;
+        reason?: string;
+        guarantors?: Array<{ name: string; phone: string; nationalId: string; address: string; relationship: string } | null>;
+      },
+    ) =>
+      request<{ oldSale: any; newSale: any }>(`/sales/${encodeURIComponent(saleId)}/transfer`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     updateInstallmentNote: (installmentId: string, notes: string) =>
       request<{ ok: boolean; id: string; notes: string | null }>(`/installments/${installmentId}/note`, {
         method: 'PATCH',
@@ -407,13 +473,19 @@ export function emitApiHealth(connected: boolean) {
       if (filters.channel) params.set('channel', filters.channel);
       return request<{ total: number; page: number; limit: number; totalPages: number; payments: any[] }>(`/payments?${params.toString()}`);
     },
-    getPaymentsSummary: (date?: string) =>
-      request<{
+    getPaymentsSummary: (date?: string, range?: { startDate?: string; endDate?: string }) => {
+      const params = new URLSearchParams();
+      if (date) params.set('date', date);
+      if (range?.startDate) params.set('startDate', range.startDate);
+      if (range?.endDate) params.set('endDate', range.endDate);
+      const qs = params.toString();
+      return request<{
         totalCount: number;
         todayCount?: number;
         totalIn: number | null;
         totalOut: number | null;
         totalExpenses: number | null;
+        startingCashBalance?: number | null;
         netCash: number | null;
         todayIn: number;
         todayOut: number;
@@ -423,7 +495,18 @@ export function emitApiHealth(connected: boolean) {
           string,
           { balance: number | null; totalIn: number | null; totalOut: number | null; todayIn: number; todayOut: number; todayNet: number }
         >;
-      }>(`/payments/summary${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+        period?: {
+          startDate: string;
+          endDate: string;
+          totalIn: number;
+          totalOut: number;
+          totalExpenses: number;
+          count: number;
+          net: number;
+          closingBalance: number;
+        } | null;
+      }>(`/payments/summary${qs ? `?${qs}` : ''}`);
+    },
     createPayment: (payload: any) => request<{ id: string; receiptNumber: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
     updatePayment: (id: string, payload: { amount: number; date: string; description?: string }) =>
       request<{ message: string }>(`/payments/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
@@ -432,6 +515,7 @@ export function emitApiHealth(connected: boolean) {
     getCollectionRate: () => request<{ billed: number; collected: number; rate: number }>('/reports/collection-rate'),
     getDailyCash: (date: string) => request<{ date: string; cashIn: number; cashOut: number; net: number }>(`/reports/daily-cash?date=${encodeURIComponent(date)}`),
     listCustomers: () => requestArray<any>('/customers', 'customers'),
+    getNextCustomerNumber: () => request<{ customerNumber: string }>('/customers/next-number'),
     listCustomersPaged: (filters: { page?: number; limit?: number; search?: string; filter?: string } = {}) => {
       const params = new URLSearchParams();
       params.set('page', String(filters.page || 1));

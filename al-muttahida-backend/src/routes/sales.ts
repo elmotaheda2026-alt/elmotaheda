@@ -141,6 +141,15 @@ const saleSchema = z.preprocess((value) => {
   date: z.string().min(8),
   notes: z.string().optional().nullable(),
   financing: saleFinancingSchema,
+  guarantors: z.array(
+    z.object({
+      name: z.string().optional().default(''),
+      phone: z.string().optional().default(''),
+      nationalId: z.string().optional().default(''),
+      address: z.string().optional().default(''),
+      relationship: z.string().optional().default(''),
+    }).nullable()
+  ).max(3).optional(),
   replaceAutoPurchases: z.boolean().optional(),
 }));
 
@@ -398,7 +407,107 @@ function mapSchedules(schedules: ScheduleRow[]) {
   }));
 }
 
-function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], schedules: ReturnType<typeof mapSchedules> = []) {
+type SaleGuarantorRow = {
+  id: string;
+  sale_id: string;
+  slot: number;
+  name: string;
+  phone?: string | null;
+  national_id?: string | null;
+  address?: string | null;
+  relationship?: string | null;
+  status: string;
+  replaced_at?: string | null;
+  replaced_by?: string | null;
+  replace_reason?: string | null;
+  remaining_at_replace?: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function mapSaleGuarantors(rows: SaleGuarantorRow[]) {
+  const guarantors: [any, any, any] = [null, null, null];
+  const guarantorRecords = rows.map((r) => ({
+    id: r.id,
+    saleId: r.sale_id,
+    slot: (Number(r.slot) === 2 ? 2 : Number(r.slot) === 3 ? 3 : 1) as 1 | 2 | 3,
+    name: r.name || '',
+    phone: r.phone || '',
+    nationalId: r.national_id || '',
+    address: r.address || '',
+    relationship: r.relationship || '',
+    status: (r.status === 'replaced' ? 'replaced' : 'active') as 'active' | 'replaced',
+    replacedAt: r.replaced_at || null,
+    replacedBy: r.replaced_by || null,
+    replaceReason: r.replace_reason || null,
+    remainingAtReplace: r.remaining_at_replace !== null && r.remaining_at_replace !== undefined ? Number(r.remaining_at_replace) : null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+
+  let historyCount = 0;
+  for (const rec of guarantorRecords) {
+    if (rec.status === 'replaced') {
+      historyCount++;
+    } else {
+      const idx = rec.slot - 1;
+      if (idx >= 0 && idx < 3 && !guarantors[idx]) {
+        guarantors[idx] = {
+          name: rec.name,
+          phone: rec.phone,
+          nationalId: rec.nationalId,
+          address: rec.address,
+          relationship: rec.relationship,
+        };
+      }
+    }
+  }
+
+  return { guarantors, guarantorRecords, guarantorHistoryCount: historyCount };
+}
+
+async function insertSaleGuarantors(
+  txDb: Awaited<typeof dbPromise>,
+  saleId: string,
+  guarantors: SaleInput['guarantors'],
+  now: string,
+) {
+  if (!Array.isArray(guarantors) || guarantors.length === 0) return;
+  for (let i = 0; i < Math.min(guarantors.length, 3); i++) {
+    const g = guarantors[i];
+    if (!g) continue;
+    const name = String(g.name || '').trim();
+    const phone = String(g.phone || '').trim();
+    const nationalId = String(g.nationalId || '').trim();
+    const address = String(g.address || '').trim();
+    const relationship = String(g.relationship || '').trim();
+    if (!name && !phone && !nationalId) continue;
+
+    await txDb.run(
+      `INSERT INTO sale_guarantors (
+        id, sale_id, slot, name, phone, national_id, address, relationship, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+      uid(),
+      saleId,
+      i + 1,
+      name || 'ضامن',
+      phone,
+      nationalId,
+      address,
+      relationship,
+      now,
+      now,
+    );
+  }
+}
+
+function mapSale(
+  row: SaleRow,
+  items: ReturnType<typeof mapSaleItems> = [],
+  schedules: ReturnType<typeof mapSchedules> = [],
+  guarantorRows: SaleGuarantorRow[] = [],
+) {
+  const { guarantors, guarantorRecords, guarantorHistoryCount } = mapSaleGuarantors(guarantorRows);
   return {
     id: row.id,
     invoiceNumber: row.invoice_number,
@@ -420,6 +529,9 @@ function mapSale(row: SaleRow, items: ReturnType<typeof mapSaleItems> = [], sche
     createdBy: row.created_by,
     createdAt: row.created_at,
     items,
+    guarantors,
+    guarantorRecords,
+    guarantorHistoryCount,
     financing: {
       paymentMethod: row.payment_method || (row.installment_months && row.installment_months > 1 ? 'installment' : 'cash'),
       manualInvoiceRef: row.manual_invoice_ref,
@@ -520,12 +632,13 @@ async function getMappedSale(id: string) {
   const row = await db.get<SaleRow>('SELECT * FROM sales WHERE id = ?', id);
   if (!row) return null;
 
-  const [items, schedules] = await Promise.all([
+  const [items, schedules, guarantors] = await Promise.all([
     db.all<SaleItemRow>('SELECT * FROM sale_items WHERE sale_id = ?', id),
     db.all<ScheduleRow>('SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC', id),
+    db.all<SaleGuarantorRow>('SELECT * FROM sale_guarantors WHERE sale_id = ? ORDER BY status ASC, slot ASC, created_at DESC', id),
   ]);
 
-  return mapSale(row, mapSaleItems(items), mapSchedules(schedules));
+  return mapSale(row, mapSaleItems(items), mapSchedules(schedules), guarantors);
 }
 
 router.get('/', requireAnyPermission('sales:read', 'payments:read', 'reports:read'), async (req, res) => {
@@ -576,6 +689,7 @@ router.get('/', requireAnyPermission('sales:read', 'payments:read', 'reports:rea
     const saleIds = rows.map((row) => row.id);
     const schedulesBySaleId = new Map<string, ScheduleRow[]>();
     const itemsBySaleId = new Map<string, SaleItemRow[]>();
+    const guarantorsBySaleId = new Map<string, SaleGuarantorRow[]>();
 
     if (saleIds.length) {
       // Chunk IDs in batches of 500 to stay safely below SQL Server's 2,100-parameter limit
@@ -583,14 +697,25 @@ router.get('/', requireAnyPermission('sales:read', 'payments:read', 'reports:rea
       for (let i = 0; i < saleIds.length; i += chunkSize) {
         const chunk = saleIds.slice(i, i + chunkSize);
         const placeholders = chunk.map(() => '?').join(',');
-        const scheduleRows = await db.all<ScheduleRow & { sale_id: string }>(
-          `SELECT * FROM installment_schedules WHERE sale_id IN (${placeholders}) ORDER BY sale_id ASC, month_index ASC`,
-          ...chunk,
-        );
+        const [scheduleRows, guarantorRows] = await Promise.all([
+          db.all<ScheduleRow & { sale_id: string }>(
+            `SELECT * FROM installment_schedules WHERE sale_id IN (${placeholders}) ORDER BY sale_id ASC, month_index ASC`,
+            ...chunk,
+          ),
+          db.all<SaleGuarantorRow>(
+            `SELECT * FROM sale_guarantors WHERE sale_id IN (${placeholders}) ORDER BY sale_id ASC, status ASC, slot ASC, created_at DESC`,
+            ...chunk,
+          ),
+        ]);
         scheduleRows.forEach((schedule) => {
           const saleSchedules = schedulesBySaleId.get(schedule.sale_id) || [];
           saleSchedules.push(schedule);
           schedulesBySaleId.set(schedule.sale_id, saleSchedules);
+        });
+        guarantorRows.forEach((g) => {
+          const list = guarantorsBySaleId.get(g.sale_id) || [];
+          list.push(g);
+          guarantorsBySaleId.set(g.sale_id, list);
         });
 
         if (includeItems) {
@@ -612,6 +737,7 @@ router.get('/', requireAnyPermission('sales:read', 'payments:read', 'reports:rea
         row,
         mapSaleItems(itemsBySaleId.get(row.id) || []),
         mapSchedules(schedulesBySaleId.get(row.id) || []),
+        guarantorsBySaleId.get(row.id) || [],
       )
     ));
 
@@ -669,6 +795,591 @@ router.get('/next-invoice-number', requirePermission('sales:read'), async (_req,
     const db = await dbPromise;
     const invoiceNumber = await generateNextSaleInvoiceNumber(db);
     return res.json({ invoiceNumber });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+router.get('/check-person-risk', requireAnyPermission('sales:read', 'sales:write', 'payments:read', 'reports:read'), async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const nationalId = String(req.query.nationalId || '').replace(/\D/g, '').trim();
+    const phone = String(req.query.phone || '').replace(/\D/g, '').trim();
+    const excludeCustomerId = String(req.query.excludeCustomerId || '').trim();
+    const excludeSaleId = String(req.query.excludeSaleId || '').trim();
+
+    const hasNat = nationalId.length >= 6;
+    const hasPhone = phone.length >= 8;
+    if (!hasNat && !hasPhone) {
+      return res.json({
+        existingCustomers: [],
+        activeGuarantees: [],
+        totalGuaranteedRemaining: 0,
+        hasSuedOrOverdue: false,
+      });
+    }
+
+    const custWhere: string[] = [];
+    const custArgs: any[] = [];
+    if (hasNat) {
+      custWhere.push('national_id = ?');
+      custArgs.push(nationalId);
+    }
+    if (hasPhone) {
+      custWhere.push('phone = ?');
+      custArgs.push(phone);
+    }
+    let custQuery = `SELECT id, customer_number, name, phone, national_id, balance, is_sued FROM customers WHERE (${custWhere.join(' OR ')})`;
+    if (excludeCustomerId) {
+      custQuery += ' AND id <> ?';
+      custArgs.push(excludeCustomerId);
+    }
+
+    const guarWhere: string[] = [];
+    const guarArgs: any[] = [];
+    const todayIso = new Date().toISOString().slice(0, 10);
+    guarArgs.push(todayIso);
+    if (hasNat) {
+      guarWhere.push('sg.national_id = ?');
+      guarArgs.push(nationalId);
+    }
+    if (hasPhone) {
+      guarWhere.push('sg.phone = ?');
+      guarArgs.push(phone);
+    }
+    let guarQuery = `
+      SELECT
+        sg.sale_id,
+        sg.slot,
+        sg.name AS guarantor_name,
+        s.invoice_number,
+        s.customer_id,
+        s.customer_name,
+        s.remaining,
+        s.status,
+        c.is_sued,
+        (SELECT COUNT(*) FROM installment_schedules isch WHERE isch.sale_id = s.id AND isch.status <> 'paid' AND isch.status <> 'settled_early' AND isch.due_date < ?) AS overdue_count
+      FROM sale_guarantors sg
+      INNER JOIN sales s ON s.id = sg.sale_id
+      LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE sg.status = 'active'
+        AND s.status NOT IN ('cancelled', 'completed', 'settled_early')
+        AND s.remaining > 0
+        AND (${guarWhere.join(' OR ')})
+    `;
+    if (excludeSaleId) {
+      guarQuery += ' AND sg.sale_id <> ?';
+      guarArgs.push(excludeSaleId);
+    }
+
+    const [customerRows, guaranteeRows] = await Promise.all([
+      db.all<any>(custQuery, ...custArgs),
+      db.all<any>(guarQuery, ...guarArgs),
+    ]);
+
+    const existingCustomers = customerRows.map((c) => ({
+      id: c.id,
+      customerNumber: c.customer_number || '',
+      name: c.name || '',
+      phone: c.phone || '',
+      nationalId: c.national_id || '',
+      balance: Number(c.balance || 0),
+      isSued: c.is_sued === 1 || c.is_sued === true,
+    }));
+
+    const activeGuarantees = guaranteeRows.map((g) => ({
+      saleId: g.sale_id,
+      slot: Number(g.slot || 1),
+      guarantorName: g.guarantor_name || '',
+      invoiceNumber: g.invoice_number || '',
+      customerId: g.customer_id || '',
+      customerName: g.customer_name || '',
+      remaining: Number(g.remaining || 0),
+      isSued: g.is_sued === 1 || g.is_sued === true,
+      overdueCount: Number(g.overdue_count || 0),
+    }));
+
+    const totalGuaranteedRemaining = roundMoney(
+      activeGuarantees.reduce((sum, g) => sum + g.remaining, 0),
+    );
+    const hasSuedOrOverdue =
+      existingCustomers.some((c) => c.isSued) ||
+      activeGuarantees.some((g) => g.isSued || g.overdueCount > 0);
+
+    return res.json({
+      existingCustomers,
+      activeGuarantees,
+      totalGuaranteedRemaining,
+      hasSuedOrOverdue,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+router.post('/:id/transfer', requirePermission('sales:transfer'), async (req: AuthedRequest, res) => {
+  const transferSchema = z.object({
+    newCustomerId: z.string().min(1, 'يرجى اختيار العميل الجديد'),
+    transferDate: z.string().optional(),
+    installmentMonths: z.number().int().min(1).max(120).optional(),
+    installmentStartDate: z.string().optional(),
+    reason: z.string().optional().default(''),
+    guarantors: z.array(
+      z.object({
+        name: z.string().optional().default(''),
+        phone: z.string().optional().default(''),
+        nationalId: z.string().optional().default(''),
+        address: z.string().optional().default(''),
+        relationship: z.string().optional().default(''),
+      }).nullable(),
+    ).max(3).optional(),
+  });
+
+  const parsed = transferSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات التنازل غير مكتملة', errors: parsed.error.format() });
+  }
+
+  const { newCustomerId, reason, guarantors } = parsed.data;
+  const now = new Date().toISOString();
+  const actor = req.user?.name || 'system';
+  let transferDateIso = now.slice(0, 10);
+  try {
+    if (parsed.data.transferDate) {
+      transferDateIso = parseDateInput(parsed.data.transferDate);
+    }
+  } catch {
+    return res.status(400).json({ message: 'صيغة تاريخ التنازل غير صحيحة' });
+  }
+
+  try {
+    const db = await dbPromise;
+    if (req.user?.role !== 'admin' && await isPeriodClosed(db, transferDateIso)) {
+      return res.status(403).json({ message: 'الفترة المالية مغلقة ولا يمكن تنفيذ التنازل فيها إلا بواسطة المدير.' });
+    }
+
+    const newCustomer = await db.get<{ id: string; name: string }>('SELECT id, name FROM customers WHERE id = ?', newCustomerId);
+    if (!newCustomer) {
+      return res.status(404).json({ message: 'العميل الجديد غير موجود' });
+    }
+
+    let createdSaleId = '';
+    let createdInvoiceNumber = '';
+    let oldInvoiceNumber = '';
+    let oldCustomerName = '';
+    let transferredAmount = 0;
+
+    await db.withTransaction(async (txDb: typeof db) => {
+      const oldSale = await txDb.get<SaleRow>(
+        'SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        req.params.id,
+      );
+      if (!oldSale) {
+        throw Object.assign(new Error('الفاتورة الأصلية غير موجودة'), { statusCode: 404 });
+      }
+      if (oldSale.status === 'cancelled' || oldSale.status === 'completed' || oldSale.status === 'settled_early') {
+        throw Object.assign(new Error('لا يمكن التنازل عن عقد مغلق أو ملغى أو مكتمل السداد'), { statusCode: 400 });
+      }
+      const oldTotal = roundMoney(Number(oldSale.total || 0));
+      const oldPaid = roundMoney(Number(oldSale.paid || 0));
+      const remaining = roundMoney(Number(oldSale.remaining || 0));
+      if (remaining <= 0.01) {
+        throw Object.assign(new Error('لا يوجد مبلغ متبقٍ على هذا العقد للتنازل عنه'), { statusCode: 400 });
+      }
+      if (oldSale.customer_id === newCustomer.id) {
+        throw Object.assign(new Error('العميل الجديد يجب أن يكون مختلفاً عن العميل الحالي'), { statusCode: 400 });
+      }
+
+      oldInvoiceNumber = oldSale.invoice_number;
+      oldCustomerName = oldSale.customer_name;
+      transferredAmount = remaining;
+
+      const [oldItems, oldSchedules] = await Promise.all([
+        txDb.all<SaleItemRow & { id: string }>('SELECT * FROM sale_items WHERE sale_id = ?', oldSale.id),
+        txDb.all<ScheduleRow>('SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC', oldSale.id),
+      ]);
+
+      const unpaidSchedules = oldSchedules.filter((s) => s.status !== 'paid' && s.status !== 'settled_early');
+      const months = parsed.data.installmentMonths || Math.max(1, unpaidSchedules.length || 1);
+      let startDate = unpaidSchedules[0]?.due_date || addMonths(transferDateIso, 1);
+      if (parsed.data.installmentStartDate) {
+        startDate = parseDateInput(parsed.data.installmentStartDate);
+      }
+
+      createdSaleId = uid();
+      createdInvoiceNumber = await generateNextSaleInvoiceNumber(txDb);
+
+      const transferReasonText = reason.trim() ? ` (${reason.trim()})` : '';
+      const oldSaleNoteSuffix = `تم التنازل عن المتبقي (${remaining}) للعميل ${newCustomer.name} بموجب العقد ${createdInvoiceNumber} بتاريخ ${transferDateIso}${transferReasonText}`;
+      const newSaleNotes = `عقد منقول بالتنازل من العميل ${oldSale.customer_name} — أصل العقد ${oldSale.invoice_number} بتاريخ ${transferDateIso}${transferReasonText}`;
+      const mergedOldNotes = oldSale.notes ? `${oldSale.notes}\n${oldSaleNoteSuffix}` : oldSaleNoteSuffix;
+
+      const monthlyInstallmentAmount = roundMoney(remaining / months);
+      const isZeroPaid = oldPaid <= 0.005;
+      const paidRatio = isZeroPaid ? 0 : (oldTotal > 0 ? oldPaid / oldTotal : 0);
+      const remRatio = isZeroPaid ? 1 : Math.max(0, 1 - paidRatio);
+
+      // 1. Close/settle old contract without double-counting revenue or COGS
+      // Note: set total = oldPaid when settled_early on transfer so (total - eff_total) = 0 (not falsely counted as early settlement discount)
+      const newOldStatus = isZeroPaid ? 'cancelled' : 'settled_early';
+      const newOldTotal = isZeroPaid ? oldTotal : oldPaid;
+      await txDb.run(
+        `UPDATE sales
+         SET status = ?,
+             total = ?,
+             remaining = 0,
+             locked = 1,
+             notes = ?,
+             last_edited_by = ?,
+             last_edited_at = ?,
+             version = version + 1
+         WHERE id = ?`,
+        newOldStatus,
+        newOldTotal,
+        mergedOldNotes,
+        actor,
+        now,
+        oldSale.id,
+      );
+
+      // Close unpaid schedules on old contract (zero remaining so dues/aging never double-count)
+      await txDb.run(
+        `UPDATE installment_schedules
+         SET amount = paid_amount,
+             status = 'settled_early',
+             notes = COALESCE(notes + ' | ', '') + ?
+         WHERE sale_id = ? AND status NOT IN ('paid', 'settled_early')`,
+        `تم التنازل للعقد ${createdInvoiceNumber}`,
+        oldSale.id,
+      );
+
+      // Close any open collection tasks on old contract
+      await txDb.run(
+        `UPDATE collection_tasks
+         SET status = 'completed',
+             notes = COALESCE(notes + ' | ', '') + ?
+         WHERE sale_id = ? AND status NOT IN ('completed', 'cancelled')`,
+        `تم التنازل للعقد ${createdInvoiceNumber}`,
+        oldSale.id,
+      );
+
+      // 2. Create new contract for the transferee customer (for the exact remaining balance)
+      const newSubtotal = isZeroPaid ? roundMoney(Number(oldSale.subtotal || remaining)) : roundMoney(Number(oldSale.subtotal || remaining) * remRatio);
+      const newDiscount = isZeroPaid ? roundMoney(Number(oldSale.discount || 0)) : roundMoney(Number(oldSale.discount || 0) * remRatio);
+      const newTax = isZeroPaid ? roundMoney(Number(oldSale.tax || 0)) : roundMoney(Number(oldSale.tax || 0) * remRatio);
+
+      await txDb.run(
+        `INSERT INTO sales (
+          id, invoice_number, customer_id, customer_name, total, paid, remaining, status, date, notes, version, locked,
+          last_edited_by, last_edited_at, created_by, created_at, subtotal, discount, tax,
+          payment_method, manual_invoice_ref, sales_rep_id, sales_rep_name, commission_rate, commission_amount,
+          installment_months, installment_start_date, upfront_amount, monthly_installment_amount
+        ) VALUES (?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, 'installment', ?, ?, ?, NULL, NULL, ?, ?, 0, ?)`,
+        createdSaleId,
+        createdInvoiceNumber,
+        newCustomer.id,
+        newCustomer.name,
+        remaining,
+        remaining,
+        transferDateIso,
+        newSaleNotes,
+        actor,
+        now,
+        actor,
+        now,
+        newSubtotal,
+        newDiscount,
+        newTax,
+        oldSale.invoice_number,
+        oldSale.sales_rep_id || null,
+        oldSale.sales_rep_name || null,
+        months,
+        startDate,
+        monthlyInstallmentAmount,
+      );
+
+      // 3. Split sale_items COGS & price proportionally (zero inventory movement, zero COGS duplication!)
+      for (const item of oldItems) {
+        const origUnitCost = Number(item.unit_cost || 0);
+        const origUnitPrice = Number(item.unit_price || 0);
+        const origTotal = Number(item.total || 0);
+        const origDiscount = Number(item.discount || 0);
+        const origTax = Number(item.tax || 0);
+
+        let newUnitCost = origUnitCost;
+        let newUnitPrice = origUnitPrice;
+        let newItemTotal = origTotal;
+        let newItemDiscount = origDiscount;
+        let newItemTax = origTax;
+
+        if (!isZeroPaid) {
+          const oldUnitCost = roundMoney(origUnitCost * paidRatio);
+          const oldUnitPrice = roundMoney(origUnitPrice * paidRatio);
+          const oldItemTotal = roundMoney(origTotal * paidRatio);
+
+          newUnitCost = roundMoney(Math.max(0, origUnitCost - oldUnitCost));
+          newUnitPrice = roundMoney(Math.max(0, origUnitPrice - oldUnitPrice));
+          newItemTotal = roundMoney(Math.max(0, origTotal - oldItemTotal));
+
+          // Keep discount and tax as original percentages (0-100) — do NOT scale percentages!
+          await txDb.run(
+            `UPDATE sale_items
+             SET unit_cost = ?, unit_price = ?, total = ?
+             WHERE id = ?`,
+            oldUnitCost,
+            oldUnitPrice,
+            oldItemTotal,
+            item.id,
+          );
+        }
+
+        await txDb.run(
+          `INSERT INTO sale_items (
+            id, sale_id, product_id, product_name, barcode, quantity, unit_price, unit_cost, discount, tax, total, fulfillment_type
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          uid(),
+          createdSaleId,
+          item.product_id,
+          item.product_name,
+          item.barcode || null,
+          Number(item.quantity || 1),
+          newUnitPrice,
+          newUnitCost,
+          newItemDiscount,
+          newItemTax,
+          newItemTotal,
+          item.fulfillment_type || 'on_demand',
+        );
+      }
+
+      // 4. Generate exact installment schedules for the new contract
+      const baseAmount = Math.floor((remaining / months) * 100) / 100;
+      let allocated = 0;
+      for (let i = 0; i < months; i++) {
+        const isLast = i === months - 1;
+        const amt = isLast ? roundMoney(remaining - allocated) : baseAmount;
+        allocated = roundMoney(allocated + amt);
+        await txDb.run(
+          `INSERT INTO installment_schedules (id, sale_id, month_index, due_date, amount, paid_amount, status)
+           VALUES (?, ?, ?, ?, ?, 0, 'unpaid')`,
+          uid(),
+          createdSaleId,
+          i + 1,
+          addMonths(startDate, i),
+          amt,
+        );
+      }
+
+      // 5. Save new guarantors (if provided) on the new contract
+      await insertSaleGuarantors(txDb, createdSaleId, guarantors, now);
+
+      // 6. Transfer exact balance from old customer to new customer (net customer receivables change = 0)
+      await txDb.run(
+        'UPDATE customers SET balance = balance - ?, updated_at = ? WHERE id = ?',
+        remaining,
+        now,
+        oldSale.customer_id,
+      );
+      await txDb.run(
+        'UPDATE customers SET balance = balance + ?, updated_at = ? WHERE id = ?',
+        remaining,
+        now,
+        newCustomer.id,
+      );
+    });
+
+    await audit('sale.transfer', 'sale', createdSaleId, actor, {
+      oldSaleId: req.params.id,
+      oldInvoiceNumber,
+      oldCustomerName,
+      newSaleId: createdSaleId,
+      newInvoiceNumber: createdInvoiceNumber,
+      newCustomerId: newCustomer.id,
+      newCustomerName: newCustomer.name,
+      transferredAmount,
+      reason: reason.trim() || 'تنازل عن عقد تقسيط',
+    });
+
+    await createSystemNotification(
+      'info',
+      `تنازل عن عقد ${oldInvoiceNumber}`,
+      `تم نقل المتبقي (${Math.round(transferredAmount)} جنيه) من العميل ${oldCustomerName} إلى العميل ${newCustomer.name} بعقد جديد رقم ${createdInvoiceNumber}`,
+    );
+
+    const [updatedOldSale, createdNewSale] = await Promise.all([
+      getMappedSale(req.params.id),
+      getMappedSale(createdSaleId),
+    ]);
+
+    return res.status(201).json({
+      oldSale: updatedOldSale,
+      newSale: createdNewSale,
+    });
+  } catch (error: any) {
+    const statusCode = error?.statusCode || 500;
+    return res.status(statusCode).json({ message: error?.message || 'تعذر تنفيذ التنازل عن العقد' });
+  }
+});
+
+router.get('/customer/:customerId/latest-guarantors', requireAnyPermission('sales:read', 'sales:write'), async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const customerId = String(req.params.customerId || '').trim();
+    if (!customerId) {
+      return res.json({ guarantors: [null, null, null], source: 'none' });
+    }
+
+    const latestSale = await db.get<{ id: string; invoice_number: string }>(
+      `SELECT TOP 1 s.id, s.invoice_number
+       FROM sales s
+       WHERE s.customer_id = ?
+         AND EXISTS (SELECT 1 FROM sale_guarantors sg WHERE sg.sale_id = s.id AND sg.status = 'active')
+       ORDER BY COALESCE(TRY_CONVERT(datetime2, s.created_at), TRY_CONVERT(datetime2, s.date), TRY_CONVERT(datetime2, '1900-01-01')) DESC, s.id DESC`,
+      customerId,
+    );
+
+    if (latestSale) {
+      const rows = await db.all<SaleGuarantorRow>(
+        "SELECT * FROM sale_guarantors WHERE sale_id = ? AND status = 'active' ORDER BY slot ASC",
+        latestSale.id,
+      );
+      const { guarantors } = mapSaleGuarantors(rows);
+      return res.json({ guarantors, source: 'sale', invoiceNumber: latestSale.invoice_number });
+    }
+
+    // Fallback to legacy customers.guarantors
+    const customer = await db.get<{ guarantors?: string | null }>('SELECT guarantors FROM customers WHERE id = ?', customerId);
+    if (customer?.guarantors) {
+      try {
+        const parsed = JSON.parse(customer.guarantors);
+        if (Array.isArray(parsed)) {
+          const normalized = [parsed[0] || null, parsed[1] || null, parsed[2] || null];
+          if (normalized.some(Boolean)) {
+            return res.json({ guarantors: normalized, source: 'customer' });
+          }
+        }
+      } catch {
+        // ignore invalid JSON
+      }
+    }
+
+    return res.json({ guarantors: [null, null, null], source: 'none' });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+router.get('/:id/guarantors', requireAnyPermission('sales:read', 'payments:read', 'reports:read'), async (req, res) => {
+  try {
+    const db = await dbPromise;
+    const rows = await db.all<SaleGuarantorRow>(
+      'SELECT * FROM sale_guarantors WHERE sale_id = ? ORDER BY status ASC, slot ASC, created_at DESC',
+      req.params.id,
+    );
+    return res.json(mapSaleGuarantors(rows));
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+router.post('/:id/guarantors/replace', requirePermission('sales:guarantors'), async (req: AuthedRequest, res) => {
+  const replaceSchema = z.object({
+    slot: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    guarantor: z.object({
+      name: z.string().min(1, 'اسم الضامن مطلوب'),
+      phone: z.string().optional().default(''),
+      nationalId: z.string().optional().default(''),
+      address: z.string().optional().default(''),
+      relationship: z.string().optional().default(''),
+    }),
+    reason: z.string().optional().default(''),
+  });
+
+  const parsed = replaceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات الضامن غير مكتملة', errors: parsed.error.format() });
+  }
+
+  const { slot, guarantor, reason } = parsed.data;
+  const now = new Date().toISOString();
+  const actor = req.user?.name || 'system';
+
+  try {
+    const db = await dbPromise;
+    const sale = await db.get<{ id: string; invoice_number: string; customer_name: string; remaining: number }>(
+      'SELECT id, invoice_number, customer_name, remaining FROM sales WHERE id = ?',
+      req.params.id,
+    );
+    if (!sale) {
+      return res.status(404).json({ message: 'الفاتورة غير موجودة' });
+    }
+
+    let previousGuarantorName = '';
+    await db.withTransaction(async (txDb: typeof db) => {
+      const prevRow = await txDb.get<{ name: string }>(
+        `SELECT name FROM sale_guarantors WHERE sale_id = ? AND slot = ? AND status = 'active'`,
+        sale.id,
+        slot,
+      );
+      previousGuarantorName = prevRow?.name || '';
+
+      await txDb.run(
+        `UPDATE sale_guarantors
+         SET status = 'replaced',
+             replaced_at = ?,
+             replaced_by = ?,
+             replace_reason = ?,
+             remaining_at_replace = ?,
+             updated_at = ?
+         WHERE sale_id = ? AND slot = ? AND status = 'active'`,
+        now,
+        actor,
+        reason.trim() || 'استبدال ضامن',
+        Number(sale.remaining || 0),
+        now,
+        sale.id,
+        slot,
+      );
+
+      await txDb.run(
+        `INSERT INTO sale_guarantors (
+          id, sale_id, slot, name, phone, national_id, address, relationship, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+        uid(),
+        sale.id,
+        slot,
+        guarantor.name.trim(),
+        guarantor.phone.trim(),
+        guarantor.nationalId.trim(),
+        guarantor.address.trim(),
+        guarantor.relationship.trim(),
+        now,
+        now,
+      );
+    });
+
+    await audit('sale.guarantor_replace', 'sale', sale.id, actor, {
+      invoiceNumber: sale.invoice_number,
+      customerName: sale.customer_name,
+      slot,
+      previousGuarantor: previousGuarantorName || null,
+      newGuarantor: guarantor.name.trim(),
+      reason: reason.trim() || 'استبدال ضامن',
+      remainingAtReplace: Number(sale.remaining || 0),
+    });
+
+    await createSystemNotification(
+      'info',
+      previousGuarantorName
+        ? `استبدال ضامن للعقد ${sale.invoice_number}`
+        : `إضافة ضامن للعقد ${sale.invoice_number}`,
+      previousGuarantorName
+        ? `تم استبدال الضامن #${slot} (${previousGuarantorName}) بالضامن الجديد (${guarantor.name.trim()}) للعميل ${sale.customer_name} — المتبقي وقت الاستبدال ${Math.round(Number(sale.remaining || 0))} جنيه${reason.trim() ? ` (${reason.trim()})` : ''}`
+        : `تم إضافة الضامن #${slot} (${guarantor.name.trim()}) على عقد العميل ${sale.customer_name} — المتبقي ${Math.round(Number(sale.remaining || 0))} جنيه`,
+    );
+
+    const updated = await getMappedSale(sale.id);
+    return res.json(updated);
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
@@ -768,6 +1479,7 @@ router.post('/', requirePermission('sales:write'), async (req: AuthedRequest, re
 
       await insertSaleItemsAndAdjustStock(txDb, id, data.items, now);
       await insertInstallmentSchedules(txDb, id, data, remaining);
+      await insertSaleGuarantors(txDb, id, data.guarantors, now);
 
       await txDb.run(
         `UPDATE customers
@@ -925,6 +1637,10 @@ router.put('/:id', requirePermission('sales:write'), async (req: AuthedRequest, 
 
       await insertSaleItemsAndAdjustStock(txDb, req.params.id, data.items, now);
       await insertInstallmentSchedules(txDb, req.params.id, data, remaining);
+      if (data.guarantors !== undefined) {
+        await txDb.run("DELETE FROM sale_guarantors WHERE sale_id = ? AND status = 'active'", req.params.id);
+        await insertSaleGuarantors(txDb, req.params.id, data.guarantors, now);
+      }
 
       await txDb.run(
         `UPDATE customers
@@ -982,11 +1698,14 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
 
     await db.withTransaction(async (txDb) => {
       const lockedSale = await txDb.get(
-        'SELECT paid, locked FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        'SELECT paid, locked, notes FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
         req.params.id,
       );
       if (!lockedSale || Number(lockedSale.paid || 0) > 0 || lockedSale.locked === 1 || lockedSale.locked === true) {
         throw Object.assign(new Error('لا يمكن حذف تعاقد تم تحصيل مدفوعات عليه'), { statusCode: 409 });
+      }
+      if (String(lockedSale.notes || '').includes('عقد منقول بالتنازل')) {
+        throw Object.assign(new Error('لا يمكن حذف عقد منقول بالتنازل؛ استخدم المرتجع أو التنازل حفاظاً على سلامة الحسابات والمخزون.'), { statusCode: 409 });
       }
       for (const item of oldItems) {
         await txDb.run(
@@ -1024,6 +1743,7 @@ router.delete('/:id', requirePermission('sales:write'), requireAdmin, async (req
       await txDb.run('DELETE FROM collection_tasks WHERE sale_id = ?', req.params.id);
       await txDb.run('DELETE FROM reschedule_requests WHERE sale_id = ?', req.params.id);
       await txDb.run('DELETE FROM installment_schedules WHERE sale_id = ?', req.params.id);
+      await txDb.run('DELETE FROM sale_guarantors WHERE sale_id = ?', req.params.id);
       await txDb.run('DELETE FROM sale_items WHERE sale_id = ?', req.params.id);
       await txDb.run('DELETE FROM sales WHERE id = ?', req.params.id);
     });
@@ -1096,7 +1816,8 @@ router.post('/:id/return', requirePermission('sales:write'), requireAdmin, async
     if (requestedRefund > totalPaid + 0.01) {
       return res.status(400).json({ message: `مبلغ الاسترداد (${requestedRefund}) لا يمكن أن يتجاوز إجمالي المسدد (${totalPaid}).` });
     }
-    const refundAmount = Math.min(requestedRefund, totalPaid);
+    const refundAmountInit = Math.min(requestedRefund, totalPaid);
+    let refundAmount = refundAmountInit;
     const reasonText = (parsed.data.reason || '').trim();
     const noteAppend = `[مرتجع بتاريخ ${returnDateIso}${reasonText ? `: ${reasonText}` : ''}]`;
     const mergedNotes = existing.notes ? `${existing.notes}\n${noteAppend}` : noteAppend;
@@ -1112,6 +1833,19 @@ router.post('/:id/return', requirePermission('sales:write'), requireAdmin, async
         conflictErr.statusCode = 409;
         throw conflictErr;
       }
+      if (String(lockedSale.notes || '').includes('تم التنازل عن المتبقي')) {
+        const transferErr: any = new Error('لا يمكن عمل مرتجع لعقد تم التنازل عنه لعميل آخر');
+        transferErr.statusCode = 409;
+        throw transferErr;
+      }
+      const livePaid = roundMoney(Number(lockedSale.paid || 0));
+      const liveRequestedRefund = parsed.data.refundAmount !== undefined ? roundMoney(parsed.data.refundAmount) : livePaid;
+      if (liveRequestedRefund > livePaid + 0.01) {
+        const err: any = new Error(`مبلغ الاسترداد (${liveRequestedRefund}) لا يمكن أن يتجاوز إجمالي المسدد (${livePaid}).`);
+        err.statusCode = 400;
+        throw err;
+      }
+      refundAmount = Math.min(liveRequestedRefund, livePaid);
 
       const oldItems = (await txDb.all('SELECT * FROM sale_items WHERE sale_id = ?', req.params.id)) as SaleItemRow[];
       for (const item of oldItems) {
@@ -1126,15 +1860,16 @@ router.post('/:id/return', requirePermission('sales:write'), requireAdmin, async
         );
       }
 
-      if (Number(existing.remaining || 0) > 0) {
+      const liveRemaining = roundMoney(Number(lockedSale.remaining || 0));
+      if (liveRemaining > 0) {
         await txDb.run(
           `UPDATE customers
            SET balance = ROUND(balance - ?, 2),
                updated_at = ?
            WHERE id = ?`,
-          existing.remaining,
+          liveRemaining,
           now,
-          existing.customer_id,
+          lockedSale.customer_id,
         );
       }
 
@@ -1307,6 +2042,17 @@ const handleDeferOrPostpone = async (req: AuthedRequest, res: any) => {
     }
 
     await db.withTransaction(async (tx: typeof db) => {
+      const lockedSale = await tx.get<SaleRow>('SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?', saleId);
+      if (!lockedSale || lockedSale.status === 'cancelled' || lockedSale.status === 'settled_early') {
+        throw Object.assign(new Error('لا يمكن ترحيل قسط على عقد ملغى أو مسوى بالكامل'), { statusCode: 409 });
+      }
+      const lockedTarget = await tx.get<ScheduleRow>(
+        'SELECT * FROM installment_schedules WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        target.id,
+      );
+      if (!lockedTarget || lockedTarget.status === 'paid' || lockedTarget.status === 'settled_early') {
+        throw Object.assign(new Error('تم سداد هذا القسط بالفعل من جهاز آخر، يرجى تحديث الصفحة.'), { statusCode: 409 });
+      }
       if (strategy === 'shift_subsequent') {
         const targetNewAmount = penaltyPaymentType === 'add_to_debt' && penalty > 0
           ? roundMoney(target.amount + penalty)
@@ -1522,28 +2268,40 @@ router.post('/:id/reschedule', requirePermission('sales:reschedule'), async (req
       return res.status(400).json({ message: 'إعادة الجدولة متاحة لعقود التقسيط فقط' });
     }
 
-    const currentRemaining = roundMoney(Number(sale.remaining || 0));
-    if (currentRemaining <= 0) {
-      return res.status(400).json({ message: 'لا يوجد مبلغ متبقٍ لإعادة جدولته في هذا التعاقد' });
-    }
-
-    const extraInterestAmount = roundMoney((currentRemaining * extraInterestPercent) / 100);
-    const newRemaining = roundMoney(currentRemaining + extraInterestAmount);
-    const newTotal = roundMoney(Number(sale.total || 0) + extraInterestAmount);
-    const newTax = roundMoney(Number(sale.tax || 0) + extraInterestAmount);
-
-    let monthlyAmount = Math.round(newRemaining / newInstallmentCount);
-    if (monthlyAmount * (newInstallmentCount - 1) > newRemaining) {
-      monthlyAmount = Math.floor(newRemaining / newInstallmentCount);
-    }
-
     let oldMonths = Number(sale.installment_months || 0);
     let totalLockedCount = 0;
+    let currentRemaining = roundMoney(Number(sale.remaining || 0));
+    let extraInterestAmount = 0;
+    let newRemaining = currentRemaining;
+    let newTotal = roundMoney(Number(sale.total || 0));
+    let newTax = roundMoney(Number(sale.tax || 0));
+    let monthlyAmount = 0;
 
     await db.withTransaction(async (txDb: typeof db) => {
+      const lockedSale = await txDb.get<SaleRow>(
+        'SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        req.params.id,
+      );
+      if (!lockedSale || lockedSale.status === 'cancelled' || lockedSale.status === 'settled_early') {
+        throw Object.assign(new Error('لا يمكن إعادة جدولة تعاقد ملغى أو مسوى'), { statusCode: 409 });
+      }
+      currentRemaining = roundMoney(Number(lockedSale.remaining || 0));
+      if (currentRemaining <= 0) {
+        throw Object.assign(new Error('لا يوجد مبلغ متبقٍ لإعادة جدولته في هذا التعاقد'), { statusCode: 400 });
+      }
+      extraInterestAmount = roundMoney((currentRemaining * extraInterestPercent) / 100);
+      newRemaining = roundMoney(currentRemaining + extraInterestAmount);
+      newTotal = roundMoney(Number(lockedSale.total || 0) + extraInterestAmount);
+      newTax = roundMoney(Number(lockedSale.tax || 0) + extraInterestAmount);
+      monthlyAmount = Math.round(newRemaining / newInstallmentCount);
+      if (monthlyAmount * (newInstallmentCount - 1) > newRemaining) {
+        monthlyAmount = Math.floor(newRemaining / newInstallmentCount);
+      }
+      oldMonths = Number(lockedSale.installment_months || 0);
+
       const schedules = await txDb.all<ScheduleRow>(
-        'SELECT * FROM installment_schedules WHERE sale_id = ? ORDER BY month_index ASC',
-        sale.id,
+        'SELECT * FROM installment_schedules WITH (UPDLOCK, ROWLOCK) WHERE sale_id = ? ORDER BY month_index ASC',
+        lockedSale.id,
       );
 
       if (!oldMonths) {

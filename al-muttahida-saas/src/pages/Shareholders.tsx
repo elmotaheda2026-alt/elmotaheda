@@ -92,13 +92,20 @@ interface LiveTradingMetrics {
   accountantReport?: any;
 }
 
+function localTodayIso(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 function toIsoDay(dateVal?: string | null): string {
-  if (!dateVal) return new Date().toISOString().slice(0, 10);
+  if (!dateVal) return localTodayIso();
   const s = String(dateVal).trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   const d = new Date(s);
-  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-  return new Date().toISOString().slice(0, 10);
+  if (!isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return localTodayIso();
 }
 
 function endOfMonthAfterMonths(dateStr: string, monthsToAdd: number): string {
@@ -187,7 +194,7 @@ export default function Shareholders() {
     sharePercentage: 50,
     managementFeePercentage: 50,
     capital: 0,
-    joinedDate: new Date().toISOString().slice(0, 10),
+    joinedDate: localTodayIso(),
     notes: '',
     affectsTreasury: true,
     channel: 'cash' as TreasuryChannel,
@@ -195,7 +202,7 @@ export default function Shareholders() {
 
   const [transactionForm, setTransactionForm] = useState({
     amount: 0,
-    date: new Date().toISOString().slice(0, 10),
+    date: localTodayIso(),
     description: '',
     affectsTreasury: true,
     channel: 'cash' as TreasuryChannel,
@@ -753,7 +760,7 @@ export default function Shareholders() {
   const handleQuickPayoutPreference = async (partner: any, nextPref: 'cash' | 'capitalize' | 'ask') => {
     const curPref = partner.payoutPreference === 'cash' ? 'cash' : 'capitalize';
     if (!canManageShareholders || curPref === nextPref) return;
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = localTodayIso();
     const partnerCycle = Number(partner.payoutCycleMonths ?? payoutPlanSummary.currentCycleMonths);
     const nextDate =
       nextPref === 'capitalize'
@@ -970,8 +977,13 @@ export default function Shareholders() {
     return otherFounders.length === 0 ? 100 : Number((100 / (otherFounders.length + 1)).toFixed(2));
   }, [liveShareholders, editingShareholder, shareholderForm.capital]);
 
+  const [isSavingShareholder, setIsSavingShareholder] = useState(false);
+  const [isSavingTransaction, setIsSavingTransaction] = useState(false);
+
   const handleShareholderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingShareholder) return;
+    setIsSavingShareholder(true);
     try {
       const isFounder = Boolean(shareholderForm.isFounder);
       const sharePercentage = isFounder
@@ -1011,7 +1023,9 @@ export default function Shareholders() {
       } else {
         const payload = {
           ...finalForm,
-          capital: Number(shareholderForm.capital || editingShareholder.capital || 0),
+          capital: shareholderForm.capital !== undefined && String(shareholderForm.capital) !== ''
+            ? Number(shareholderForm.capital)
+            : Number(editingShareholder.capital || 0),
           currentBalance: Number(editingShareholder.currentBalance || 0),
         };
         if (isApiMode()) {
@@ -1024,11 +1038,14 @@ export default function Shareholders() {
       setShowShareholderModal(false);
     } catch (err: any) {
       window.alert(err?.message || 'حدث خطأ أثناء حفظ بيانات الشريك.');
+    } finally {
+      setIsSavingShareholder(false);
     }
   };
 
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingTransaction) return;
     if (!selectedShareholderId || transactionForm.amount <= 0) return;
     const selectedPartner: any = liveShareholders.find((s: any) => s.id === selectedShareholderId);
     if (!selectedPartner) return;
@@ -1072,13 +1089,14 @@ export default function Shareholders() {
       shareholderName: selectedPartner.name,
       type: transactionType,
       amount: requestedAmount,
-      date: transactionForm.date || new Date().toISOString().slice(0, 10),
+      date: transactionForm.date || localTodayIso(),
       description: transactionForm.description.trim() || defaultDesc,
       affectsTreasury: transactionForm.affectsTreasury !== false,
       channel: transactionForm.channel,
       createdBy: user?.name || 'النظام',
     };
 
+    setIsSavingTransaction(true);
     try {
       if (isApiMode()) {
         await api.createShareholderTransaction(txPayload);
@@ -1087,9 +1105,11 @@ export default function Shareholders() {
       }
       await loadData();
       setShowTransactionModal(false);
-      setTransactionForm({ amount: 0, date: new Date().toISOString().slice(0, 10), description: '', affectsTreasury: true, channel: 'cash' });
+      setTransactionForm({ amount: 0, date: localTodayIso(), description: '', affectsTreasury: true, channel: 'cash' });
     } catch (err: any) {
       window.alert(err?.message || 'حدث خطأ أثناء تنفيذ الحركة المالية.');
+    } finally {
+      setIsSavingTransaction(false);
     }
   };
 
@@ -1146,7 +1166,7 @@ export default function Shareholders() {
     setTransactionType(type);
     setTransactionForm({
       amount: 0,
-      date: new Date().toISOString().slice(0, 10),
+      date: localTodayIso(),
       description: '',
       affectsTreasury: true,
       channel: 'cash',
@@ -1701,7 +1721,7 @@ export default function Shareholders() {
               type="button"
               onClick={() => {
                 const defaultFounder = liveShareholders.filter((s: any) => Boolean(s.isFounder)).length === 0;
-                const todayIso = new Date().toISOString().slice(0, 10);
+                const todayIso = localTodayIso();
                 const defaultCycle = payoutPlanSummary.currentCycleMonths || 1;
                 setEditingShareholder(null);
                 setShareholderForm({
@@ -1822,7 +1842,7 @@ export default function Shareholders() {
                 <button
                   type="button"
                   onClick={() => {
-                    const todayIso = new Date().toISOString().slice(0, 10);
+                    const todayIso = localTodayIso();
                     const defaultCycle = payoutPlanSummary.currentCycleMonths || 1;
                     setEditingShareholder(null);
                     setShareholderForm({
@@ -3423,7 +3443,7 @@ export default function Shareholders() {
                           nextPayoutDate:
                             nextPref === 'capitalize'
                               ? computeNextFutureCycleDate(
-                                  shareholderForm.joinedDate || new Date().toISOString().slice(0, 10),
+                                  shareholderForm.joinedDate || localTodayIso(),
                                   shareholderForm.payoutCycleMonths || 1
                                 )
                               : shareholderForm.nextPayoutDate,
@@ -3454,7 +3474,7 @@ export default function Shareholders() {
                             shareholderForm.payoutPreference === 'cash'
                               ? shareholderForm.nextPayoutDate
                               : computeNextFutureCycleDate(
-                                  shareholderForm.joinedDate || new Date().toISOString().slice(0, 10),
+                                  shareholderForm.joinedDate || localTodayIso(),
                                   cycle
                                 ),
                         });
@@ -3519,9 +3539,10 @@ export default function Shareholders() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-xs font-bold"
+                  disabled={isSavingShareholder}
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {editingShareholder ? 'حفظ التعديلات' : 'إضافة الشريك'}
+                  {isSavingShareholder ? 'جاري الحفظ...' : editingShareholder ? 'حفظ التعديلات' : 'إضافة الشريك'}
                 </button>
               </div>
             </form>
@@ -3692,9 +3713,10 @@ export default function Shareholders() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-xs font-bold"
+                  disabled={isSavingTransaction}
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  تأكيد وتنفيذ الحركة
+                  {isSavingTransaction ? 'جاري التنفيذ...' : 'تأكيد وتنفيذ الحركة'}
                 </button>
               </div>
             </form>

@@ -223,9 +223,10 @@ export default function ProductsInventory() {
   };
 
   const productIdsWithActiveSales = useMemo(() => {
-    const allSales = getSales();
     const idSet = new Set<string>();
     const nameSet = new Set<string>();
+    if (isApiMode()) return { idSet, nameSet };
+    const allSales = getSales();
     for (const s of allSales) {
       if (s.status !== 'cancelled' && Array.isArray(s.items)) {
         for (const item of s.items) {
@@ -239,27 +240,25 @@ export default function ProductsInventory() {
 
   const handleDelete = async (id: string) => {
     const product = products.find(p => p.id === id);
-    const allSales = getSales();
-    const linkedSales = allSales.filter(
-      (s) =>
-        s.status !== 'cancelled' &&
-        Array.isArray(s.items) &&
-        s.items.some(
-          (item) =>
-            item.productId === id ||
-            (product && item.productName?.trim().toLowerCase() === product.name?.trim().toLowerCase())
-        )
-    );
+    if (!isApiMode()) {
+      const allSales = getSales();
+      const linkedSales = allSales.filter(
+        (s) =>
+          s.status !== 'cancelled' &&
+          Array.isArray(s.items) &&
+          s.items.some((item) => item.productId === id)
+      );
 
-    if (linkedSales.length > 0) {
-      await confirmDialog({
-        title: 'لا يمكن حذف الصنف',
-        message: `لا يمكن حذف الصنف "${product?.name || ''}" لوجود (${linkedSales.length}) فاتورة مبيعات سارية تتضمن هذا الصنف.`,
-        subMessage: `منها فاتورة رقم (${linkedSales[0].invoiceNumber}). لحذف الصنف، يجب إلغاء أو حذف الفواتير السارية المرتبطة به أولاً لحماية سلامة المخزون والحسابات.`,
-        confirmText: 'حسناً، فهمت',
-        type: 'danger',
-      });
-      return;
+      if (linkedSales.length > 0) {
+        await confirmDialog({
+          title: 'لا يمكن حذف الصنف',
+          message: `لا يمكن حذف الصنف "${product?.name || ''}" لوجود (${linkedSales.length}) فاتورة مبيعات سارية تتضمن هذا الصنف.`,
+          subMessage: `منها فاتورة رقم (${linkedSales[0].invoiceNumber}). لحذف الصنف، يجب إلغاء أو حذف الفواتير السارية المرتبطة به أولاً لحماية سلامة المخزون والحسابات.`,
+          confirmText: 'حسناً، فهمت',
+          type: 'danger',
+        });
+        return;
+      }
     }
 
     const allPurchases = getPurchases();
@@ -689,26 +688,37 @@ export default function ProductsInventory() {
 
               {/* Quantity & Unit in a clean 2-column row */}
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-black text-slate-900 mb-1.5">
-                    الكمية المتوفرة بالمخزن <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={formData.quantity}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        quantity: e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0),
-                      })
-                    }
-                    placeholder="1"
-                    className="w-full h-11 px-3.5 text-base font-black text-blue-700 bg-blue-50/40 border border-blue-300 rounded-xl focus:border-blue-600 focus:ring-4 focus:ring-blue-100 transition-all shadow-2xs"
-                    required
-                  />
-                </div>
+                {editingProduct?.fulfillmentType === 'on_demand' ? (
+                  <div>
+                    <label className="block text-sm font-black text-slate-900 mb-1.5">
+                      الكمية بالمخزن
+                    </label>
+                    <div className="w-full h-11 px-3.5 flex items-center text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl">
+                      صنف حسب الطلب (لا يُخزّن)
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-black text-slate-900 mb-1.5">
+                      الكمية المتوفرة بالمخزن <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={formData.quantity}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          quantity: e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0),
+                        })
+                      }
+                      placeholder="1"
+                      className="w-full h-11 px-3.5 text-base font-black text-blue-700 bg-blue-50/40 border border-blue-300 rounded-xl focus:border-blue-600 focus:ring-4 focus:ring-blue-100 transition-all shadow-2xs"
+                      required
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-black text-slate-900 mb-1.5">

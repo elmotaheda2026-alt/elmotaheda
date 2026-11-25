@@ -154,6 +154,23 @@ router.get('/', requireAnyPermission('sales:read', 'payments:read'), async (req,
   }
 });
 
+// GET /customers/next-number
+router.get('/next-number', requireAnyPermission('sales:read', 'payments:read'), async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    const maxRow = await db.get<{ maxNum: number | null }>(
+      `SELECT MAX(TRY_CONVERT(INT, SUBSTRING(customer_number, 3, 32))) AS maxNum
+       FROM customers
+       WHERE customer_number LIKE 'C-%' AND TRY_CONVERT(INT, SUBSTRING(customer_number, 3, 32)) IS NOT NULL`
+    );
+    const countRow = await db.get<{ total: number }>('SELECT COUNT(*) AS total FROM customers');
+    const nextNum = Math.max(Number(maxRow?.maxNum || 0), Number(countRow?.total || 0)) + 1;
+    return res.json({ customerNumber: `C-${String(nextNum).padStart(4, '0')}` });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
 // GET /customers/:id
 router.get('/:id', requireAnyPermission('sales:read', 'payments:read'), async (req, res) => {
   try {

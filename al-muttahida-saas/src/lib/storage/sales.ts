@@ -128,6 +128,7 @@ function buildSaleApiPayload(sale: SaleDraft, invoiceNumber: string, financing: 
     date: sale.date,
     notes: sale.notes || '',
     financing: financing || null,
+    guarantors: sale.guarantors,
   };
 }
 export async function createSale(sale: SaleDraft): Promise<Sale> {

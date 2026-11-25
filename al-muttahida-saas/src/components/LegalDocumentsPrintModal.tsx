@@ -157,11 +157,16 @@ export default function LegalDocumentsPrintModal({
   const isBuiltinOverridden = (key: string) =>
     templates.some((t) => t.templateKey === key && t.htmlContent.trim().length > 0);
 
-  // Active guarantors list helper
+  // Active guarantors list helper (prefer contract-level guarantors, fallback to legacy customer guarantors)
+  const effectiveGuarantors =
+    sale.guarantors && sale.guarantors.some(Boolean)
+      ? sale.guarantors
+      : customer?.guarantors || [null, null, null];
+
   const activeGuarantors = [
-    { key: 'guarantor1', name: customer?.guarantors?.[0]?.name, label: 'الضامن الأول' },
-    { key: 'guarantor2', name: customer?.guarantors?.[1]?.name, label: 'الضامن الثاني' },
-    { key: 'guarantor3', name: customer?.guarantors?.[2]?.name, label: 'الضامن الثالث' },
+    { key: 'guarantor1', name: effectiveGuarantors?.[0]?.name, label: 'الضامن الأول' },
+    { key: 'guarantor2', name: effectiveGuarantors?.[1]?.name, label: 'الضامن الثاني' },
+    { key: 'guarantor3', name: effectiveGuarantors?.[2]?.name, label: 'الضامن الثالث' },
   ].filter(g => !!g.name);
 
   // Computes active signatory data based on selected signee
@@ -171,21 +176,21 @@ export default function LegalDocumentsPrintModal({
   let signatoryPhone = customer?.phone || '---';
   let fileTitle = 'ملف العميل';
 
-  if (selectedSignatory === 'guarantor1' && customer?.guarantors?.[0]) {
-    const g = customer.guarantors[0];
+  if (selectedSignatory === 'guarantor1' && effectiveGuarantors?.[0]) {
+    const g = effectiveGuarantors[0]!;
     signatoryName = g.name;
     signatoryAddress = g.address;
     signatoryNationalId = g.nationalId;
     signatoryPhone = g.phone;
     fileTitle = 'ملف الضامن الاول';
-  } else if (selectedSignatory === 'guarantor2' && customer?.guarantors?.[1]) {
-    const g = customer.guarantors[1];
+  } else if (selectedSignatory === 'guarantor2' && effectiveGuarantors?.[1]) {
+    const g = effectiveGuarantors[1]!;
     signatoryName = g.name;
     signatoryAddress = g.address;
     signatoryNationalId = g.nationalId;
     signatoryPhone = g.phone;
     fileTitle = 'ملف الضامن الثاني';
-  } else if (selectedSignatory === 'guarantor3' && customer?.guarantors?.[2]) {
+  } else if (selectedSignatory === 'guarantor3' && effectiveGuarantors?.[2]) {
     const g = customer.guarantors[2];
     signatoryName = g.name;
     signatoryAddress = g.address;
@@ -209,21 +214,21 @@ export default function LegalDocumentsPrintModal({
     let phone = customer?.phone || '---';
     let title = 'ملف العميل';
 
-    if (partyKey === 'guarantor1' && customer?.guarantors?.[0]) {
-      const g = customer.guarantors[0];
+    if (partyKey === 'guarantor1' && effectiveGuarantors?.[0]) {
+      const g = effectiveGuarantors[0]!;
       name = g.name;
       address = g.address;
       nationalId = g.nationalId;
       phone = g.phone;
       title = 'ملف الضامن الاول';
-    } else if (partyKey === 'guarantor2' && customer?.guarantors?.[1]) {
-      const g = customer.guarantors[1];
+    } else if (partyKey === 'guarantor2' && effectiveGuarantors?.[1]) {
+      const g = effectiveGuarantors[1]!;
       name = g.name;
       address = g.address;
       nationalId = g.nationalId;
       phone = g.phone;
       title = 'ملف الضامن الثاني';
-    } else if (partyKey === 'guarantor3' && customer?.guarantors?.[2]) {
+    } else if (partyKey === 'guarantor3' && effectiveGuarantors?.[2]) {
       const g = customer.guarantors[2];
       name = g.name;
       address = g.address;
@@ -423,18 +428,18 @@ export default function LegalDocumentsPrintModal({
     const custBirth = extractBirthDateFromNationalId(customer?.nationalId || '');
     
     // Guarantor 1 details
-    const g1Name = customer?.guarantors?.[0]?.name || '';
-    const g1NationalId = customer?.guarantors?.[0]?.nationalId || '';
+    const g1Name = effectiveGuarantors?.[0]?.name || '';
+    const g1NationalId = effectiveGuarantors?.[0]?.nationalId || '';
     const g1Birth = extractBirthDateFromNationalId(g1NationalId);
-    const g1Address = customer?.guarantors?.[0]?.address || '';
-    const g1Phone = customer?.guarantors?.[0]?.phone || '';
+    const g1Address = effectiveGuarantors?.[0]?.address || '';
+    const g1Phone = effectiveGuarantors?.[0]?.phone || '';
 
     // Guarantor 2 details
-    const g2Name = customer?.guarantors?.[1]?.name || '';
-    const g2NationalId = customer?.guarantors?.[1]?.nationalId || '';
+    const g2Name = effectiveGuarantors?.[1]?.name || '';
+    const g2NationalId = effectiveGuarantors?.[1]?.nationalId || '';
     const g2Birth = extractBirthDateFromNationalId(g2NationalId);
-    const g2Address = customer?.guarantors?.[1]?.address || '';
-    const g2Phone = customer?.guarantors?.[1]?.phone || '';
+    const g2Address = effectiveGuarantors?.[1]?.address || '';
+    const g2Phone = effectiveGuarantors?.[1]?.phone || '';
 
     // Item financing details
     const itemCode = sale.items?.[0]?.barcode || `P-${sale.items?.[0]?.productId?.substring(0, 4) || '0219'}`;
@@ -1033,15 +1038,15 @@ export default function LegalDocumentsPrintModal({
     `;
 
     const getSignatoryInfo = (partyKey: 'customer' | 'guarantor1' | 'guarantor2' | 'guarantor3') => {
-      if (partyKey === 'guarantor1' && customer?.guarantors?.[0]) {
-        const g = customer.guarantors[0];
+      if (partyKey === 'guarantor1' && effectiveGuarantors?.[0]) {
+        const g = effectiveGuarantors[0]!;
         return { roleLabel: 'الضامن الأول', name: g.name, nationalId: g.nationalId || '---', phone: g.phone || '---', address: g.address || '---' };
       }
-      if (partyKey === 'guarantor2' && customer?.guarantors?.[1]) {
-        const g = customer.guarantors[1];
+      if (partyKey === 'guarantor2' && effectiveGuarantors?.[1]) {
+        const g = effectiveGuarantors[1]!;
         return { roleLabel: 'الضامن الثاني', name: g.name, nationalId: g.nationalId || '---', phone: g.phone || '---', address: g.address || '---' };
       }
-      if (partyKey === 'guarantor3' && customer?.guarantors?.[2]) {
+      if (partyKey === 'guarantor3' && effectiveGuarantors?.[2]) {
         const g = customer.guarantors[2];
         return { roleLabel: 'الضامن الثالث', name: g.name, nationalId: g.nationalId || '---', phone: g.phone || '---', address: g.address || '---' };
       }
@@ -1457,17 +1462,17 @@ export default function LegalDocumentsPrintModal({
                     </div>
                     <div className="flex-1 p-2 space-y-1">
                       <div className="grid grid-cols-3 gap-1">
-                        <div className="col-span-2 flex"><span className="font-bold ml-1 whitespace-nowrap">اسم الضامن الاول:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[0]?.name || '................................................'}</span></div>
+                        <div className="col-span-2 flex"><span className="font-bold ml-1 whitespace-nowrap">اسم الضامن الاول:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[0]?.name || '................................................'}</span></div>
                         <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">اسم الشهرة:</span><span className="border-b border-black flex-1"></span></div>
                       </div>
                       <div className="grid grid-cols-2 gap-1">
-                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">بطاقة الرقم القومى:</span><span className="border-b border-black flex-1 font-bold font-mono">{customer?.guarantors?.[0]?.nationalId || '................................................'}</span></div>
-                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">تاريخ الميلاد:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[0]?.nationalId ? extractBirthDateFromNationalId(customer.guarantors[0].nationalId) : ''}</span></div>
+                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">بطاقة الرقم القومى:</span><span className="border-b border-black flex-1 font-bold font-mono">{effectiveGuarantors?.[0]?.nationalId || '................................................'}</span></div>
+                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">تاريخ الميلاد:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[0]?.nationalId ? extractBirthDateFromNationalId(effectiveGuarantors[0]!.nationalId) : ''}</span></div>
                       </div>
-                      <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">عنوان السكن بالتفصيل:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[0]?.address || '................................................'}</span></div>
+                      <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">عنوان السكن بالتفصيل:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[0]?.address || '................................................'}</span></div>
                       <div className="grid grid-cols-3 gap-1">
                         <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">تليفون المنزل:</span><span className="border-b border-black flex-1"></span></div>
-                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">محمول:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[0]?.phone || '................................................'}</span></div>
+                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">محمول:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[0]?.phone || '................................................'}</span></div>
                         <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">العمل:</span><span className="border-b border-black flex-1"></span></div>
                       </div>
                       <div className="flex gap-3 pt-0.5 font-bold text-[8px]">
@@ -1490,14 +1495,14 @@ export default function LegalDocumentsPrintModal({
                     </div>
                     <div className="flex-1 p-2 space-y-1">
                       <div className="grid grid-cols-3 gap-1">
-                        <div className="col-span-2 flex"><span className="font-bold ml-1 whitespace-nowrap">اسم الضامن الثاني:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[1]?.name || '................................................'}</span></div>
+                        <div className="col-span-2 flex"><span className="font-bold ml-1 whitespace-nowrap">اسم الضامن الثاني:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[1]?.name || '................................................'}</span></div>
                         <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">اسم الشهرة:</span><span className="border-b border-black flex-1"></span></div>
                       </div>
                       <div className="grid grid-cols-2 gap-1">
-                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">بطاقة الرقم القومى:</span><span className="border-b border-black flex-1 font-bold font-mono">{customer?.guarantors?.[1]?.nationalId || '................................................'}</span></div>
-                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">تاريخ الميلاد:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[1]?.nationalId ? extractBirthDateFromNationalId(customer.guarantors[1].nationalId) : ''}</span></div>
+                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">بطاقة الرقم القومى:</span><span className="border-b border-black flex-1 font-bold font-mono">{effectiveGuarantors?.[1]?.nationalId || '................................................'}</span></div>
+                        <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">تاريخ الميلاد:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[1]?.nationalId ? extractBirthDateFromNationalId(effectiveGuarantors[1]!.nationalId) : ''}</span></div>
                       </div>
-                      <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">عنوان السكن بالتفصيل:</span><span className="border-b border-black flex-1 font-bold">{customer?.guarantors?.[1]?.address || '................................................'}</span></div>
+                      <div className="flex"><span className="font-bold ml-1 whitespace-nowrap">عنوان السكن بالتفصيل:</span><span className="border-b border-black flex-1 font-bold">{effectiveGuarantors?.[1]?.address || '................................................'}</span></div>
                       <div className="flex justify-end pt-1 font-bold text-[8px]">
                         <span>توقيع الضامن: .................................................</span>
                       </div>

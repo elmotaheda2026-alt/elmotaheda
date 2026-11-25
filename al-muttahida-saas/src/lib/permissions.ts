@@ -18,6 +18,8 @@ const broadPermissionMap: Partial<Record<Permission, LegacyPermission[]>> = {
   'sales:read': ['sales', 'customers', 'suppliers'],
   'sales:write': ['sales', 'customers', 'suppliers'],
   'sales:reschedule': ['sales'],
+  'sales:transfer': ['sales'],
+  'sales:guarantors': ['sales'],
   'payments:read': ['treasury'],
   'payments:write': ['treasury'],
   'payments:reverse': ['treasury'],
@@ -38,6 +40,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
     'sales:read',
     'sales:write',
     'sales:reschedule',
+    'sales:transfer',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'payments:reverse',
@@ -56,6 +60,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
     'sales:read',
     'sales:write',
     'sales:reschedule',
+    'sales:transfer',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'reports:read',
@@ -67,6 +73,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
     'dashboard:view',
     'sales:read',
     'sales:write',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'payments:reverse',
@@ -82,6 +89,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<User['role'], Permission[]> = {
     'dashboard:view',
     'sales:read',
     'sales:write',
+    'sales:transfer',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'payments:reverse',
@@ -129,6 +138,8 @@ export function getRolePermissionsSnapshot(): Record<User['role'], Permission[]>
 const MOBILE_BLOCKED_WRITE_PERMISSIONS: ReadonlySet<Permission> = new Set([
   'sales:write',
   'sales:reschedule',
+  'sales:transfer',
+  'sales:guarantors',
   'payments:write',
   'payments:reverse',
   'closing:write',
@@ -140,6 +151,8 @@ export const PERMISSION_CATALOG: { key: Permission; label: string; category: str
   { key: 'sales:read', label: 'عرض المبيعات والعملاء', category: 'المبيعات' },
   { key: 'sales:write', label: 'إضافة وتعديل المبيعات والعملاء', category: 'المبيعات' },
   { key: 'sales:reschedule', label: 'ترحيل وإعادة جدولة الأقساط', category: 'المبيعات' },
+  { key: 'sales:transfer', label: 'التنازل عن العقود ونقل المديونية', category: 'المبيعات' },
+  { key: 'sales:guarantors', label: 'إضافة واستبدال ضامني العقود', category: 'المبيعات' },
   { key: 'payments:read', label: 'عرض الخزينة والمدفوعات', category: 'الخزينة' },
   { key: 'payments:write', label: 'تسجيل تحصيل وصرف نقدي', category: 'الخزينة' },
   { key: 'payments:reverse', label: 'عكس وإلغاء الحركات المالية', category: 'الخزينة' },
@@ -222,6 +235,12 @@ export const canViewNotification = (
     }
       if (text.includes('سند صرف') || text.includes('حركة خزينة') || text.includes('تكييش') || text.includes('عكس حركة مالية') || text.includes('إغلاق')) {
         return hasPermission(user, 'payments:read') || hasPermission(user, 'payments:write');
+      }
+      if (text.includes('تنازل عن عقد') || text.includes('نقل المتبقي')) {
+        return hasPermission(user, 'sales:transfer') || hasPermission(user, 'sales:read') || hasPermission(user, 'sales:write');
+      }
+      if (text.includes('استبدال ضامن') || text.includes('إضافة ضامن')) {
+        return hasPermission(user, 'sales:guarantors') || hasPermission(user, 'sales:read') || hasPermission(user, 'sales:write');
       }
       if (text.includes('فاتورة جديدة') || text.includes('تعديل تعاقد') || text.includes('مرتجع') || text.includes('ترحيل قسط')) {
         return hasPermission(user, 'sales:read') || hasPermission(user, 'sales:write');

@@ -5,6 +5,8 @@ export const validPermissions: Permission[] = [
   'sales:read',
   'sales:write',
   'sales:reschedule',
+  'sales:transfer',
+  'sales:guarantors',
   'payments:read',
   'payments:write',
   'payments:reverse',
@@ -26,6 +28,8 @@ export const defaultRolePermissions: Record<UserRole, Permission[]> = {
     'sales:read',
     'sales:write',
     'sales:reschedule',
+    'sales:transfer',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'reports:read',
@@ -37,6 +41,7 @@ export const defaultRolePermissions: Record<UserRole, Permission[]> = {
     'dashboard:view',
     'sales:read',
     'sales:write',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'payments:reverse',
@@ -69,6 +74,8 @@ export const defaultRolePermissions: Record<UserRole, Permission[]> = {
     'dashboard:view',
     'sales:read',
     'sales:write',
+    'sales:transfer',
+    'sales:guarantors',
     'payments:read',
     'payments:write',
     'payments:reverse',
@@ -83,7 +90,7 @@ export const defaultRolePermissions: Record<UserRole, Permission[]> = {
 };
 
 export const legacyPermissionMap: Record<string, Permission[]> = {
-  sales: ['sales:read', 'sales:write', 'sales:reschedule', 'inventory:manage', 'purchases:manage', 'reports:read'],
+  sales: ['sales:read', 'sales:write', 'sales:reschedule', 'sales:transfer', 'sales:guarantors', 'inventory:manage', 'purchases:manage', 'reports:read'],
   customers: ['sales:read', 'sales:write'],
   treasury: ['payments:read', 'payments:write', 'payments:reverse', 'closing:write'],
   collection: ['payments:read', 'reports:read', 'notifications:read'],

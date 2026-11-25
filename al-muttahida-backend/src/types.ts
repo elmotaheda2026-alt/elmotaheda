@@ -12,6 +12,8 @@ export type Permission =
   | 'sales:read'
   | 'sales:write'
   | 'sales:reschedule'
+  | 'sales:transfer'
+  | 'sales:guarantors'
   | 'payments:read'
   | 'payments:write'
   | 'payments:reverse'

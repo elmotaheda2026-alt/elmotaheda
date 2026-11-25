@@ -206,16 +206,25 @@ router.post('/', requirePermission('purchases:manage'), async (req: AuthedReques
           item.total,
         );
 
-        // Increase product inventory in SQL Server (only for stocked warehouse products) and update purchase price
+        // Increase product inventory in SQL Server (only for stocked warehouse products) and update weighted-average purchase price
         await txDb.run(
           `UPDATE products
-           SET quantity = CASE WHEN fulfillment_type = 'stocked' THEN quantity + ? ELSE quantity END,
-               purchase_price = CASE WHEN ? > 0 THEN ? ELSE purchase_price END,
+           SET purchase_price = CASE
+                 WHEN ? > 0 AND fulfillment_type = 'stocked' AND quantity > 0 AND purchase_price > 0
+                   THEN ROUND(((quantity * purchase_price) + (? * ?)) / (quantity + ?), 2)
+                 WHEN ? > 0 THEN ?
+                 ELSE purchase_price
+               END,
+               quantity = CASE WHEN fulfillment_type = 'stocked' THEN quantity + ? ELSE quantity END,
                updated_at = ?
            WHERE id = ?`,
+          item.unitPrice,
+          item.quantity,
+          item.unitPrice,
           item.quantity,
           item.unitPrice,
           item.unitPrice,
+          item.quantity,
           now,
           item.productId,
         );

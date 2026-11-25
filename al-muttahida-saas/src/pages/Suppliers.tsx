@@ -69,8 +69,12 @@ export default function Suppliers() {
     void loadSuppliers();
   });
 
+  const [isSavingSupplier, setIsSavingSupplier] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingSupplier) return;
+    setIsSavingSupplier(true);
     try {
       if (editingSupplier) {
         const { balance: _ignoredBalance, ...editableFields } = formData;
@@ -86,6 +90,8 @@ export default function Suppliers() {
       resetForm();
     } catch (err: any) {
       showToast(err?.message || 'تعذر حفظ بيانات المورد.', 'error');
+    } finally {
+      setIsSavingSupplier(false);
     }
   };
 
@@ -401,9 +407,10 @@ export default function Suppliers() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-2xs"
+                  disabled={isSavingSupplier}
+                  className="flex-1 px-4 py-2 bg-[#1e40af] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors text-xs font-bold shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {editingSupplier ? 'تحديث' : 'إضافة'}
+                  {isSavingSupplier ? 'جاري الحفظ...' : editingSupplier ? 'تحديث' : 'إضافة'}
                 </button>
               </div>
             </form>

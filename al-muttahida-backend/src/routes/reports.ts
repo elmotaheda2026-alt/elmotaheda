@@ -30,7 +30,9 @@ router.get('/aging', async (req, res, next) => {
       `SELECT s.id as sale_id, s.invoice_number, s.customer_name, sch.due_date, sch.amount, sch.paid_amount
      FROM installment_schedules sch
      JOIN sales s ON s.id = sch.sale_id
-     WHERE (sch.amount - sch.paid_amount) > 0`,
+     WHERE s.status NOT IN ('cancelled', 'completed', 'settled_early')
+       AND sch.status NOT IN ('paid', 'settled_early')
+       AND (sch.amount - sch.paid_amount) > 0`,
     );
 
     const scheduledRows = schedules
@@ -225,8 +227,14 @@ router.get('/dashboard/metrics', async (req, res) => {
     allTimeSalesSummary,
     allTimeExpenses,
     realizedCashSummary,
+    profitWithdrawals,
+    standaloneExpenses,
+    allTimeCashPenalties,
+    allTimeCancelledRetainedFees,
+    periodCashPenalties,
+    periodCancelledRetainedFees,
   ] = await Promise.all([
-    db.get<{ baseline_capital: number }>('SELECT TOP 1 baseline_capital FROM settings'),
+    db.get<{ baseline_capital: number; starting_cash_balance: number }>('SELECT TOP 1 baseline_capital, starting_cash_balance FROM settings'),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
     db.get<MetricRow>('SELECT COALESCE(SUM(quantity * purchase_price),0) AS total FROM products'),
@@ -288,17 +296,58 @@ router.get('/dashboard/metrics', async (req, res) => {
          ${paymentPeriod.clause}`,
       ...paymentPeriod.args,
     ),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM shareholder_transactions WHERE type = 'profit_withdrawal'"),
+    db.get<MetricRow>(`
+      SELECT COALESCE(SUM(e.amount), 0) AS total
+      FROM expenses e
+      WHERE NOT EXISTS (
+        SELECT 1 FROM payments p
+        WHERE p.type = 'out' AND p.status = 'posted'
+          AND p.reference_type = 'expense' AND p.reference_id = e.id
+      )
+    `),
+    db.get<MetricRow>(`
+      SELECT COALESCE(SUM(amount), 0) AS total
+      FROM payments
+      WHERE type = 'in' AND status = 'posted'
+        AND affects_customer_balance = 0
+        AND reference_type = 'sale'
+        AND description LIKE N'تحصيل غرامة%'
+    `),
+    db.get<MetricRow>(`
+      SELECT COALESCE(SUM(paid), 0) AS total
+      FROM sales
+      WHERE status = 'cancelled' AND paid > 0
+    `),
+    db.get<MetricRow>(
+      `SELECT COALESCE(SUM(p.amount), 0) AS total
+       FROM payments p
+       WHERE p.type = 'in' AND p.status = 'posted'
+         AND p.affects_customer_balance = 0
+         AND p.reference_type = 'sale'
+         AND p.description LIKE N'تحصيل غرامة%'${paymentPeriod.clause}`,
+      ...paymentPeriod.args,
+    ),
+    db.get<MetricRow>(
+      `SELECT COALESCE(SUM(s.paid), 0) AS total
+       FROM sales s
+       WHERE s.status = 'cancelled' AND s.paid > 0${salesPeriod.clause}`,
+      ...salesPeriod.args,
+    ),
   ]);
 
   const subscribedCapitalValue = money(subscribedCapital?.total);
   const postedCapitalValue = money((capitalDeposits?.total || 0) - (capitalWithdrawals?.total || 0));
   const baselineCapital = money(settings?.baseline_capital || 8500000);
+  const startingCashBalance = money(settings?.starting_cash_balance || 0);
   const paidInCapital = subscribedCapitalValue > 0 ? subscribedCapitalValue : postedCapitalValue > 0 ? postedCapitalValue : baselineCapital;
   const capitalSource = subscribedCapitalValue > 0 ? 'shareholders' : postedCapitalValue > 0 ? 'posted_capital_transactions' : 'system_baseline';
-  const allTimeNetProfit = money((allTimeSalesSummary?.eff_sales || 0) - (allTimeSalesSummary?.cogs || 0) - (allTimeExpenses?.total || 0));
-  const retainedEarnings = allTimeNetProfit;
+  const allTimeOtherOperatingIncome = money((allTimeCashPenalties?.total || 0) + (allTimeCancelledRetainedFees?.total || 0));
+  const periodOtherOperatingIncome = money((periodCashPenalties?.total || 0) + (periodCancelledRetainedFees?.total || 0));
+  const allTimeNetProfit = money((allTimeSalesSummary?.eff_sales || 0) + allTimeOtherOperatingIncome - (allTimeSalesSummary?.cogs || 0) - (allTimeExpenses?.total || 0));
+  const retainedEarnings = money(allTimeNetProfit - (profitWithdrawals?.total || 0));
   const shareholdersEquity = money(paidInCapital + retainedEarnings);
-  const cashInSafe = money((cashIn?.total || 0) - (cashOut?.total || 0));
+  const cashInSafe = money(startingCashBalance + (cashIn?.total || 0) - (cashOut?.total || 0) - (standaloneExpenses?.total || 0));
   const totalAssets = money(cashInSafe + (inventory?.total || 0) + (customers?.total || 0));
   const totalLiabilities = money(suppliers?.total);
   const totalEquity = shareholdersEquity;
@@ -313,7 +362,7 @@ router.get('/dashboard/metrics', async (req, res) => {
   const periodWarehouseProfit = money(periodSalesSummary?.warehouse_profit);
   const periodFinancingProfit = money(Math.max(0, periodGrossProfit - periodWarehouseProfit));
   const periodExpensesTotal = money(periodExpenses?.total);
-  const periodOperatingNetProfit = money(periodGrossProfit - periodExpensesTotal);
+  const periodOperatingNetProfit = money(periodGrossProfit + periodOtherOperatingIncome - periodExpensesTotal);
   const realizedCashCollections = money(realizedCashSummary?.cash_collected);
   const realizedSaleMargin = money(realizedCashSummary?.realized_margin);
   const realizedNetProfit = money(realizedSaleMargin - periodExpensesTotal);
@@ -357,7 +406,7 @@ router.get('/dashboard/metrics', async (req, res) => {
     realizedSaleMargin,
     realizedProfits: realizedNetProfit,
     deferredProfits: money((customers?.total || 0) - periodCogs),
-    warehouseProfit: periodGrossProfit,
+    warehouseProfit: periodWarehouseProfit,
   });
 });
 

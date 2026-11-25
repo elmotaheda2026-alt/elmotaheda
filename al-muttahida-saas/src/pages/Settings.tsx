@@ -530,7 +530,7 @@ export default function Settings() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const updated = { ...formData, taxRate: 0 };
+    const updated = { ...formData };
     try {
       await updateSettings(updated);
       setFormData(updated);

@@ -3,6 +3,8 @@ export type Permission =
   | 'sales:read'
   | 'sales:write'
   | 'sales:reschedule'
+  | 'sales:transfer'
+  | 'sales:guarantors'
   | 'payments:read'
   | 'payments:write'
   | 'payments:reverse'
@@ -38,6 +40,19 @@ export interface Guarantor {
   nationalId: string;
   phone: string;
   relationship: string;
+}
+
+export interface SaleGuarantorRecord extends Guarantor {
+  id: string;
+  saleId: string;
+  slot: 1 | 2 | 3;
+  status: 'active' | 'replaced';
+  replacedAt?: string | null;
+  replacedBy?: string | null;
+  replaceReason?: string | null;
+  remainingAtReplace?: number | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Customer {
@@ -202,6 +217,9 @@ export interface Sale {
   lastEditedBy?: string;
   lastEditedAt?: string;
   financing?: SaleFinancing;
+  guarantors?: [Guarantor | null, Guarantor | null, Guarantor | null];
+  guarantorRecords?: SaleGuarantorRecord[];
+  guarantorHistoryCount?: number;
 }
 
 export interface PurchaseItem {

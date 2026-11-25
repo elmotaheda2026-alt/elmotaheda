@@ -14,6 +14,9 @@ import {
   Truck,
   Landmark,
   ExternalLink,
+  ArrowLeftRight,
+  Shield,
+  Zap,
 } from 'lucide-react';
 import { Notification } from '../types';
 import { getNotifications, markAllNotificationsRead, syncNotifications } from '../lib/storage';
@@ -34,8 +37,11 @@ type FilterType =
 type NotificationCategory =
   | 'treasury_in'
   | 'treasury_out'
+  | 'early_settlement'
   | 'shareholders'
   | 'returns'
+  | 'transfer'
+  | 'guarantors'
   | 'installments'
   | 'sales'
   | 'purchases'
@@ -69,6 +75,48 @@ function classifyNotification(notification: Notification): CategoryMeta {
       icon: <RotateCcw size={18} />,
       route: '/invoices',
       routeLabel: 'سجل المبيعات',
+    };
+  }
+
+  if (/تنازل عن عقد|نقل المتبقي/.test(text)) {
+    return {
+      category: 'transfer',
+      filterGroup: 'sales',
+      label: 'تنازل عن عقد',
+      titleClass: 'text-purple-700',
+      iconBoxClass: 'bg-purple-50 text-purple-600 border-purple-200',
+      accentBorderClass: 'border-r-purple-500',
+      icon: <ArrowLeftRight size={18} />,
+      route: '/invoices',
+      routeLabel: 'سجل التعاقدات',
+    };
+  }
+
+  if (/استبدال ضامن|إضافة ضامن/.test(text)) {
+    return {
+      category: 'guarantors',
+      filterGroup: 'sales',
+      label: 'ضامني العقود',
+      titleClass: 'text-amber-700',
+      iconBoxClass: 'bg-amber-50 text-amber-600 border-amber-200',
+      accentBorderClass: 'border-r-amber-500',
+      icon: <Shield size={18} />,
+      route: '/invoices',
+      routeLabel: 'سجل التعاقدات',
+    };
+  }
+
+  if (/تكييش|سداد مبكر|تسوية مبكرة/.test(text)) {
+    return {
+      category: 'early_settlement',
+      filterGroup: 'treasury',
+      label: 'سداد مبكر / تكييش',
+      titleClass: 'text-teal-700',
+      iconBoxClass: 'bg-teal-50 text-teal-600 border-teal-200',
+      accentBorderClass: 'border-r-teal-500',
+      icon: <Zap size={18} />,
+      route: '/payments',
+      routeLabel: 'الخزينة',
     };
   }
 

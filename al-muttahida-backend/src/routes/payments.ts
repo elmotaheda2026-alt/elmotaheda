@@ -156,14 +156,99 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
       };
     }
 
-    if (totalExpenses !== 0 || todayExpenses !== 0) {
+    const settingsRow = await db.get<{ starting_cash_balance?: number }>('SELECT TOP 1 starting_cash_balance FROM settings');
+    const startingCashBalance = roundMoney(Number(settingsRow?.starting_cash_balance || 0));
+
+    if (totalExpenses !== 0 || todayExpenses !== 0 || startingCashBalance !== 0) {
       if (!channels.cash) channels.cash = makeEmptyChannel();
       if (isAdminUser && channels.cash.totalOut !== null && channels.cash.totalIn !== null) {
         channels.cash.totalOut = roundMoney(channels.cash.totalOut + totalExpenses);
-        channels.cash.balance = roundMoney(channels.cash.totalIn - channels.cash.totalOut);
+        channels.cash.balance = roundMoney(startingCashBalance + channels.cash.totalIn - channels.cash.totalOut);
       }
       channels.cash.todayOut = roundMoney(channels.cash.todayOut + todayExpenses);
       channels.cash.todayNet = roundMoney(channels.cash.todayIn - channels.cash.todayOut);
+    }
+
+    // Optional date-range summary for accurate server-side Period Closing (daily / monthly / yearly)
+    const rawStartDate = typeof req.query.startDate === 'string' && req.query.startDate.trim() ? req.query.startDate.trim().slice(0, 10) : null;
+    const rawEndDate = typeof req.query.endDate === 'string' && req.query.endDate.trim() ? req.query.endDate.trim().slice(0, 10) : null;
+    let period: {
+      startDate: string;
+      endDate: string;
+      totalIn: number;
+      totalOut: number;
+      totalExpenses: number;
+      count: number;
+      net: number;
+      closingBalance: number;
+    } | null = null;
+
+    if (rawStartDate && rawEndDate) {
+      const [periodPayRow, periodExpRow, upToPayRow, upToExpRow] = await Promise.all([
+        db.get<any>(
+          `SELECT
+             COUNT(*) AS cnt,
+             COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE 0 END), 0) AS pIn,
+             COALESCE(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS pOut
+           FROM payments
+           WHERE (status IS NULL OR status != 'voided')
+             AND COALESCE(reference_type, '') != 'internal_transfer'
+             AND CONVERT(date, date) >= CONVERT(date, ?)
+             AND CONVERT(date, date) <= CONVERT(date, ?)`,
+          rawStartDate,
+          rawEndDate,
+        ),
+        db.get<any>(
+          `SELECT COALESCE(SUM(e.amount), 0) AS pExp
+           FROM expenses e
+           WHERE CONVERT(date, e.date) >= CONVERT(date, ?)
+             AND CONVERT(date, e.date) <= CONVERT(date, ?)
+             AND NOT EXISTS (
+               SELECT 1 FROM payments p
+               WHERE p.reference_type = 'expense' AND p.reference_id = e.id
+                 AND (p.status IS NULL OR p.status != 'voided')
+             )`,
+          rawStartDate,
+          rawEndDate,
+        ),
+        db.get<any>(
+          `SELECT
+             COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE 0 END), 0) AS cumIn,
+             COALESCE(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS cumOut
+           FROM payments
+           WHERE (status IS NULL OR status != 'voided')
+             AND COALESCE(reference_type, '') != 'internal_transfer'
+             AND CONVERT(date, date) <= CONVERT(date, ?)`,
+          rawEndDate,
+        ),
+        db.get<any>(
+          `SELECT COALESCE(SUM(e.amount), 0) AS cumExp
+           FROM expenses e
+           WHERE CONVERT(date, e.date) <= CONVERT(date, ?)
+             AND NOT EXISTS (
+               SELECT 1 FROM payments p
+               WHERE p.reference_type = 'expense' AND p.reference_id = e.id
+                 AND (p.status IS NULL OR p.status != 'voided')
+             )`,
+          rawEndDate,
+        ),
+      ]);
+      const pIn = roundMoney(periodPayRow?.pIn || 0);
+      const pOut = roundMoney(periodPayRow?.pOut || 0);
+      const pExp = roundMoney(periodExpRow?.pExp || 0);
+      const cumIn = roundMoney(upToPayRow?.cumIn || 0);
+      const cumOut = roundMoney(upToPayRow?.cumOut || 0);
+      const cumExp = roundMoney(upToExpRow?.cumExp || 0);
+      period = {
+        startDate: rawStartDate,
+        endDate: rawEndDate,
+        totalIn: pIn,
+        totalOut: roundMoney(pOut + pExp),
+        totalExpenses: pExp,
+        count: Number(periodPayRow?.cnt || 0),
+        net: roundMoney(pIn - pOut - pExp),
+        closingBalance: roundMoney(startingCashBalance + cumIn - cumOut - cumExp),
+      };
     }
 
     return res.json({
@@ -172,12 +257,14 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
       totalIn: isAdminUser ? totalIn : null,
       totalOut: isAdminUser ? totalOut : null,
       totalExpenses: isAdminUser ? totalExpenses : null,
-      netCash: isAdminUser ? roundMoney(totalIn - totalOut - totalExpenses) : null,
+      startingCashBalance: isAdminUser ? startingCashBalance : null,
+      netCash: isAdminUser ? roundMoney(startingCashBalance + totalIn - totalOut - totalExpenses) : null,
       todayIn,
       todayOut,
       todayExpenses,
       todayNet: roundMoney(todayIn - todayOut - todayExpenses),
       channels,
+      period,
     });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
@@ -388,6 +475,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
     // Run all DB mutations inside a single transaction with row-level locks to prevent double-payment races
     await db.withTransaction(async (tx) => {
       receiptNumber = await nextReceiptNumber(tx);
+      let liveRemainingForSettlement = saleRemainingBeforeSettlement;
       // 1. If paying installments/balance for a sale (not a down-payment treasury record), lock sale row & update installments
       if (data.type === 'in' && data.saleId && !isDownPayment) {
         const lockedSale = await tx.get(
@@ -400,6 +488,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
           throw err;
         }
         const liveRemaining = Number(lockedSale.remaining || 0);
+        liveRemainingForSettlement = liveRemaining;
         if (data.isEarlySettlement) {
           const discount = Number(data.settlementDiscount || 0);
           const expectedNet = Math.max(0, Number((liveRemaining - discount).toFixed(2)));
@@ -449,8 +538,8 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
              SET paid = paid + ?,
                  remaining = CASE WHEN total - (paid + ?) < 0 THEN 0 ELSE total - (paid + ?) END,
                  locked = 1,
-                 status = CASE WHEN (paid + ?) >= total THEN 'completed' ELSE 'pending' END,
-                 collection_note = CASE WHEN (paid + ?) >= (total - 1.0) THEN NULL ELSE collection_note END
+                 status = CASE WHEN (paid + ?) >= total - 0.01 THEN 'completed' ELSE 'pending' END,
+                 collection_note = CASE WHEN (paid + ?) >= (total - 0.01) THEN NULL ELSE collection_note END
              WHERE id = ?`,
             data.amount, data.amount, data.amount, data.amount, data.amount, data.saleId,
           );
@@ -461,7 +550,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
               data.installmentId,
             );
             if (schedule) {
-              if (schedule.status === 'paid' || (schedule.amount - schedule.paid_amount) <= 1.0) {
+              if (schedule.status === 'paid' || (schedule.amount - schedule.paid_amount) <= 0.01) {
                 const err: any = new Error('تم تحصيل هذا القسط بالفعل من جهاز آخر، يرجى تحديث الصفحة.');
                 err.statusCode = 409;
                 throw err;
@@ -469,7 +558,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
               const schRemaining = Math.max(0, Number((schedule.amount - schedule.paid_amount).toFixed(2)));
               const applied = Math.min(schRemaining, data.amount);
               const nextPaid = Number((schedule.paid_amount + applied).toFixed(2));
-              const isPaid = (schedule.amount - nextPaid) <= 1.0;
+              const isPaid = (schedule.amount - nextPaid) <= 0.01;
               const finalPaid = isPaid ? schedule.amount : nextPaid;
               const nextStatus = isPaid ? 'paid' : (finalPaid > 0 ? 'partial' : 'unpaid');
               await tx.run(
@@ -498,7 +587,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
                   const nextApplied = Math.min(nextRemaining, surplus);
                   const nextSchPaid = Number((nextSch.paid_amount + nextApplied).toFixed(2));
                   surplus = Number((surplus - nextApplied).toFixed(2));
-                  const isNextPaid = (nextSch.amount - nextSchPaid) <= 1.0;
+                  const isNextPaid = (nextSch.amount - nextSchPaid) <= 0.01;
                   const finalNextPaid = isNextPaid ? nextSch.amount : nextSchPaid;
                   const nextSchStatus = isNextPaid ? 'paid' : (finalNextPaid > 0 ? 'partial' : 'unpaid');
                   await tx.run(
@@ -525,7 +614,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
               const applied = Math.min(schRemaining, remainingPayment);
               const nextPaidAmount = Number((sch.paid_amount + applied).toFixed(2));
               remainingPayment = Number((remainingPayment - applied).toFixed(2));
-              const isSchPaid = (sch.amount - nextPaidAmount) <= 1.0;
+              const isSchPaid = (sch.amount - nextPaidAmount) <= 0.01;
               const finalSchPaid = isSchPaid ? sch.amount : nextPaidAmount;
               const schStatus = isSchPaid ? 'paid' : (finalSchPaid > 0 ? 'partial' : 'unpaid');
               await tx.run(
@@ -543,7 +632,7 @@ router.post('/', requirePermission('payments:write'), async (req: AuthedRequest,
 
       // 2. Update Customer Balance
       if (data.type === 'in' && finalCustomerId && data.affectsCustomerBalance) {
-        const customerDeduction = data.isEarlySettlement ? saleRemainingBeforeSettlement : data.amount;
+        const customerDeduction = data.isEarlySettlement ? liveRemainingForSettlement : data.amount;
         await tx.run(
           `UPDATE customers
            SET balance = ROUND(balance - ?, 2), updated_at = ?
@@ -751,11 +840,18 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
 
       if (original.sale_id && original.type === 'in' && !isDownPaymentReversal) {
         const linkedSale = (await tx.get(
-          'SELECT id, status, discount, total, paid, remaining FROM sales WHERE id = ?',
+          'SELECT id, status, discount, total, paid, remaining, notes FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
           original.sale_id,
-        )) as { id: string; status: string; discount: number; total: number; paid: number; remaining: number } | undefined;
+        )) as { id: string; status: string; discount: number; total: number; paid: number; remaining: number; notes?: string | null } | undefined;
 
-        if (linkedSale && linkedSale.status === 'settled_early') {
+        if (linkedSale && String(linkedSale.notes || '').includes('تم التنازل عن المتبقي')) {
+          throw Object.assign(new Error('لا يمكن عكس دفعة على عقد تم التنازل عنه لعميل آخر حفاظاً على سلامة الأرصدة.'), { statusCode: 409 });
+        }
+
+        const isActualEarlySettlementPayment =
+          !original.installment_id && String(original.description || '').includes('سداد مبكر');
+
+        if (linkedSale && linkedSale.status === 'settled_early' && isActualEarlySettlementPayment) {
           isEarlySettlementReversal = true;
           // 1. Reopen all early settled schedules
           await tx.run(
@@ -937,6 +1033,11 @@ router.post('/:id/reverse', requirePermission('payments:reverse'), async (req: A
         );
       }
 
+      // 3b. If reversing an expense payment, also delete the linked expense row so profit & balance sheet stay reconciled
+      if (original.type === 'out' && original.reference_type === 'expense' && original.reference_id) {
+        await tx.run('DELETE FROM expenses WHERE id = ?', original.reference_id);
+      }
+
       // 4. Create voided contra-entry audit log (status='voided' prevents 2x subtraction in treasury totals since original is also marked voided)
       await tx.run(
         `INSERT INTO payments (
@@ -1025,17 +1126,25 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
   }
 
   try {
+    let lockedOldAmount = oldAmount;
     await db.withTransaction(async (tx: any) => {
-      const sale = await tx.get('SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?', original.sale_id);
+      const lockedPayment = await tx.get('SELECT * FROM payments WITH (UPDLOCK, ROWLOCK) WHERE id = ?', req.params.id);
+      if (!lockedPayment || lockedPayment.status === 'voided') {
+        throw new Error('لا يمكن تعديل حركة غير موجودة أو ملغاة.');
+      }
+      lockedOldAmount = roundMoney(Number(lockedPayment.amount || 0));
+      const liveDelta = roundMoney(newAmount - lockedOldAmount);
+
+      const sale = await tx.get('SELECT * FROM sales WITH (UPDLOCK, ROWLOCK) WHERE id = ?', lockedPayment.sale_id);
       if (!sale) throw new Error('الفاتورة المرتبطة غير موجودة.');
 
-      if (delta !== 0) {
-        if (delta > roundMoney(Number(sale.remaining || 0)) + 0.01) {
+      if (liveDelta !== 0) {
+        if (liveDelta > roundMoney(Number(sale.remaining || 0)) + 0.01) {
           throw new Error('المبلغ الجديد يتجاوز الرصيد المتبقي على الفاتورة.');
         }
 
-        const nextPaid = roundMoney(Math.max(0, Number(sale.paid || 0) + delta));
-        const nextRemaining = roundMoney(Math.max(0, Number(sale.remaining || 0) - delta));
+        const nextPaid = roundMoney(Math.max(0, Number(sale.paid || 0) + liveDelta));
+        const nextRemaining = roundMoney(Math.max(0, Number(sale.remaining || 0) - liveDelta));
         const nextStatus = sale.status === 'settled_early' ? 'settled_early' : nextRemaining <= 0.01 ? 'completed' : 'pending';
 
         await tx.run(
@@ -1046,24 +1155,24 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
           sale.id
         );
 
-        if (original.customer_id) {
+        if (lockedPayment.customer_id) {
           await tx.run(
             'UPDATE customers SET balance = ROUND(balance - ?, 2), updated_at = ? WHERE id = ?',
-            delta,
+            liveDelta,
             now,
-            original.customer_id
+            lockedPayment.customer_id
           );
         }
 
-        if (original.installment_id) {
+        if (lockedPayment.installment_id) {
           const schedule = await tx.get(
             'SELECT * FROM installment_schedules WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
-            original.installment_id
+            lockedPayment.installment_id
           );
           if (schedule) {
             const schedAmount = roundMoney(Number(schedule.amount || 0));
             const nextSchedPaid = roundMoney(
-              Math.max(0, Math.min(schedAmount, Number(schedule.paid_amount || 0) + delta))
+              Math.max(0, Math.min(schedAmount, Number(schedule.paid_amount || 0) + liveDelta))
             );
             const nextSchedStatus =
               nextSchedPaid >= schedAmount - 0.01
@@ -1080,11 +1189,11 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
             );
           }
         }
-      } else if (original.installment_id) {
+      } else if (lockedPayment.installment_id) {
         await tx.run(
           'UPDATE installment_schedules SET paid_at = ? WHERE id = ? AND paid_amount > 0',
           newDate,
-          original.installment_id
+          lockedPayment.installment_id
         );
       }
 
@@ -1094,12 +1203,12 @@ router.patch('/:id', requirePermission('payments:write'), async (req: AuthedRequ
         newDate,
         newDescription,
         req.user?.name || 'system',
-        original.id
+        lockedPayment.id
       );
     });
 
     await audit('payment.update', 'payment', original.id, req.user?.name || 'system', {
-      oldAmount,
+      oldAmount: lockedOldAmount,
       newAmount,
       newDate,
     });
