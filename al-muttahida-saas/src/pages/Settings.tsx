@@ -49,6 +49,7 @@ import { hasPermission, isAdmin } from '../lib/permissions';
 import { scanLanForServer } from '../lib/lanDiscovery';
 import DocumentTemplatesManager from '../components/DocumentTemplatesManager';
 import WhatsappControlCenter from '../components/WhatsappControlCenter';
+import TelegramNotificationsManager from '../components/TelegramNotificationsManager';
 import PaymentChannelsManager from '../components/PaymentChannelsManager';
 
 async function fetchNetworkInfo(retries = 2, delayMs = 600) {
@@ -131,6 +132,7 @@ export default function Settings() {
     setFormData(settings);
   }, [settings]);
   const [saved, setSaved] = useState(false);
+  const [companyCollapsed, setCompanyCollapsed] = useState<boolean>(() => Boolean(settings?.companyName));
   const [backupBusy, setBackupBusy] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
@@ -170,16 +172,16 @@ export default function Settings() {
   };
 
   const [searchParams] = useSearchParams();
-  const requestedTab = searchParams.get('tab') as 'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger' | null;
-  const [activeTab, setActiveTab] = useState<'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'roles' | 'danger'>(() => {
-    if (requestedTab && ['company', 'channels', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
+  const requestedTab = searchParams.get('tab') as 'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'telegram' | 'roles' | 'danger' | null;
+  const [activeTab, setActiveTab] = useState<'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'telegram' | 'roles' | 'danger'>(() => {
+    if (requestedTab && ['company', 'channels', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'telegram', 'roles', 'danger'].includes(requestedTab)) {
       return requestedTab;
     }
     return 'company';
   });
 
   useEffect(() => {
-    if (requestedTab && ['company', 'channels', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'roles', 'danger'].includes(requestedTab)) {
+    if (requestedTab && ['company', 'channels', 'documents', 'network', 'backup', 'balances', 'whatsapp', 'telegram', 'roles', 'danger'].includes(requestedTab)) {
       setActiveTab(requestedTab);
     }
   }, [requestedTab]);
@@ -535,6 +537,7 @@ export default function Settings() {
       await updateSettings(updated);
       setFormData(updated);
       setSaved(true);
+      setCompanyCollapsed(true);
       showToast('تم حفظ إعدادات النظام بنجاح', 'success');
       setTimeout(() => setSaved(false), 3000);
     } catch (err: any) {
@@ -624,6 +627,7 @@ export default function Settings() {
     { key: 'backup' as const, label: 'النسخ الاحتياطي' },
     { key: 'channels' as const, label: 'قنوات الدفع والخزائن' },
     { key: 'whatsapp' as const, label: 'رسائل الواتساب' },
+    { key: 'telegram' as const, label: 'إشعارات تليجرام' },
     { key: 'network' as const, label: 'اعدادات الشبكة' },
     { key: 'documents' as const, label: 'قوالب المستندات' },
     ...(user?.role === 'admin' ? [{ key: 'roles' as const, label: 'صلاحيات الأدوار' }] : []),
@@ -657,77 +661,120 @@ export default function Settings() {
         </div>
 
         {activeTab === 'company' && (
-          <form onSubmit={handleSubmit} className="p-6 space-y-5">
-            <div className="flex items-center gap-2 mb-2">
-              <Building size={18} className="text-indigo-600" />
-              <h3 className="font-bold text-slate-800">معلومات الشركة</h3>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">اسم الشركة</label>
-                <input
-                  type="text"
-                  value={formData.companyName}
-                  onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
-                  className="input-ui w-full"
-                  required
-                />
+          <div className="p-6">
+            <div className="border border-slate-200 rounded-xl p-5 space-y-4 bg-slate-50/60">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                    <Building size={19} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-sm">معلومات الشركة ({formData.companyName || 'غير محدد'})</h4>
+                    <p className="text-xs text-slate-500">
+                      {formData.companyAddress || 'اسم الشركة، العنوان، الهاتف، والعملة المستخدمة في الفواتير والمستندات.'}
+                    </p>
+                  </div>
+                </div>
+
+                {companyCollapsed && (
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
+                      <CheckCircle2 size={14} />
+                      <span>مفعّل ومحفوظ</span>
+                    </span>
+                    {hasPermission(user, 'settings:manage') && (
+                      <button
+                        type="button"
+                        onClick={() => setCompanyCollapsed(false)}
+                        className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                      >
+                        تعديل الإعدادات
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">عنوان الشركة</label>
-                <input
-                  type="text"
-                  value={formData.companyAddress}
-                  onChange={(e) => setFormData({ ...formData, companyAddress: e.target.value })}
-                  className="input-ui w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">رقم الهاتف</label>
-                <input
-                  type="text"
-                  value={(formData as any).companyPhone ?? ''}
-                  onChange={(e) => setFormData({ ...formData, companyPhone: e.target.value } as any)}
-                  className="input-ui w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">العملة</label>
-                <select
-                  value={formData.currency || 'جنيه'}
-                  onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
-                  className="input-ui w-full"
-                >
-                  <option value="جنيه">جنيه مصري (جنيه)</option>
-                  <option value="EGP">جنيه مصري (EGP)</option>
-                  <option value="USD">دولار امريكي (USD)</option>
-                  <option value="SAR">ريال سعودي (SAR)</option>
-                  <option value="AED">درهم اماراتي (AED)</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex items-center gap-4 pt-2">
-              {hasPermission(user, 'settings:manage') ? (
-                <button
-                  type="submit"
-                  className="flex items-center gap-2 bg-[#1e40af] text-white px-6 py-2.5 rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold text-sm shadow-2xs cursor-pointer"
-                >
-                  <Save size={16} />
-                  حفظ الاعدادات
-                </button>
-              ) : (
-                <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
-                  وضع العرض فقط (ليس لديك صلاحية تعديل الإعدادات)
-                </span>
+
+              {!companyCollapsed && (
+                <form onSubmit={handleSubmit} className="space-y-5 pt-1">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">اسم الشركة</label>
+                      <input
+                        type="text"
+                        value={formData.companyName}
+                        onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                        className="input-ui w-full bg-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">عنوان الشركة</label>
+                      <input
+                        type="text"
+                        value={formData.companyAddress}
+                        onChange={(e) => setFormData({ ...formData, companyAddress: e.target.value })}
+                        className="input-ui w-full bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">رقم الهاتف</label>
+                      <input
+                        type="text"
+                        value={(formData as any).companyPhone ?? ''}
+                        onChange={(e) => setFormData({ ...formData, companyPhone: e.target.value } as any)}
+                        className="input-ui w-full bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">العملة</label>
+                      <select
+                        value={formData.currency || 'جنيه'}
+                        onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
+                        className="input-ui w-full bg-white"
+                      >
+                        <option value="جنيه">جنيه مصري (جنيه)</option>
+                        <option value="EGP">جنيه مصري (EGP)</option>
+                        <option value="USD">دولار امريكي (USD)</option>
+                        <option value="SAR">ريال سعودي (SAR)</option>
+                        <option value="AED">درهم اماراتي (AED)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 pt-2">
+                    {hasPermission(user, 'settings:manage') ? (
+                      <>
+                        <button
+                          type="submit"
+                          className="flex items-center gap-2 bg-[#1e40af] text-white px-6 py-2.5 rounded-lg hover:bg-[#1d4ed8] transition-colors font-bold text-sm shadow-2xs cursor-pointer"
+                        >
+                          <Save size={16} />
+                          حفظ الاعدادات
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompanyCollapsed(true)}
+                          className="px-4 py-2.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold cursor-pointer"
+                        >
+                          إلغاء
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3.5 py-2 rounded-lg border border-amber-200">
+                        وضع العرض فقط (ليس لديك صلاحية تعديل الإعدادات)
+                      </span>
+                    )}
+                    {saved && (
+                      <span className="flex items-center gap-1 text-emerald-600 font-bold text-sm">
+                        <CheckCircle2 size={16} />
+                        تم الحفظ بنجاح
+                      </span>
+                    )}
+                  </div>
+                </form>
               )}
-              {saved && (
-                <span className="flex items-center gap-1 text-emerald-600 font-bold text-sm">
-                  <CheckCircle2 size={16} />
-                  تم الحفظ بنجاح
-                </span>
-              )}
             </div>
-          </form>
+          </div>
         )}
 
         {activeTab === 'network' && (
@@ -1552,6 +1599,10 @@ export default function Settings() {
             saved={saved}
             canManage={hasPermission(user, 'settings:manage')}
           />
+        )}
+
+        {activeTab === 'telegram' && (
+          <TelegramNotificationsManager canManage={hasPermission(user, 'settings:manage')} />
         )}
 
         {activeTab === 'roles' && <RolePermissionsManager />}

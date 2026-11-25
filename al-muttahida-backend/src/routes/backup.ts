@@ -323,6 +323,10 @@ async function ensureSettingsBackupColumns(db: any) {
       ALTER TABLE settings ADD role_permissions_json NVARCHAR(MAX) NULL;
     IF COL_LENGTH('settings', 'payment_channels_json') IS NULL
       ALTER TABLE settings ADD payment_channels_json NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('settings', 'telegram_config_json') IS NULL
+      ALTER TABLE settings ADD telegram_config_json NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('notifications', 'telegram_sent') IS NULL
+      ALTER TABLE notifications ADD telegram_sent BIT NOT NULL DEFAULT 1;
     IF COL_LENGTH('shareholders', 'include_warehouse_profit') IS NULL
       ALTER TABLE shareholders ADD include_warehouse_profit BIT NOT NULL DEFAULT 0;
     IF COL_LENGTH('shareholders', 'payout_preference') IS NULL

@@ -26,6 +26,7 @@ export default function RolePermissionsManager() {
   const [matrix, setMatrix] = useState<Record<User['role'], Permission[]>>(() => getRolePermissionsSnapshot());
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -91,6 +92,7 @@ export default function RolePermissionsManager() {
         });
       }
       setSaved(true);
+      setCollapsed(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err: any) {
       setError(err?.message || 'حدث خطأ أثناء حفظ صلاحيات الأدوار');
@@ -112,6 +114,37 @@ export default function RolePermissionsManager() {
 
   return (
     <div className="p-6 space-y-5" dir="rtl">
+      {collapsed ? (
+        <div className="border border-slate-200 rounded-xl p-5 bg-slate-50/60">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                <ShieldCheck size={19} />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">مصفوفة صلاحيات أنواع الحسابات (الأدوار)</h4>
+                <p className="text-xs text-slate-500">
+                  التحكم في الصلاحيات الافتراضية لكل نوع حساب على مستوى النظام (الباك إند والواجهة معاً).
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
+                <CheckCircle2 size={14} />
+                <span>مفعّل ومحفوظ</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setCollapsed(false)}
+                className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              >
+                تعديل الإعدادات
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
@@ -141,6 +174,14 @@ export default function RolePermissionsManager() {
           >
             <Save size={14} />
             <span>{saving ? 'جاري الحفظ...' : 'حفظ صلاحيات الأدوار'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            disabled={saving}
+            className="px-3.5 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+          >
+            إلغاء
           </button>
         </div>
       </div>
@@ -223,6 +264,8 @@ export default function RolePermissionsManager() {
           </tbody>
         </table>
       </div>
+      </>
+      )}
     </div>
   );
 }

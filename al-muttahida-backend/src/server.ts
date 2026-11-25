@@ -36,6 +36,7 @@ import duesRoutes from './routes/dues.js';
 import systemRoutes from './routes/system.js';
 import documentTemplatesRoutes from './routes/document-templates.js';
 import { startAutoBackupScheduler } from './autoBackupService.js';
+import { startTelegramRetryWorker } from './telegramService.js';
 
 async function bootstrap() {
   const app = express();
@@ -157,6 +158,7 @@ async function bootstrap() {
         if (!autoBackupStarted) {
           autoBackupStarted = true;
           startAutoBackupScheduler();
+          startTelegramRetryWorker();
         }
         return true;
       })

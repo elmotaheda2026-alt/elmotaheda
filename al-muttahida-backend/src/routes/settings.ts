@@ -6,6 +6,7 @@ import { audit } from '../audit.js';
 import { clearNonAdminUserPermissionOverrides, getRolePermissions, hasPermission, setRolePermissions, validPermissions } from '../permissions.js';
 import { broadcastDataChange } from '../realtime.js';
 import type { Permission, UserRole } from '../types.js';
+import { invalidateTelegramConfigCache, parseTelegramConfig, testTelegramConnection } from '../telegramService.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -104,6 +105,10 @@ async function ensureWhatsappConfigColumn(db: any) {
     IF COL_LENGTH('settings', 'payment_channels_json') IS NULL
     BEGIN
       ALTER TABLE settings ADD payment_channels_json NVARCHAR(MAX) NULL;
+    END
+    IF COL_LENGTH('settings', 'telegram_config_json') IS NULL
+    BEGIN
+      ALTER TABLE settings ADD telegram_config_json NVARCHAR(MAX) NULL;
     END
   `);
 }
@@ -271,6 +276,73 @@ router.put('/', requirePermission('settings:manage'), async (req: AuthedRequest,
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
+});
+
+// GET /settings/telegram
+router.get('/telegram', requirePermission('settings:manage'), async (_req, res) => {
+  try {
+    const db = await dbPromise;
+    await ensureWhatsappConfigColumn(db);
+    const row = await db.get<{ telegram_config_json?: string | null }>('SELECT TOP 1 telegram_config_json FROM settings');
+    return res.json(parseTelegramConfig(row?.telegram_config_json));
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// PUT /settings/telegram
+router.put('/telegram', requirePermission('settings:manage'), async (req: AuthedRequest, res) => {
+  const schema = z.object({
+    enabled: z.boolean(),
+    botToken: z.string().max(256).default(''),
+    chatIds: z.string().max(1000).default(''),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات إعدادات تليجرام غير صالحة' });
+  }
+
+  const payload = {
+    enabled: Boolean(parsed.data.enabled),
+    botToken: parsed.data.botToken.trim(),
+    chatIds: parsed.data.chatIds.trim(),
+  };
+
+  try {
+    const db = await dbPromise;
+    await ensureWhatsappConfigColumn(db);
+    await db.run('UPDATE settings SET telegram_config_json = ?', JSON.stringify(payload));
+    invalidateTelegramConfigCache();
+    await audit('settings.telegram.update', 'settings', 'telegram', req.user?.name || 'system', {
+      enabled: payload.enabled,
+      hasToken: Boolean(payload.botToken),
+      chatIdsCount: payload.chatIds ? payload.chatIds.split(/[\s,;،]+/).filter(Boolean).length : 0,
+    });
+    return res.json({ message: 'تم حفظ إعدادات تليجرام بنجاح', config: payload });
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message || 'Database error' });
+  }
+});
+
+// POST /settings/telegram/test
+router.post('/telegram/test', requirePermission('settings:manage'), async (req: AuthedRequest, res) => {
+  const schema = z.object({
+    botToken: z.string().default(''),
+    chatIds: z.string().default(''),
+  });
+  const parsed = schema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'بيانات الاختبار غير صالحة' });
+  }
+  const result = await testTelegramConnection(parsed.data.botToken, parsed.data.chatIds);
+  if (!result.ok) {
+    return res.status(400).json({ ok: false, message: result.error || 'فشل إرسال الرسالة التجريبية' });
+  }
+  return res.json({
+    ok: true,
+    sentCount: result.sentCount,
+    message: `تم إرسال الرسالة التجريبية بنجاح إلى (${result.sentCount}) محادثة على تليجرام!`,
+  });
 });
 
 // GET /settings/opening-balances

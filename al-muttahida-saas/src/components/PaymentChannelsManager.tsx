@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Banknote,
   Check,
+  CheckCircle2,
   CreditCard,
   Landmark,
   Pencil,
@@ -64,6 +65,7 @@ export default function PaymentChannelsManager() {
   const [newIcon, setNewIcon] = useState<PaymentChannelIcon>('wallet');
   const [newColor, setNewColor] = useState<PaymentChannelColor>('rose');
   const [saving, setSaving] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
@@ -80,6 +82,7 @@ export default function PaymentChannelsManager() {
         await updateSettings({ ...settings, paymentChannels: nextList });
       }
       showToast(successMessage, 'success');
+      setCollapsed(true);
     } catch (err: any) {
       showToast(err?.message || 'تعذر حفظ قنوات الدفع', 'error');
     } finally {
@@ -157,16 +160,57 @@ export default function PaymentChannelsManager() {
 
   return (
     <div className="p-6 space-y-6">
+      {collapsed ? (
+        <div className="border border-slate-200 rounded-xl p-5 bg-slate-50/60">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                <Wallet size={19} />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">قنوات الدفع والخزائن ({channels.length} قنوات نشطة)</h4>
+                <p className="text-xs text-slate-500">
+                  {channels.map((c) => c.label).join(' • ')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
+                <CheckCircle2 size={14} />
+                <span>مفعّل ومحفوظ</span>
+              </span>
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => setCollapsed(false)}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                >
+                  تعديل الإعدادات
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
-            <Wallet size={19} className="text-indigo-600" />
-            <span>قنوات الدفع والخزائن النشطة</span>
+          <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+            <Wallet size={20} className="text-indigo-600" />
+            <span>قنوات الدفع والخزائن</span>
           </h3>
           <p className="text-xs text-slate-500 mt-1">
-            تحكم في طرق الدفع والخزائن التي تظهر في شاشة الخزينة والسداد والمصروفات والفواتير. القناة الافتراضية «الدرج (كاش)» دائمة ولا يمكن حذفها.
+            أضف المحافظ الإلكترونية والحسابات البنكية وإنستاباي لتظهر في شاشة الخزينة وتحصيل الأقساط.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+        >
+          <CheckCircle2 size={14} />
+          <span>حفظ وإغلاق</span>
+        </button>
       </div>
 
       {/* Existing Channels List */}
@@ -367,6 +411,8 @@ export default function PaymentChannelsManager() {
             </div>
           </form>
         </>
+      )}
+      </>
       )}
     </div>
   );

@@ -632,6 +632,17 @@ export function emitApiHealth(connected: boolean) {
     // Settings
     getSettings: () => request<any>('/settings'),
     updateSettings: (payload: any) => request<{ message: string }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+    getTelegramSettings: () => request<{ enabled: boolean; botToken: string; chatIds: string }>('/settings/telegram'),
+    updateTelegramSettings: (payload: { enabled: boolean; botToken: string; chatIds: string }) =>
+      request<{ message: string; config: { enabled: boolean; botToken: string; chatIds: string } }>('/settings/telegram', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    testTelegramSettings: (payload: { botToken: string; chatIds: string }) =>
+      request<{ ok: boolean; sentCount: number; message: string }>('/settings/telegram/test', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     updateRolePermissions: (rolePermissions: Record<string, string[]>) =>
       request<{ message: string; rolePermissions: Record<string, string[]> }>('/settings/role-permissions', {
         method: 'PUT',
