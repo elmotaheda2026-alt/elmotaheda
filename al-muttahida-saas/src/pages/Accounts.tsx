@@ -172,7 +172,7 @@ export default function Accounts() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [syncTick, setSyncTick] = useState(0);
 
-  useRealtimeSync(['sales', 'payments', 'expenses', 'customers', 'suppliers', 'shareholders'], () => {
+  useRealtimeSync(['sales', 'payments', 'expenses', 'customers', 'suppliers', 'shareholders', 'settings'], () => {
     setSyncTick((t) => t + 1);
   });
 

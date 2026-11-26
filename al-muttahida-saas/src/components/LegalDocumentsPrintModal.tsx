@@ -5,6 +5,7 @@ import { getCustomers } from '../lib/storage';
 import { tafqeet } from '../lib/tafqeet';
 import { formatDateDisplay } from '../lib/dateUtils';
 import { printHtmlDocument } from '../lib/printHelper';
+import { useDialog } from '../context/DialogContext';
 import {
   BUILTIN_TEMPLATE_DEFAULTS,
   DocumentTemplate,
@@ -40,6 +41,7 @@ export default function LegalDocumentsPrintModal({
   sale,
   onSuccess
 }: LegalDocumentsPrintModalProps) {
+  const { showToast } = useDialog();
   const [customer, setCustomer] = useState<Customer | null>(null);
   
   // Custom print parameters
@@ -203,7 +205,7 @@ export default function LegalDocumentsPrintModal({
     localStorage.setItem('print_firstPartyName', firstPartyName);
     localStorage.setItem('print_thirdPartyName', thirdPartyName);
     localStorage.setItem('print_lawyerName', lawyerName);
-    alert('تم حفظ الأسماء الافتراضية بنجاح!');
+    showToast('تم حفظ الأسماء الافتراضية بنجاح!', 'success');
   };
 
   // Generates single signatory HTML for printing
@@ -1131,7 +1133,7 @@ export default function LegalDocumentsPrintModal({
       paperSize: 'a4',
     });
     if (!opened) {
-      alert('تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.');
+      showToast('تعذر فتح نافذة الطباعة. تأكد من السماح بالنوافذ المنبثقة.', 'error');
       return;
     }
 

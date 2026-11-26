@@ -51,11 +51,11 @@ process.on('uncaughtException', (err) => {
     const errLog = path.join(logDir, 'error.log');
     if (fs.existsSync(errLog) && fs.statSync(errLog).size >= 2 * 1024 * 1024) {
       const prevErrLog = path.join(logDir, 'error.old.log');
-      try { if (fs.existsSync(prevErrLog)) fs.unlinkSync(prevErrLog); } catch (_) {}
+      try { if (fs.existsSync(prevErrLog)) fs.unlinkSync(prevErrLog); } catch (_) { }
       fs.renameSync(errLog, prevErrLog);
     }
-    fs.appendFile(errLog, `[${new Date().toISOString()}] ${err.stack || err}\n`, () => {});
-  } catch (_) {}
+    fs.appendFile(errLog, `[${new Date().toISOString()}] ${err.stack || err}\n`, () => { });
+  } catch (_) { }
 });
 
 // Prevent Chromium window occlusion, DirectComposition sleep-blank textures, and audio service stalls on Windows
@@ -69,7 +69,7 @@ if (isLegacyWindows || is32Bit || process.argv.includes('--legacy-compat') || pr
   console.log(`[Compatibility Mode] Active (Platform: ${process.platform}, OS Release: ${osRelease}, Arch: ${process.arch})`);
   try {
     app.disableHardwareAcceleration();
-  } catch (_) {}
+  } catch (_) { }
   app.commandLine.appendSwitch('disable-gpu');
   app.commandLine.appendSwitch('disable-gpu-compositing');
   app.commandLine.appendSwitch('disable-gpu-rasterization');
@@ -217,7 +217,7 @@ function reloadMainWindowSafely() {
     console.warn('[Main Window] Safe reload fallback:', err?.message || err);
     try {
       mainWindow.webContents.reloadIgnoringCache();
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 
@@ -225,7 +225,7 @@ function forceWindowRepaint() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try {
     mainWindow.webContents.invalidate();
-  } catch (_) {}
+  } catch (_) { }
   try {
     if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
       mainWindow.setOpacity(0.999);
@@ -233,11 +233,11 @@ function forceWindowRepaint() {
         if (mainWindow && !mainWindow.isDestroyed()) {
           try {
             mainWindow.setOpacity(1);
-          } catch (_) {}
+          } catch (_) { }
         }
       }, 60);
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function createMainWindow(apiBaseUrl) {
@@ -446,7 +446,7 @@ function openPrintPreviewFromPdfBuffer(pdfBuffer, title, options = {}) {
   previewWin.setMenuBarVisibility(false);
   previewWin.loadURL(`file:///${tempPdfPath.replace(/\\/g, '/')}`);
   previewWin.on('closed', () => {
-    fs.unlink(tempPdfPath, () => {});
+    fs.unlink(tempPdfPath, () => { });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.focus();
       mainWindow.webContents.focus();
@@ -563,9 +563,9 @@ ipcMain.handle('print-preview-html', async (_event, payload = {}) => {
     return { success: false, error: err?.message || 'Print preview failed' };
   } finally {
     if (renderWin && !renderWin.isDestroyed()) {
-      try { renderWin.destroy(); } catch (_) {}
+      try { renderWin.destroy(); } catch (_) { }
     }
-    fs.unlink(tempHtmlPath, () => {});
+    fs.unlink(tempHtmlPath, () => { });
   }
 });
 
@@ -609,7 +609,7 @@ function getInstallerPaths() {
   const installersDir = path.join(getAppDataDir(), 'installers');
   try {
     if (!fs.existsSync(installersDir)) fs.mkdirSync(installersDir, { recursive: true });
-  } catch (_) {}
+  } catch (_) { }
   return {
     installersDir,
     sqlPath: path.join(installersDir, 'SQL2025-SSEI-Expr.exe'),
@@ -628,7 +628,7 @@ function broadcastSqlProgress(event, payload) {
     if (setupWindow && !setupWindow.isDestroyed() && setupWindow.webContents) {
       setupWindow.webContents.send('sql-install-progress', payload);
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function downloadInstallerWithProgress({ url, targetPath, targetLabel, targetKey, fallbackBytes, event }) {
@@ -687,7 +687,7 @@ function downloadInstallerWithProgress({ url, targetPath, targetLabel, targetKey
           });
         });
         fileStream.on('error', (err) => {
-          try { fs.unlinkSync(tmpPath); } catch (_) {}
+          try { fs.unlinkSync(tmpPath); } catch (_) { }
           reject(err);
         });
       });
@@ -695,7 +695,7 @@ function downloadInstallerWithProgress({ url, targetPath, targetLabel, targetKey
         req.destroy(new Error('انتهت مهلة الاتصال أثناء التحميل'));
       });
       req.on('error', (err) => {
-        try { fs.unlinkSync(tmpPath); } catch (_) {}
+        try { fs.unlinkSync(tmpPath); } catch (_) { }
         reject(err);
       });
     };
@@ -723,23 +723,45 @@ function checkPort1433() {
   });
 }
 
+function buildCleanApiUrl(rawHostOrUrl, defaultPort = 4000) {
+  const raw = String(rawHostOrUrl || '').trim();
+  if (!raw) return `http://127.0.0.1:${defaultPort}`;
+  let cleaned = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
+  if (!cleaned) return `http://127.0.0.1:${defaultPort}`;
+  if (!/:\d+$/.test(cleaned)) {
+    cleaned = `${cleaned}:${defaultPort}`;
+  }
+  const candidate = `http://${cleaned}`;
+  try {
+    new URL(candidate);
+    return candidate;
+  } catch {
+    return `http://127.0.0.1:${defaultPort}`;
+  }
+}
+
 function checkDbHealthDetails(apiUrl) {
   const http = require('http');
   return new Promise((resolve) => {
-    const req = http.get(`${apiUrl}/health/db`, { timeout: 6000 }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body || '{}');
-          resolve({ ok: res.statusCode === 200 && Boolean(parsed.ok), error: parsed.error || null });
-        } catch {
-          resolve({ ok: res.statusCode === 200, error: res.statusCode === 200 ? null : `HTTP ${res.statusCode}` });
-        }
+    try {
+      const safeBase = buildCleanApiUrl(apiUrl, 4000);
+      const req = http.get(`${safeBase}/health/db`, { timeout: 6000 }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body || '{}');
+            resolve({ ok: res.statusCode === 200 && Boolean(parsed.ok), error: parsed.error || null });
+          } catch {
+            resolve({ ok: res.statusCode === 200, error: res.statusCode === 200 ? null : `HTTP ${res.statusCode}` });
+          }
+        });
       });
-    });
-    req.on('error', (err) => resolve({ ok: false, error: err.message }));
-    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'انتهت مهلة فحص قاعدة البيانات' }); });
+      req.on('error', (err) => resolve({ ok: false, error: err.message }));
+      req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'انتهت مهلة فحص قاعدة البيانات' }); });
+    } catch (err) {
+      resolve({ ok: false, error: err?.message || 'Invalid URL' });
+    }
   });
 }
 
@@ -752,13 +774,15 @@ async function ensureBackendSchemaReady(timeoutMs = 15000) {
 
   schemaProvisionPromise = (async () => {
     try {
-      const quickApiUrl = currentApiUrl || 'http://127.0.0.1:4000';
+      const localPort = Number(appConfig?.port || 4000) || 4000;
+      const quickApiUrl = `http://127.0.0.1:${localPort}`;
       const quickCheck = await checkDbHealthDetails(quickApiUrl);
       if (quickCheck.ok) {
+        currentApiUrl = quickApiUrl;
         return quickCheck;
       }
 
-      const port = await startBackend();
+      const port = (await startBackend()) || 4000;
       const apiUrl = `http://127.0.0.1:${port}`;
       currentApiUrl = apiUrl;
 
@@ -1037,68 +1061,195 @@ ipcMain.handle('scan-network', async () => {
     const http = require('http');
     const os = require('os');
     let finished = false;
+    const activeRequests = new Set();
+    const timers = [];
 
-    const udpClient = dgram.createSocket('udp4');
+    const VIRTUAL_ADAPTER_REGEX = /vEthernet|WSL|VMware|VirtualBox|Hyper-V|Docker|Loopback|ZeroTier|Tailscale|Hamachi|Teredo|Bluetooth/i;
+
+    const udpClient = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+
     const finish = (ip) => {
       if (!finished) {
         finished = true;
-        try { udpClient.close(); } catch (_) {}
+        for (const t of timers) clearTimeout(t);
+        for (const req of activeRequests) {
+          try { req.destroy(); } catch (_) { }
+        }
+        activeRequests.clear();
+        try { udpClient.close(); } catch (_) { }
         resolve(ip);
       }
     };
 
-    udpClient.on('error', () => {});
-    udpClient.on('message', (msg, rinfo) => {
+    const probe = (targetIp, timeoutMs = 700) => new Promise((res) => {
+      if (finished) return res(null);
+      const req = http.get(`http://${targetIp}:4000/health`, { timeout: timeoutMs }, (r) => {
+        if (r.statusCode !== 200) {
+          r.resume();
+          activeRequests.delete(req);
+          return res(null);
+        }
+        let body = '';
+        r.on('data', (chunk) => { body += chunk; });
+        r.on('end', () => {
+          activeRequests.delete(req);
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed && (parsed.service === 'al-muttahida-backend' || parsed.ok === true)) {
+              return res(targetIp);
+            }
+          } catch (_) { }
+          return res(null);
+        });
+      });
+      activeRequests.add(req);
+      req.on('error', () => {
+        activeRequests.delete(req);
+        res(null);
+      });
+      req.on('timeout', () => {
+        activeRequests.delete(req);
+        try { req.destroy(); } catch (_) { }
+        res(null);
+      });
+    });
+
+    // Helper: compute directed subnet broadcast (e.g., 192.168.1.255)
+    const getBroadcastAddress = (ip, netmask) => {
+      const ipParts = String(ip).split('.').map(Number);
+      const maskParts = String(netmask || '255.255.255.0').split('.').map(Number);
+      if (ipParts.length !== 4 || maskParts.length !== 4) return null;
+      return ipParts.map((octet, idx) => (octet | (~maskParts[idx] & 255))).join('.');
+    };
+
+    // Collect active LAN interfaces (prefer physical adapters over virtual ones)
+    const ifaces = os.networkInterfaces();
+    const ownIps = new Set();
+    const activeSubnets = [];
+    const fallbackSubnets = [];
+    const broadcastTargets = new Set(['255.255.255.255']);
+
+    for (const name of Object.keys(ifaces)) {
+      const isVirtual = VIRTUAL_ADAPTER_REGEX.test(name);
+      for (const iface of ifaces[name] || []) {
+        if (iface.family === 'IPv4' && !iface.internal && !iface.address.startsWith('169.254.')) {
+          ownIps.add(iface.address);
+          const parts = iface.address.split('.');
+          if (parts.length === 4) {
+            const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
+            if (!isVirtual) {
+              if (!activeSubnets.includes(subnet)) activeSubnets.push(subnet);
+            } else {
+              if (!fallbackSubnets.includes(subnet)) fallbackSubnets.push(subnet);
+            }
+          }
+          const bcast = getBroadcastAddress(iface.address, iface.netmask);
+          if (bcast) broadcastTargets.add(bcast);
+        }
+      }
+    }
+
+    // 1. UDP Discovery (with directed broadcasts + 3 retries)
+    udpClient.on('error', () => { });
+    udpClient.on('message', async (msg, rinfo) => {
+      if (finished) return;
       try {
         const data = JSON.parse(msg.toString());
         if (data.service === 'al-muttahida-backend' || data.serverIp) {
-          finish(data.serverIp || rinfo.address);
+          const candidates = [rinfo.address, data.serverIp, ...(Array.isArray(data.allIps) ? data.allIps : [])]
+            .filter((ip, idx, arr) => ip && ip !== '127.0.0.1' && arr.indexOf(ip) === idx);
+          for (const candidate of candidates) {
+            const ok = await probe(candidate, 900);
+            if (ok) return finish(ok);
+          }
+          finish(rinfo.address || data.serverIp);
         }
-      } catch (_) {}
+      } catch (_) { }
     });
+
+    const sendDiscoveryPings = () => {
+      if (finished) return;
+      const msg = Buffer.from('ALMUTTAHIDA_DISCOVERY_PING');
+      for (const target of broadcastTargets) {
+        try {
+          udpClient.send(msg, 0, msg.length, 4001, target);
+        } catch (_) { }
+      }
+    };
 
     try {
       udpClient.bind(() => {
         try {
           udpClient.setBroadcast(true);
-          const msg = Buffer.from('ALMUTTAHIDA_DISCOVERY_PING');
-          udpClient.send(msg, 0, msg.length, 4001, '255.255.255.255');
-        } catch (_) {}
+          sendDiscoveryPings();
+          timers.push(setTimeout(sendDiscoveryPings, 450));
+          timers.push(setTimeout(sendDiscoveryPings, 1000));
+        } catch (_) { }
       });
-    } catch (_) {}
+    } catch (_) { }
 
-    const probe = (targetIp) => new Promise((res) => {
-      const req = http.get(`http://${targetIp}:4000/health`, { timeout: 800 }, (r) => {
-        if (r.statusCode === 200) res(targetIp);
-        else res(null);
+    // Global safety timeout (7.5s so batched scan finishes cleanly even when UDP is blocked)
+    timers.push(setTimeout(() => finish(null), 7500));
+
+    // Helper: probe a list of IPs with bounded concurrency so Windows TCP stack never chokes
+    const probeBatchList = async (ips, batchSize = 30, timeoutMs = 650) => {
+      for (let i = 0; i < ips.length; i += batchSize) {
+        if (finished) return null;
+        const batch = ips.slice(i, i + batchSize);
+        const results = await Promise.all(batch.map((ip) => probe(ip, timeoutMs)));
+        const hit = results.find(Boolean);
+        if (hit) return hit;
+      }
+      return null;
+    };
+
+    // 2. Fast ARP cache probe (checks recently seen LAN hosts in < 300ms)
+    const arpIps = await new Promise((res) => {
+      if (process.platform !== 'win32') return res([]);
+      exec('arp -a', { timeout: 1200 }, (_err, stdout) => {
+        if (!stdout) return res([]);
+        const matches = stdout.match(/\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b/g) || [];
+        const unique = Array.from(new Set(matches)).filter(
+          (ip) => !ownIps.has(ip) && !ip.endsWith('.255') && !ip.endsWith('.0')
+        );
+        res(unique);
       });
-      req.on('error', () => res(null));
-      req.on('timeout', () => { req.destroy(); res(null); });
     });
 
-    const localHit = await probe('127.0.0.1');
-    if (localHit) return finish('127.0.0.1');
+    if (!finished && arpIps.length > 0) {
+      const arpHit = await probeBatchList(arpIps, 25, 600);
+      if (arpHit) return finish(arpHit);
+    }
 
-    const ifaces = os.networkInterfaces();
-    const subnets = new Set(['192.168.1', '192.168.0', '192.168.100', '10.0.0']);
-    for (const key of Object.keys(ifaces)) {
-      for (const iface of ifaces[key] || []) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          const parts = iface.address.split('.');
-          if (parts.length === 4) subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+    // 3. Prioritized subnet scan (client's own active LAN subnet(s) first, bounded concurrency)
+    const orderedSubnets = [...activeSubnets];
+    if (orderedSubnets.length === 0) {
+      for (const s of [...fallbackSubnets, '192.168.1', '192.168.0', '192.168.100', '10.0.0']) {
+        if (!orderedSubnets.includes(s)) orderedSubnets.push(s);
+      }
+    }
+
+    const alreadyProbed = new Set(arpIps);
+    for (const subnet of orderedSubnets) {
+      if (finished) break;
+      const subnetIps = [];
+      for (let i = 1; i <= 254; i++) {
+        const ip = `${subnet}.${i}`;
+        if (!ownIps.has(ip) && !alreadyProbed.has(ip)) {
+          subnetIps.push(ip);
         }
       }
+      const hit = await probeBatchList(subnetIps, 35, 550);
+      if (hit) return finish(hit);
     }
 
-    for (const s of subnets) {
-      for (let i = 1; i <= 254; i++) {
-        probe(`${s}.${i}`).then((ip) => { if (ip) finish(ip); });
-      }
+    // 4. Last resort: check localhost in case server is running on this same machine
+    if (!finished) {
+      const localHit = await probe('127.0.0.1', 500);
+      if (localHit) return finish('127.0.0.1');
     }
 
-    setTimeout(() => {
-      finish(null);
-    }, 2800);
+    finish(null);
   });
 });
 
@@ -1110,7 +1261,7 @@ ipcMain.on('start-app', async (event, config) => {
   try {
     if (mode === 'server') {
       ensureFirewallRules();
-      await ensureSqlConfigured().catch(() => {});
+      await ensureSqlConfigured().catch(() => { });
 
       if (event.sender) {
         event.sender.send('setup-status', 'جاري تشغيل السيرفر وقاعدة البيانات...');
@@ -1118,7 +1269,7 @@ ipcMain.on('start-app', async (event, config) => {
 
       let port;
       try {
-        port = await startBackend();
+        port = (await startBackend()) || 4000;
       } catch (beErr) {
         if (event.sender) {
           event.sender.send('setup-error', `تعذر بدء السيرفر المحلي: ${beErr.message}`);
@@ -1160,7 +1311,7 @@ ipcMain.on('start-app', async (event, config) => {
       }
 
     } else if (mode === 'client') {
-      const apiUrl = `http://${serverIp}:4000`;
+      const apiUrl = buildCleanApiUrl(serverIp, 4000);
       currentApiUrl = apiUrl;
 
       if (event.sender) {
@@ -1211,7 +1362,7 @@ async function initAndLaunch() {
   // If client mode
   if (appConfig.mode === 'client') {
     const remoteIp = appConfig.serverIp || appConfig.host;
-    const apiUrl = `http://${remoteIp || '127.0.0.1'}:4000`;
+    const apiUrl = buildCleanApiUrl(remoteIp || '127.0.0.1', 4000);
     createMainWindow(apiUrl);
     return;
   }
@@ -1231,7 +1382,7 @@ async function initAndLaunch() {
         console.error('Failed to auto-start backend server:', err);
       });
     if (!appConfig.lastSuccessfulServer) {
-      ensureSqlConfigured().catch(() => {});
+      ensureSqlConfigured().catch(() => { });
     }
   } catch (err) {
     console.error('Failed to auto-start backend server:', err);
@@ -1248,7 +1399,7 @@ function sendUpdaterStatus(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
       mainWindow.webContents.send('updater-status', payload);
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 
@@ -1289,7 +1440,7 @@ function prepareForUpdateInstall() {
         win.removeAllListeners('close');
         win.destroy();
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   whatsappWindow = null;
   setupWindow = null;
@@ -1341,11 +1492,11 @@ function setupAutoUpdater() {
     });
 
     setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(() => {});
+      autoUpdater.checkForUpdates().catch(() => { });
     }, 8000);
 
     setInterval(() => {
-      autoUpdater.checkForUpdates().catch(() => {});
+      autoUpdater.checkForUpdates().catch(() => { });
     }, 4 * 60 * 60 * 1000);
   } catch (err) {
     console.warn('[AutoUpdater] Setup failed:', err.message);
@@ -1431,7 +1582,7 @@ function sendWhatsappSessionUpdate(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
       mainWindow.webContents.send('whatsapp-session-updated', payload);
-    } catch (_) {}
+    } catch (_) { }
   }
 }
 
@@ -1450,7 +1601,7 @@ function startWhatsappLoginWatcher(win) {
         sendWhatsappSessionUpdate({ connected: true, windowOpen: true });
         stopWhatsappLoginWatcher();
       }
-    } catch (_) {}
+    } catch (_) { }
   }, 2000);
 }
 
@@ -1651,7 +1802,7 @@ app.whenReady().then(() => {
 
   const verifyMainWindowAfterWake = async () => {
     if (appConfig?.mode !== 'client') {
-      ensureBackendRunning(Number(appConfig?.port || 4000)).catch(() => {});
+      ensureBackendRunning(Number(appConfig?.port || 4000)).catch(() => { });
     }
     if (!mainWindow || mainWindow.isDestroyed()) return;
 

@@ -22,6 +22,9 @@ interface CollectionInvoiceView {
   customerAddress: string;
   saleDate: string;
   total: number;
+  downPayment?: number;
+  discount?: number;
+  status?: string;
   paid: number;
   remaining: number;
   paymentMethod: string;
@@ -439,7 +442,7 @@ export default function CollectionStatement() {
           ? { ...c, isSued: customer.isSued, suedDate: customer.suedDate, updatedAt: customer.updatedAt }
           : c
       ));
-      alert(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.');
+      showToast(err.message || 'حدث خطأ أثناء تحديث حالة الشئون القانونية.', 'error');
     }
   };
 
@@ -510,6 +513,11 @@ export default function CollectionStatement() {
         const isInstallment = sale.financing?.paymentMethod === 'installment' ||
           Boolean(sale.financing?.installmentMonths && sale.financing.installmentMonths > 1) ||
           Boolean(sale.financing?.schedules && sale.financing.schedules.length > 1);
+        const schedulesSum = schedules.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+        const explicitDownPayment = Number(sale.financing?.downPayment || 0);
+        const downPayment = explicitDownPayment > 0
+          ? explicitDownPayment
+          : (isInstallment && sale.total - schedulesSum > 1 ? Math.round(sale.total - schedulesSum) : 0);
 
         return {
           saleId: sale.id,
@@ -520,6 +528,9 @@ export default function CollectionStatement() {
           customerAddress,
           saleDate: sale.date,
           total: sale.total,
+          downPayment,
+          discount: Number(sale.discount || 0),
+          status: sale.status,
           paid: sale.paid,
           remaining: sale.remaining,
           paymentMethod: isInstallment ? 'installment' : (sale.financing?.paymentMethod || 'cash'),
@@ -562,6 +573,11 @@ export default function CollectionStatement() {
       const isInstallment = sale.financing?.paymentMethod === 'installment' ||
         Boolean(sale.financing?.installmentMonths && sale.financing.installmentMonths > 1) ||
         Boolean(sale.financing?.schedules && sale.financing.schedules.length > 1);
+      const schedulesSum = schedules.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+      const explicitDownPayment = Number(sale.financing?.downPayment || 0);
+      const downPayment = explicitDownPayment > 0
+        ? explicitDownPayment
+        : (isInstallment && sale.total - schedulesSum > 1 ? Math.round(sale.total - schedulesSum) : 0);
 
       return {
         saleId: sale.id,
@@ -572,6 +588,9 @@ export default function CollectionStatement() {
         customerAddress: customer?.address || '-',
         saleDate: sale.date,
         total: sale.total,
+        downPayment,
+        discount: Number(sale.discount || 0),
+        status: sale.status,
         paid: sale.paid,
         remaining: sale.remaining,
         paymentMethod: isInstallment ? 'installment' : (sale.financing?.paymentMethod || 'cash'),
@@ -587,7 +606,7 @@ export default function CollectionStatement() {
     });
   }, [customerMap, hasInvoiceLookup, invoiceSales, rows, salesRepMap]);
   const filteredRows = useMemo(() => {
-    return invoiceRows.filter((row) => {
+    const matched = invoiceRows.filter((row) => {
       if (selectedCustomerId !== 'all' && row.customerId !== selectedCustomerId) return false;
       if (hideSuedCustomers && row.isSued) return false;
 
@@ -611,7 +630,20 @@ export default function CollectionStatement() {
         ))
       );
     });
-  }, [invoiceRows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers]);
+
+    // Prioritize active/open invoices first, then closed/settled invoices (newest first within each group)
+    const isRowOpen = (r: CollectionInvoiceView) =>
+      r.remaining > 1 && r.status !== 'settled_early' && r.status !== 'completed' && r.status !== 'cancelled';
+
+    return [...matched].sort((a, b) => {
+      const aOpen = isRowOpen(a) ? 0 : 1;
+      const bOpen = isRowOpen(b) ? 0 : 1;
+      if (aOpen !== bOpen) return aOpen - bOpen;
+      const dateCmp = String(b.saleDate || '').localeCompare(String(a.saleDate || ''));
+      if (dateCmp !== 0) return dateCmp;
+      return String(b.invoiceNumber || '').localeCompare(String(a.invoiceNumber || ''), undefined, { numeric: true });
+    });
+  }, [invoiceRows, invoiceSearchTerm, selectedCustomerId, showOnlyDue, hideSuedCustomers, customerMap]);
 
   const dueRows = useMemo<DueCustomerRow[]>(() => {
     if (isApiMode()) {
@@ -1158,12 +1190,13 @@ export default function CollectionStatement() {
                   <p className="mt-1 text-[11px] font-bold text-amber-700">اكتب 3 أحرف على الأقل أو اختر العميل من القائمة لعرض النتائج.</p>
                 )}
                 {showSuggestions && suggestions.length > 0 && (
-                  <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100 text-right">
+                  <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-60 overflow-y-auto divide-y divide-slate-100 text-right">
                     {suggestions.map((c) => (
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => {
+                        onMouseDown={(e) => {
+                          e.preventDefault();
                           setSelectedCustomerId(c.id);
                           setInvoiceSearchTerm(c.name);
                           setShowSuggestions(false);
@@ -1686,11 +1719,33 @@ export default function CollectionStatement() {
               ) : filteredRows.map((row) => {
                   const isSingle = filteredRows.length === 1;
                   // Calculate installment metrics with 1 EGP rounding tolerance
+                  const isSettledEarly = row.status === 'settled_early';
+                  const settlementDiscount = isSettledEarly ? Math.max(Number(row.discount || 0), Math.max(row.total - row.paid - row.remaining, 0)) : 0;
                   const totalInstallments = row.schedules.length;
-                  const paidInstallments = row.schedules.filter((s) => s.status === 'paid' || Math.max(s.amount - s.paidAmount, 0) <= 1).length;
-                  const partialInstallments = row.schedules.filter((s) => s.status === 'partial' && Math.max(s.amount - s.paidAmount, 0) > 1).length;
-                  const unpaidInstallments = row.schedules.filter((s) => (s.status === 'unpaid' || s.paidAmount <= 0) && Math.max(s.amount - s.paidAmount, 0) > 1).length;
-                  const paymentProgress = row.total > 0 ? Math.min((row.paid / row.total) * 100, 100) : 0;
+                  const paidInstallments = isSettledEarly
+                    ? totalInstallments
+                    : row.schedules.filter((s) => s.status === 'paid' || (s.status as string) === 'settled_early' || Math.max(s.amount - s.paidAmount, 0) <= 1).length;
+                  const partialInstallments = isSettledEarly
+                    ? 0
+                    : row.schedules.filter((s) => s.status === 'partial' && Math.max(s.amount - s.paidAmount, 0) > 1).length;
+                  const unpaidInstallments = isSettledEarly
+                    ? 0
+                    : row.schedules.filter((s) => (s.status === 'unpaid' || s.paidAmount <= 0) && (s.status as string) !== 'settled_early' && Math.max(s.amount - s.paidAmount, 0) > 1).length;
+                  const downPayment = Number(row.downPayment || 0);
+                  const installmentsTotalAmount = row.schedules.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+                  const installmentsPaidAmount = row.schedules.reduce(
+                    (sum, s) => sum + (Math.max(s.amount - s.paidAmount, 0) <= 1 ? Number(s.amount || 0) : Number(s.paidAmount || 0)),
+                    0,
+                  );
+                  const financedTotal = row.paymentMethod === 'installment'
+                    ? (installmentsTotalAmount > 0 ? installmentsTotalAmount : Math.max(row.total - downPayment, 0))
+                    : row.total;
+                  const financedPaid = row.paymentMethod === 'installment'
+                    ? (installmentsTotalAmount > 0 ? installmentsPaidAmount : Math.max(row.paid - downPayment, 0))
+                    : row.paid;
+                  const paymentProgress = isSettledEarly
+                    ? 100
+                    : (financedTotal > 0 ? Math.min((financedPaid / financedTotal) * 100, 100) : 0);
 
                   return (
                   <section
@@ -1723,6 +1778,11 @@ export default function CollectionStatement() {
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
                               {row.paymentMethod === 'installment' ? 'دفع بالتقسيط' : 'نقداً'}
                             </span>
+                            {isSettledEarly && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                تصفية مبكرة (تكييش)
+                              </span>
+                            )}
                           </div>
                           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-1">
                             {row.customerPhone && (
@@ -1748,16 +1808,34 @@ export default function CollectionStatement() {
                       {/* Left side: Stats & Action Buttons */}
                       <div className="flex items-center gap-2.5 flex-wrap lg:justify-end">
                         {/* Mini Financial Summary Pills */}
-                        <div className="w-full sm:w-auto grid grid-cols-3 sm:flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200 text-xs">
+                        <div className={`w-full sm:w-auto grid ${downPayment > 0 ? 'grid-cols-2 sm:flex' : 'grid-cols-3 sm:flex'} items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200 text-xs`}>
                           <div className="px-2 py-0.5 text-center">
                             <span className="text-[10px] text-slate-400 block font-bold leading-tight">الإجمالي</span>
                             <span className="font-black text-slate-800 text-xs">{formatCurrency(row.total)}</span>
                           </div>
+                          {downPayment > 0 && (
+                            <>
+                              <div className="hidden sm:block w-px h-5 bg-slate-200"></div>
+                              <div className="px-2 py-0.5 text-center">
+                                <span className="text-[10px] text-indigo-500 block font-bold leading-tight">المقدم</span>
+                                <span className="font-black text-indigo-700 text-xs">{formatCurrency(downPayment)}</span>
+                              </div>
+                            </>
+                          )}
                           <div className="hidden sm:block w-px h-5 bg-slate-200"></div>
                           <div className="px-2 py-0.5 text-center border-x sm:border-x-0 border-slate-200">
                             <span className="text-[10px] text-slate-400 block font-bold leading-tight">المدفوع</span>
                             <span className="font-black text-emerald-700 text-xs">{formatCurrency(row.paid)}</span>
                           </div>
+                          {settlementDiscount > 0 && (
+                            <>
+                              <div className="hidden sm:block w-px h-5 bg-slate-200"></div>
+                              <div className="px-2 py-0.5 text-center">
+                                <span className="text-[10px] text-amber-600 block font-bold leading-tight">خصم التصفية</span>
+                                <span className="font-black text-amber-700 text-xs">{formatCurrency(settlementDiscount)}</span>
+                              </div>
+                            </>
+                          )}
                           <div className="hidden sm:block w-px h-5 bg-slate-200"></div>
                           <div className="px-2 py-0.5 text-center">
                             <span className="text-[10px] text-slate-400 block font-bold leading-tight">المتبقي</span>
@@ -1812,8 +1890,8 @@ export default function CollectionStatement() {
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-2 min-w-[180px]">
-                          <span className="text-[11px] text-slate-500 font-bold shrink-0">نسبة التحصيل: <span className="font-black text-emerald-700">{paymentProgress.toFixed(1)}%</span></span>
+                        <div className="flex items-center gap-2 min-w-[210px]">
+                          <span className="text-[11px] text-slate-500 font-bold shrink-0">نسبة تحصيل الأقساط: <span className="font-black text-emerald-700">{paymentProgress.toFixed(1)}%</span></span>
                           <div className="flex-1 bg-slate-200 h-1.5 rounded-full overflow-hidden">
                             <div
                               className="bg-emerald-500 h-full rounded-full transition-all duration-300"
@@ -1831,11 +1909,14 @@ export default function CollectionStatement() {
                         {row.schedules.map((schedule) => {
                           const rawRemaining = Math.max(schedule.amount - schedule.paidAmount, 0);
                           const isEffectivelyPaid = schedule.status === 'paid' || rawRemaining <= 1;
-                          const remaining = isEffectivelyPaid ? 0 : rawRemaining;
-                          const effectiveStatus: InstallmentSchedule['status'] = isEffectivelyPaid
+                          const isSettledSchedule = !isEffectivelyPaid && (isSettledEarly || (schedule.status as string) === 'settled_early');
+                          const remaining = isEffectivelyPaid || isSettledSchedule ? 0 : rawRemaining;
+                          const effectiveStatus: InstallmentSchedule['status'] | 'settled_early' = isEffectivelyPaid
                             ? 'paid'
-                            : (schedule.status === 'partial' || schedule.paidAmount > 0 ? 'partial' : 'unpaid');
-                          const isPaid = effectiveStatus === 'paid';
+                            : isSettledSchedule
+                              ? 'settled_early'
+                              : (schedule.status === 'partial' || schedule.paidAmount > 0 ? 'partial' : 'unpaid');
+                          const isPaid = effectiveStatus === 'paid' || effectiveStatus === 'settled_early';
                           const isPartial = effectiveStatus === 'partial';
 
                           return (
@@ -1906,11 +1987,14 @@ export default function CollectionStatement() {
                             {row.schedules.map((schedule) => {
                               const rawRemaining = Math.max(schedule.amount - schedule.paidAmount, 0);
                               const isEffectivelyPaid = schedule.status === 'paid' || rawRemaining <= 1;
-                              const remaining = isEffectivelyPaid ? 0 : rawRemaining;
-                              const effectiveStatus: InstallmentSchedule['status'] = isEffectivelyPaid
+                              const isSettledSchedule = !isEffectivelyPaid && (isSettledEarly || (schedule.status as string) === 'settled_early');
+                              const remaining = isEffectivelyPaid || isSettledSchedule ? 0 : rawRemaining;
+                              const effectiveStatus: InstallmentSchedule['status'] | 'settled_early' = isEffectivelyPaid
                                 ? 'paid'
-                                : (schedule.status === 'partial' || schedule.paidAmount > 0 ? 'partial' : 'unpaid');
-                              const isPaid = effectiveStatus === 'paid';
+                                : isSettledSchedule
+                                  ? 'settled_early'
+                                  : (schedule.status === 'partial' || schedule.paidAmount > 0 ? 'partial' : 'unpaid');
+                              const isPaid = effectiveStatus === 'paid' || effectiveStatus === 'settled_early';
                               const isPartial = effectiveStatus === 'partial';
 
                               return (
@@ -1954,9 +2038,13 @@ export default function CollectionStatement() {
                         </table>
                       </div>
                       {/* Summary footer bar */}
-                      <div className="shrink-0 bg-slate-50/90 border-t border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between text-xs font-bold text-slate-600">
+                      <div className="shrink-0 bg-slate-50/90 border-t border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-600">
                         <span>عدد الأقساط: <span className="text-slate-900 font-extrabold">{row.schedules.length} قسط</span></span>
-                        <span>إجمالي المسدد: <span className="text-emerald-700 font-extrabold">{formatCurrency(row.paid)}</span></span>
+                        {downPayment > 0 && (
+                          <span>المقدم: <span className="text-indigo-700 font-extrabold">{formatCurrency(downPayment)}</span></span>
+                        )}
+                        <span>مسدد الأقساط: <span className="text-emerald-700 font-extrabold">{formatCurrency(financedPaid)}</span></span>
+                        <span>إجمالي المسدد: <span className="text-emerald-800 font-extrabold">{formatCurrency(row.paid)}</span></span>
                         <span>إجمالي المتبقي: <span className="text-rose-700 font-extrabold">{formatCurrency(row.remaining)}</span></span>
                       </div>
                     </div>
@@ -2706,29 +2794,32 @@ function Badge({ children }: { children: React.ReactNode }) {
   return <span className="rounded-lg bg-slate-100 border border-slate-200 px-3 py-1.5 font-bold text-slate-700 shadow-sm text-xs">{children}</span>;
 }
 
-function MonthBadge({ status }: { status: InstallmentSchedule['status'] }) {
-  const labels = {
+function MonthBadge({ status }: { status: InstallmentSchedule['status'] | 'settled_early' }) {
+  const labels: Record<string, string> = {
     paid: 'مدفوع',
+    settled_early: 'تسوية مبكرة',
     partial: 'جزئي',
     unpaid: 'غير مدفوع',
   };
 
-  const styles = {
+  const styles: Record<string, string> = {
     paid: 'bg-emerald-100 text-emerald-700',
+    settled_early: 'bg-indigo-100 text-indigo-700',
     partial: 'bg-amber-100 text-amber-700',
     unpaid: 'bg-rose-100 text-rose-700',
   };
 
-  const icons = {
+  const icons: Record<string, React.ReactNode> = {
     paid: <CheckCircle2 size={14} />,
+    settled_early: <CheckCircle2 size={14} />,
     partial: <Clock3 size={14} />,
     unpaid: <AlertTriangle size={14} />,
   };
 
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${styles[status]}`}>
-      {icons[status]}
-      {labels[status]}
+    <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${styles[status] || styles.unpaid}`}>
+      {icons[status] || icons.unpaid}
+      {labels[status] || labels.unpaid}
     </span>
   );
 }
@@ -2796,55 +2887,103 @@ function PrintableView({ invoice, settings }: { invoice: CollectionInvoiceView, 
         </div>
 
         {/* Financial Summary */}
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <div className="border-2 border-slate-800 p-2 text-center rounded-lg bg-slate-50">
-            <p className="text-slate-600 font-bold mb-1 text-xs">إجمالي الفاتورة</p>
-            <p className="text-lg font-black text-slate-900">{formatCurrency(invoice.total)}</p>
-          </div>
-          <div className="border-2 border-emerald-700 p-2 text-center rounded-lg bg-emerald-50">
-            <p className="text-emerald-700 font-bold mb-1 text-xs">إجمالي المسدد</p>
-            <p className="text-lg font-black text-emerald-800">{formatCurrency(invoice.paid)}</p>
-          </div>
-          <div className="border-2 border-red-700 p-2 text-center rounded-lg bg-red-50">
-            <p className="text-red-700 font-bold mb-1 text-xs">إجمالي المتبقي</p>
-            <p className="text-lg font-black text-red-800">{formatCurrency(invoice.remaining)}</p>
-          </div>
-        </div>
+        {(() => {
+          const printSchedulesSum = invoice.schedules.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+          const printDownPayment =
+            Number(invoice.downPayment || 0) > 0
+              ? Number(invoice.downPayment || 0)
+              : invoice.paymentMethod === 'installment' && invoice.total - printSchedulesSum > 1
+                ? Math.round(invoice.total - printSchedulesSum)
+                : 0;
+          const printInstallmentsPaid = Math.max(invoice.paid - printDownPayment, 0);
+          return (
+            <>
+              <div className={`grid ${printDownPayment > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-3 mb-4`}>
+                <div className="border-2 border-slate-800 p-2 text-center rounded-lg bg-slate-50">
+                  <p className="text-slate-600 font-bold mb-1 text-xs">إجمالي الفاتورة</p>
+                  <p className="text-lg font-black text-slate-900">{formatCurrency(invoice.total)}</p>
+                </div>
+                {printDownPayment > 0 && (
+                  <div className="border-2 border-indigo-700 p-2 text-center rounded-lg bg-indigo-50">
+                    <p className="text-indigo-700 font-bold mb-1 text-xs">المقدم (دفعة التعاقد)</p>
+                    <p className="text-lg font-black text-indigo-800">{formatCurrency(printDownPayment)}</p>
+                  </div>
+                )}
+                <div className="border-2 border-emerald-700 p-2 text-center rounded-lg bg-emerald-50">
+                  <p className="text-emerald-700 font-bold mb-1 text-xs">إجمالي المسدد</p>
+                  <p className="text-lg font-black text-emerald-800">{formatCurrency(invoice.paid)}</p>
+                  {printDownPayment > 0 && (
+                    <p className="text-[10px] font-bold text-emerald-700 mt-0.5">
+                      (مقدم + أقساط: {formatCurrency(printInstallmentsPaid)})
+                    </p>
+                  )}
+                </div>
+                <div className="border-2 border-red-700 p-2 text-center rounded-lg bg-red-50">
+                  <p className="text-red-700 font-bold mb-1 text-xs">إجمالي المتبقي</p>
+                  <p className="text-lg font-black text-red-800">{formatCurrency(invoice.remaining)}</p>
+                </div>
+              </div>
 
-        {/* Installments Table */}
-        <div className="mb-4">
-          <h3 className="font-bold text-sm mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">سجل الأقساط والدفعات التفصيلي</h3>
-          <table className="w-full text-right border-collapse border border-slate-300 text-xs">
-            <thead>
-              <tr className="bg-slate-100 text-slate-900 font-bold">
-                <th className="border border-slate-300 px-2 py-1.5 font-bold">البيان</th>
-                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الاستحقاق</th>
-                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">تاريخ الدفع</th>
-                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المبلغ</th>
-                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المدفوع</th>
-                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المتبقي</th>
-                <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الحالة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoice.schedules.map((schedule) => {
-                const remaining = Math.max(schedule.amount - schedule.paidAmount, 0);
-                const statusLabel = schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partial' ? 'جزئي' : 'غير مدفوع';
-                return (
-                  <tr key={schedule.id} className="even:bg-slate-50">
-                    <td className="border border-slate-300 px-2 py-1.5 font-semibold text-xs">{schedule.label}</td>
-                    <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(schedule.dueDate)}</td>
-                    <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(schedule.paidAt)}</td>
-                    <td className="border border-slate-300 px-2 py-1.5 text-center text-xs font-semibold">{formatCurrency(schedule.amount)}</td>
-                    <td className="border border-slate-300 px-2 py-1.5 text-center text-emerald-700 font-bold text-xs">{formatCurrency(schedule.paidAmount)}</td>
-                    <td className="border border-slate-300 px-2 py-1.5 text-center text-red-700 font-bold text-xs">{formatCurrency(remaining)}</td>
-                    <td className="border border-slate-300 px-2 py-1.5 text-center font-bold text-xs">{statusLabel}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+              {/* Installments Table */}
+              <div className="mb-4">
+                <h3 className="font-bold text-sm mb-2 text-slate-900 border-b-2 border-slate-800 pb-1 inline-block">سجل الأقساط والدفعات التفصيلي</h3>
+                <table className="w-full text-right border-collapse border border-slate-300 text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-900 font-bold">
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold">البيان</th>
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الاستحقاق</th>
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">تاريخ الدفع</th>
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المبلغ</th>
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المدفوع</th>
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">المتبقي</th>
+                      <th className="border border-slate-300 px-2 py-1.5 font-bold text-center">الحالة</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {printDownPayment > 0 && (
+                      <tr className="bg-indigo-50/70">
+                        <td className="border border-slate-300 px-2 py-1.5 font-bold text-indigo-900 text-xs">المقدم (دفعة التعاقد)</td>
+                        <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(invoice.saleDate)}</td>
+                        <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(invoice.saleDate)}</td>
+                        <td className="border border-slate-300 px-2 py-1.5 text-center text-xs font-bold text-indigo-900">{formatCurrency(printDownPayment)}</td>
+                        <td className="border border-slate-300 px-2 py-1.5 text-center text-emerald-700 font-bold text-xs">{formatCurrency(printDownPayment)}</td>
+                        <td className="border border-slate-300 px-2 py-1.5 text-center text-slate-600 font-bold text-xs">{formatCurrency(0)}</td>
+                        <td className="border border-slate-300 px-2 py-1.5 text-center font-bold text-indigo-800 text-xs">مدفوع</td>
+                      </tr>
+                    )}
+                    {invoice.schedules.map((schedule) => {
+                      const rawRemaining = Math.max(schedule.amount - schedule.paidAmount, 0);
+                      const isSettledRow =
+                        (invoice.status === 'settled_early' || (schedule.status as string) === 'settled_early') &&
+                        schedule.status !== 'paid' &&
+                        rawRemaining > 1;
+                      const remaining = isSettledRow ? 0 : rawRemaining;
+                      const statusLabel =
+                        schedule.status === 'paid' || rawRemaining <= 1
+                          ? 'مدفوع'
+                          : isSettledRow
+                            ? 'تسوية مبكرة'
+                            : schedule.status === 'partial'
+                              ? 'جزئي'
+                              : 'غير مدفوع';
+                      return (
+                        <tr key={schedule.id} className="even:bg-slate-50">
+                          <td className="border border-slate-300 px-2 py-1.5 font-semibold text-xs">{schedule.label}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(schedule.dueDate)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 whitespace-nowrap text-xs text-center">{formatDateDisplay(schedule.paidAt)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center text-xs font-semibold">{formatCurrency(schedule.amount)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center text-emerald-700 font-bold text-xs">{formatCurrency(schedule.paidAmount)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center text-red-700 font-bold text-xs">{formatCurrency(remaining)}</td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center font-bold text-xs">{statusLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          );
+        })()}
 
         {/* Footer */}
         <div className="mt-6 text-center text-xs text-slate-500 border-t border-slate-300 pt-3 pb-2">
@@ -2984,6 +3123,9 @@ function CustomerDetailsModal({
       customerAddress: primaryRow.customerAddress,
       saleDate: matchedSale?.date || primaryRow.dueDate,
       total: contractTotal,
+      downPayment: Number(matchedSale?.financing?.downPayment || 0),
+      discount: Number(matchedSale?.discount || 0),
+      status: matchedSale?.status,
       paid: contractPaid,
       remaining: contractRemaining,
       paymentMethod: matchedSale?.financing?.paymentMethod || 'installment',

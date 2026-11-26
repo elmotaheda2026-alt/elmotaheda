@@ -248,7 +248,7 @@ async function bootstrap() {
   app.get('/events', eventsHandler);
   app.get('/api/events', eventsHandler);
 
-  // Automatic real-time broadcast to all 20 LAN PCs whenever any mutation succeeds
+  // Automatic real-time broadcast to all LAN PCs whenever any mutation succeeds
   app.use((req, res, next) => {
     const method = req.method.toUpperCase();
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
@@ -256,18 +256,26 @@ async function bootstrap() {
     }
     res.on('finish', () => {
       if (res.statusCode < 200 || res.statusCode >= 300) return;
-      const p = req.path.replace(/^\/api/, '').toLowerCase();
-      if (p.startsWith('/customers')) {
+      const rawPath = (req.originalUrl || req.path || '').split('?')[0];
+      const p = rawPath.replace(/^\/api/, '').toLowerCase();
+      if (p.startsWith('/auth')) return;
+
+      if (p.startsWith('/sales-reps')) {
+        broadcastDataChange('sales-reps', method);
+      } else if (p.startsWith('/customers')) {
         broadcastDataChange('customers', method);
       } else if (p.startsWith('/sales') || p.startsWith('/invoices') || p.startsWith('/contracts') || p.startsWith('/installments')) {
         broadcastDataChange('sales', method);
         broadcastDataChange('customers', method);
         broadcastDataChange('products', method);
+        broadcastDataChange('suppliers', method);
+        broadcastDataChange('payments', method);
         broadcastDataChange('notifications', method);
       } else if (p.startsWith('/payments')) {
         broadcastDataChange('payments', method);
         broadcastDataChange('sales', method);
         broadcastDataChange('customers', method);
+        broadcastDataChange('suppliers', method);
         broadcastDataChange('notifications', method);
       } else if (p.startsWith('/products')) {
         broadcastDataChange('products', method);
@@ -289,12 +297,13 @@ async function bootstrap() {
       } else if (p.startsWith('/collection-tasks') || p.startsWith('/dues')) {
         broadcastDataChange('sales', method);
         broadcastDataChange('customers', method);
-      } else if (p.startsWith('/sales-reps')) {
-        broadcastDataChange('sales-reps', method);
+        broadcastDataChange('payments', method);
       } else if (p.startsWith('/users')) {
         broadcastDataChange('users', method);
-      } else if (p.startsWith('/settings')) {
+      } else if (p.startsWith('/settings') || p.startsWith('/document-templates')) {
         broadcastDataChange('settings', method);
+      } else {
+        broadcastDataChange('*', method);
       }
     });
     return next();
@@ -364,22 +373,30 @@ async function bootstrap() {
   app.use('/document-templates', documentTemplatesRoutes);
   app.use('/api/document-templates', documentTemplatesRoutes);
 
-  // Serve built frontend static files so LAN browsers can open http://<server-ip>:4000 directly
+  // Serve built frontend static files so LAN/mobile browsers can open http://<server-ip>:4000 directly
   const currentDir =
     typeof __dirname !== 'undefined'
       ? __dirname
       : path.dirname(fileURLToPath(import.meta.url));
   const candidateFrontendDirs = [
+    process.env.FRONTEND_DIST_DIR ? path.resolve(process.env.FRONTEND_DIST_DIR) : '',
     path.resolve(currentDir, '..', 'frontend'),
+    path.resolve(currentDir, 'frontend'),
+    path.resolve(currentDir, '..', '..', 'frontend'),
     path.resolve(currentDir, '..', '..', 'al-muttahida-saas', 'dist'),
-  ];
+  ].filter(Boolean);
   const frontendDir = candidateFrontendDirs.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
   if (frontendDir) {
+    // eslint-disable-next-line no-console
+    console.log(`[Backend] Serving frontend static files for LAN/mobile from: ${frontendDir}`);
     app.use(express.static(frontendDir));
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api/') || req.path.startsWith('/health')) return next();
       return res.sendFile(path.join(frontendDir, 'index.html'));
     });
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn('[Backend] Frontend dist directory not found. Checked:', candidateFrontendDirs);
   }
 
   // Central error handling

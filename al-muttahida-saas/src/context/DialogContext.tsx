@@ -343,7 +343,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
               {toast.type === 'error' && <XCircle size={18} className="shrink-0 text-rose-200" />}
               {toast.type === 'warning' && <AlertTriangle size={18} className="shrink-0 text-amber-200" />}
               {toast.type === 'info' && <Info size={18} className="shrink-0 text-sky-200" />}
-              <span className="truncate leading-snug">{toast.message}</span>
+              <span className="break-words leading-snug">{toast.message}</span>
             </div>
             <button
               type="button"

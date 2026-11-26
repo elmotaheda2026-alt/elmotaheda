@@ -284,11 +284,11 @@ export default function DocumentTemplatesManager() {
     e.preventDefault();
     const finalHtml = editorMode === 'visual' ? syncFromVisualEditor() : formHtml;
     if (!formName.trim()) {
-      alert('من فضلك اكتب اسم المستند');
+      showToast('من فضلك اكتب اسم المستند');
       return;
     }
     if (!finalHtml.trim()) {
-      alert('المستند فارغ، من فضلك اكتب محتوى المستند');
+      showToast('المستند فارغ، من فضلك اكتب محتوى المستند');
       return;
     }
 
@@ -355,7 +355,7 @@ export default function DocumentTemplatesManager() {
       }
       closeEditor();
     } catch (err: any) {
-      alert(err?.message || 'تعذر حفظ المستند');
+      showToast(err?.message || 'تعذر حفظ المستند');
     } finally {
       setSaving(false);
     }
@@ -373,7 +373,7 @@ export default function DocumentTemplatesManager() {
         await saveLocalTemplatesFallback(updated);
       }
     } catch (err: any) {
-      alert(err?.message || 'تعذر تحديث الحالة');
+      showToast(err?.message || 'تعذر تحديث الحالة');
     }
   };
 
@@ -397,7 +397,7 @@ export default function DocumentTemplatesManager() {
         await saveLocalTemplatesFallback(copy);
       }
     } catch (err: any) {
-      alert(err?.message || 'تعذر تغيير الترتيب');
+      showToast(err?.message || 'تعذر تغيير الترتيب');
     }
   };
 
@@ -421,7 +421,7 @@ export default function DocumentTemplatesManager() {
       }
       showToast('تم استرجاع الشكل الأصلي بنجاح');
     } catch (err: any) {
-      alert(err?.message || 'تعذر استرجاع الشكل الأصلي');
+      showToast(err?.message || 'تعذر استرجاع الشكل الأصلي');
     }
   };
 
@@ -444,7 +444,7 @@ export default function DocumentTemplatesManager() {
       }
       showToast('تم حذف المستند');
     } catch (err: any) {
-      alert(err?.message || 'تعذر حذف المستند');
+      showToast(err?.message || 'تعذر حذف المستند');
     }
   };
 

@@ -26,6 +26,7 @@ import {
 import QRCode from 'qrcode';
 import { useAuth } from '../context/AuthContext';
 import { useDialog } from '../context/DialogContext';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import RolePermissionsManager from '../components/RolePermissionsManager';
 import { Setting, OpeningBalances } from '../types';
 import {
@@ -171,6 +172,17 @@ export default function Settings() {
     }
   };
 
+  useRealtimeSync(['settings'], () => {
+    void loadOpeningBalances();
+    if (isApiMode()) {
+      void api.getSettings().then((fresh) => {
+        if (fresh) {
+          setFormData((prev) => ({ ...prev, ...fresh }));
+        }
+      }).catch(() => {});
+    }
+  });
+
   const [searchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab') as 'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'telegram' | 'roles' | 'danger' | null;
   const [activeTab, setActiveTab] = useState<'company' | 'channels' | 'documents' | 'network' | 'backup' | 'balances' | 'whatsapp' | 'telegram' | 'roles' | 'danger'>(() => {
@@ -295,7 +307,7 @@ export default function Settings() {
       setTimeout(() => setAutoBackupSaved(false), 3500);
       toggleAutoBackupCollapsed(true);
     } catch (err: any) {
-      alert(err.message || 'تعذر حفظ إعدادات النسخ التلقائي.');
+      showToast(err.message || 'تعذر حفظ إعدادات النسخ التلقائي.', 'error');
     } finally {
       setAutoBackupLoading(false);
     }
@@ -329,7 +341,7 @@ export default function Settings() {
       await loadAutoBackupConfig();
       setTimeout(() => setManualBackupSuccessMsg(null), 6000);
     } catch (err: any) {
-      alert(err.message || 'فشل تشغيل النسخ الاحتياطي التلقائي.');
+      showToast(err.message || 'فشل تشغيل النسخ الاحتياطي التلقائي.', 'error');
     } finally {
       setManualBackupRunning(false);
     }
@@ -560,7 +572,7 @@ export default function Settings() {
       toggleObCollapsed(true);
     } catch (err: any) {
       console.error('Failed to save opening balances:', err);
-      window.alert(err?.message || 'حدث خطأ أثناء حفظ الأرصدة الافتتاحية');
+      showToast(err?.message || 'حدث خطأ أثناء حفظ الأرصدة الافتتاحية', 'error');
     } finally {
       setObSubmitting(false);
     }
@@ -571,7 +583,7 @@ export default function Settings() {
       setBackupBusy(true);
       await downloadDatabaseBackup();
     } catch (err: any) {
-      alert(err.message || 'تعذر تصدير النسخة الاحتياطية.');
+      showToast(err.message || 'تعذر تصدير النسخة الاحتياطية.', 'error');
     } finally {
       setBackupBusy(false);
     }
@@ -618,7 +630,7 @@ export default function Settings() {
       setShowDeleteConfirm(false);
       window.location.reload();
     } catch (err: any) {
-      alert(err.message || 'تعذر مسح البيانات.');
+      showToast(err.message || 'تعذر مسح البيانات.', 'error');
     }
   };
 

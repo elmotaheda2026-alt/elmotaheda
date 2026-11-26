@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   Package,
@@ -273,17 +273,17 @@ export default function Invoices() {
   }, [suppliers, supplierSearchTerm]);
 
   useEffect(() => {
-    const supplier = suppliers.find((s) => s.id === procurementSupplierId);
-    if (supplier) {
-      if (supplierSearchTerm !== supplier.name) {
-        setSupplierSearchTerm(supplier.name);
-      }
-    } else {
-      if (!showSupplierSuggestions && supplierSearchTerm !== '') {
+    if (!procurementSupplierId) {
+      if (!showSupplierSuggestions) {
         setSupplierSearchTerm('');
       }
+      return;
     }
-  }, [procurementSupplierId, suppliers, showSupplierSuggestions]);
+    const supplier = suppliers.find((s) => s.id === procurementSupplierId);
+    if (supplier && !showSupplierSuggestions) {
+      setSupplierSearchTerm(supplier.name);
+    }
+  }, [procurementSupplierId, suppliers]);
 
   // Auto-select single supplier if available
   useEffect(() => {
@@ -304,10 +304,17 @@ export default function Invoices() {
   }, [suppliers, quickSupplierSearchTerm]);
 
   useEffect(() => {
-    if (!quickProduct.supplierId && !showQuickSupplierSuggestions && quickSupplierSearchTerm !== '') {
-      setQuickSupplierSearchTerm('');
+    if (!quickProduct.supplierId) {
+      if (!showQuickSupplierSuggestions) {
+        setQuickSupplierSearchTerm('');
+      }
+      return;
     }
-  }, [quickProduct.supplierId, showQuickSupplierSuggestions, quickSupplierSearchTerm]);
+    const supplier = suppliers.find((s) => s.id === quickProduct.supplierId);
+    if (supplier && !showQuickSupplierSuggestions) {
+      setQuickSupplierSearchTerm(supplier.name);
+    }
+  }, [quickProduct.supplierId, suppliers]);
 
   // Dual-mode item addition (Warehouse vs On-Demand)
   const [itemSourceMode, setItemSourceMode] = useState<'warehouse' | 'on_demand'>('warehouse');
@@ -336,15 +343,17 @@ export default function Invoices() {
   }, [suppliers, onDemandSupplierSearchTerm]);
 
   useEffect(() => {
-    const sup = suppliers.find((s) => s.id === onDemandSupplierId);
-    if (sup) {
-      if (onDemandSupplierSearchTerm !== sup.name) {
-        setOnDemandSupplierSearchTerm(sup.name);
+    if (!onDemandSupplierId) {
+      if (!showOnDemandSupplierSuggestions) {
+        setOnDemandSupplierSearchTerm('');
       }
-    } else if (!showOnDemandSupplierSuggestions && onDemandSupplierSearchTerm !== '') {
-      setOnDemandSupplierSearchTerm('');
+      return;
     }
-  }, [onDemandSupplierId, suppliers, showOnDemandSupplierSuggestions]);
+    const sup = suppliers.find((s) => s.id === onDemandSupplierId);
+    if (sup && !showOnDemandSupplierSuggestions) {
+      setOnDemandSupplierSearchTerm(sup.name);
+    }
+  }, [onDemandSupplierId, suppliers]);
   const [onDemandQuantity, setOnDemandQuantity] = useState<number | ''>(1);
   const [onDemandTax, setOnDemandTax] = useState<number | ''>('');
 
@@ -387,7 +396,14 @@ export default function Invoices() {
   const [lineTax, setLineTax] = useState<number | ''>('');
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [showQuickProduct, setShowQuickProduct] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const setMessage = useCallback(
+    (msg: { type: 'success' | 'error'; text: string } | null) => {
+      if (msg?.text) {
+        showToast(msg.text, msg.type, msg.type === 'error' ? 5000 : 4000);
+      }
+    },
+    [showToast],
+  );
   const [savedSaleForPrinting, setSavedSaleForPrinting] = useState<Sale | null>(null);
   const [sales, setSales] = useState<Sale[]>([]);
   const [showSearchModal, setShowSearchModal] = useState(false);
@@ -581,13 +597,11 @@ export default function Invoices() {
             : entry,
         ),
       );
-      showToast(res.message || 'تم تسجيل المرتجع وإلغاء التعاقد بنجاح', 'success');
       setMessage({ type: 'success', text: res.message || `تم تسجيل مرتجع التعاقد ${sale.invoiceNumber} بنجاح.` });
       if (editingSaleId === sale.id) {
         resetForm();
       }
     } catch (err: any) {
-      showToast(err?.message || 'حدث خطأ أثناء تنفيذ المرتجع.', 'error');
       setMessage({ type: 'error', text: err?.message || 'حدث خطأ أثناء تنفيذ المرتجع.' });
     }
   };
@@ -1698,17 +1712,6 @@ export default function Invoices() {
             </button>
           </div>
         )}
-
-        {message && (
-          <div
-            className={`rounded-2xl border px-4 py-3 text-sm ${message.type === 'success'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-rose-200 bg-rose-50 text-rose-700'
-              }`}
-          >
-            {message.text}
-          </div>
-        )}
       </div>
 
       {/* Scrollable Form Content */}
@@ -1721,7 +1724,6 @@ export default function Invoices() {
                   <div ref={customerContainerRef} className="relative w-full">
                     <input
                       ref={customerInputRef}
-                      autoFocus
                       autoComplete="off"
                       value={customerSearchTerm}
                       onKeyDown={(e) => {
@@ -1746,7 +1748,7 @@ export default function Invoices() {
                       placeholder="اكتب اسم العميل للبحث..."
                     />
                     {showCustomerSuggestions && customerSuggestions.length > 0 && (
-                      <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                      <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-60 overflow-y-auto divide-y divide-slate-100">
                         {customerSuggestions.map((c) => (
                           <button
                             key={c.id}
@@ -1788,7 +1790,7 @@ export default function Invoices() {
                       placeholder="اكتب اسم المندوب..."
                     />
                     {showSalesRepSuggestions && salesRepSuggestions.length > 0 && (
-                      <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                      <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-60 overflow-y-auto divide-y divide-slate-100">
                         {salesRepSuggestions.map((rep) => (
                           <button
                             key={rep.id}
@@ -2115,7 +2117,7 @@ export default function Invoices() {
                             placeholder="اكتب اسم المورد..."
                           />
                           {showOnDemandSupplierSuggestions && onDemandSupplierSuggestions.length > 0 && (
-                            <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                            <div className="absolute right-0 left-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-60 overflow-y-auto divide-y divide-slate-100">
                               {onDemandSupplierSuggestions.map((s) => (
                                 <button
                                   key={s.id}

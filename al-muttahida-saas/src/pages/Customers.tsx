@@ -1116,7 +1116,8 @@ export default function Customers() {
               </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+            <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col gap-6">
               {error && (
                 <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium flex items-center gap-2 shrink-0">
                   <AlertTriangle className="text-red-500 shrink-0" size={18} />
@@ -1559,9 +1560,10 @@ export default function Customers() {
                   </div>
                 </div>
               </div>
+              </div>
 
               {/* Form Actions Footer */}
-              <div className="border-t border-slate-100 pt-4 flex gap-3 shrink-0 justify-end bg-slate-50 p-4 -mx-6 -mb-6">
+              <div className="border-t border-slate-200 flex gap-3 shrink-0 justify-end bg-slate-50 px-6 py-4">
                 <button
                   type="button"
                   onClick={handleClose}

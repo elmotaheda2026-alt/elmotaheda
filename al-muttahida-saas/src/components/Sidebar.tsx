@@ -177,7 +177,7 @@ export default function Sidebar({ isOpen, onClose, onToggle }: SidebarProps) {
       <aside
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className={`fixed right-0 top-0 z-40 lg:z-30 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
+        className={`fixed right-0 top-0 z-40 flex h-full transform flex-col bg-white text-slate-800 transition-all duration-200 ${isExpanded ? 'w-60 translate-x-0' : 'w-16 translate-x-full lg:translate-x-0'
           } ${!isOpen && isHovered ? 'shadow-2xl ring-1 ring-slate-900/10' : 'shadow-none'}`}
       >
         {/* Header / Branding with Custom Corporate Logo (exact h-14 match & seamless fade into Header) */}

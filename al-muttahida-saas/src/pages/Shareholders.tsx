@@ -994,7 +994,7 @@ export default function Shareholders() {
         : Number(shareholderForm.managementFeePercentage || Math.max(0, 100 - sharePercentage));
 
       if (!isFounder && (sharePercentage <= 0 || sharePercentage > 100)) {
-        window.alert('الرجاء إدخال نسبة ربح صحيحة للمساهم بين 1% و 100%.');
+        showToast('الرجاء إدخال نسبة ربح صحيحة للمساهم بين 1% و 100%.', 'warning');
         return;
       }
 
@@ -1012,7 +1012,7 @@ export default function Shareholders() {
       if (!editingShareholder) {
         const cap = Number(shareholderForm.capital || 0);
         if (!cap || cap <= 0) {
-          window.alert('الرجاء إدخال رأس المال الأساسي للشريك ويجب أن يكون أكبر من صفر.');
+          showToast('الرجاء إدخال رأس المال الأساسي للشريك ويجب أن يكون أكبر من صفر.', 'warning');
           return;
         }
         if (isApiMode()) {
@@ -1037,7 +1037,7 @@ export default function Shareholders() {
       await loadData();
       setShowShareholderModal(false);
     } catch (err: any) {
-      window.alert(err?.message || 'حدث خطأ أثناء حفظ بيانات الشريك.');
+      showToast(err?.message || 'حدث خطأ أثناء حفظ بيانات الشريك.', 'error');
     } finally {
       setIsSavingShareholder(false);
     }
@@ -1057,19 +1057,21 @@ export default function Shareholders() {
     // Strict separation between Profit Withdrawal and Capital Withdrawal
     if (transactionType === 'profit_withdrawal') {
       if (availableProfit <= 0) {
-        window.alert('لا توجد أرباح متاحة للسحب لهذا الشريك حالياً.');
+        showToast('لا توجد أرباح متاحة للسحب لهذا الشريك حالياً.', 'warning');
         return;
       }
       if (requestedAmount > availableProfit + 0.01) {
-        window.alert(
-          `المبلغ المطلوب (${formatCurrency(requestedAmount)}) أكبر من الأرباح المتاحة للسحب (${formatCurrency(availableProfit)}).`
+        showToast(
+          `المبلغ المطلوب (${formatCurrency(requestedAmount)}) أكبر من الأرباح المتاحة للسحب (${formatCurrency(availableProfit)}).`,
+          'warning',
         );
         return;
       }
     } else if (transactionType === 'capital_withdrawal') {
       if (requestedAmount > capital + 0.01) {
-        window.alert(
-          `المبلغ المطلوب سحبه من رأس المال (${formatCurrency(requestedAmount)}) أكبر من رأس المال الفعلي للشريك (${formatCurrency(capital)}). لسحب الأرباح يرجى استخدام زر "سحب أرباح".`
+        showToast(
+          `المبلغ المطلوب سحبه من رأس المال (${formatCurrency(requestedAmount)}) أكبر من رأس المال الفعلي للشريك (${formatCurrency(capital)}). لسحب الأرباح يرجى استخدام زر "سحب أرباح".`,
+          'warning',
         );
         return;
       }
@@ -1107,7 +1109,7 @@ export default function Shareholders() {
       setShowTransactionModal(false);
       setTransactionForm({ amount: 0, date: localTodayIso(), description: '', affectsTreasury: true, channel: 'cash' });
     } catch (err: any) {
-      window.alert(err?.message || 'حدث خطأ أثناء تنفيذ الحركة المالية.');
+      showToast(err?.message || 'حدث خطأ أثناء تنفيذ الحركة المالية.', 'error');
     } finally {
       setIsSavingTransaction(false);
     }
@@ -3183,7 +3185,8 @@ export default function Shareholders() {
                 <X size={18} />
               </button>
             </div>
-            <form onSubmit={handleShareholderSubmit} className="p-5 space-y-3.5 overflow-y-auto flex-1 min-h-0">
+            <form onSubmit={handleShareholderSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-3.5">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">الاسم</label>
@@ -3528,8 +3531,9 @@ export default function Shareholders() {
                   rows={2}
                 />
               </div>
+              </div>
 
-              <div className="flex gap-2 pt-3 border-t border-slate-100">
+              <div className="shrink-0 flex gap-2 px-5 py-3.5 border-t border-slate-100 bg-white">
                 <button
                   type="button"
                   onClick={() => setShowShareholderModal(false)}

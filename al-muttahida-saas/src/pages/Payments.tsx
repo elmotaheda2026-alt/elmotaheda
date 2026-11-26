@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -112,7 +112,7 @@ const displayArabic = (value?: string | null): string => {
 
 export default function Payments() {
   const { settings, user } = useAuth();
-  const { confirmDialog } = useDialog();
+  const { confirmDialog, showToast } = useDialog();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [dailyPayments, setDailyPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -213,17 +213,17 @@ export default function Payments() {
   }, [customers, customerSearchTerm]);
 
   useEffect(() => {
-    const customer = customers.find((c) => c.id === incomingForm.customerId);
-    if (customer) {
-      if (customerSearchTerm !== customer.name) {
-        setCustomerSearchTerm(customer.name);
-      }
-    } else {
-      if (!showCustomerSuggestions && customerSearchTerm !== '') {
+    if (!incomingForm.customerId) {
+      if (!showCustomerSuggestions) {
         setCustomerSearchTerm('');
       }
+      return;
     }
-  }, [incomingForm.customerId, customers, showCustomerSuggestions]);
+    const customer = customers.find((c) => c.id === incomingForm.customerId);
+    if (customer && !showCustomerSuggestions) {
+      setCustomerSearchTerm(customer.name);
+    }
+  }, [incomingForm.customerId, customers]);
 
   const [outgoingForm, setOutgoingForm] = useState<OutgoingPaymentForm>({
     supplierId: '',
@@ -233,7 +233,14 @@ export default function Payments() {
     channel: 'cash',
   });
 
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const setMessage = useCallback(
+    (msg: { type: 'success' | 'error'; text: string } | null) => {
+      if (msg?.text) {
+        showToast(msg.text, msg.type, msg.type === 'error' ? 5000 : 4000);
+      }
+    },
+    [showToast],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -640,17 +647,22 @@ export default function Payments() {
   const selectedCustomer = customers.find((customer) => customer.id === incomingForm.customerId) || null;
 
   const customerSales = useMemo(() => {
-    const normSearch = normalizeArabic(customerSearchTerm);
-    return sales.filter((sale) => {
+    if (!incomingForm.customerId) return [];
+    const matched = sales.filter((sale) => {
       if (sale.status === 'cancelled') return false;
       const matchesCustomer =
-        (!incomingForm.customerId && !normSearch) ||
-        (incomingForm.customerId && (sale.customerId === incomingForm.customerId || sale.customerName === selectedCustomer?.name)) ||
-        (normSearch && normalizeArabic(sale.customerName || '').includes(normSearch));
+        sale.customerId === incomingForm.customerId ||
+        (selectedCustomer?.name && sale.customerName === selectedCustomer.name);
       if (!matchesCustomer) return false;
       return sale.remaining > 0 || (sale.financing?.schedules && sale.financing.schedules.length > 0) || sale.paid > 0;
     });
-  }, [incomingForm.customerId, customerSearchTerm, sales, selectedCustomer]);
+    return [...matched].sort((a, b) => {
+      const aOpen = a.remaining > 1 ? 0 : 1;
+      const bOpen = b.remaining > 1 ? 0 : 1;
+      if (aOpen !== bOpen) return aOpen - bOpen;
+      return String(b.date || '').localeCompare(String(a.date || ''));
+    });
+  }, [incomingForm.customerId, sales, selectedCustomer]);
 
   const selectedSale = customerSales.find((sale) => sale.id === incomingForm.saleId) || null;
 
@@ -1541,7 +1553,7 @@ export default function Payments() {
     if (!payment) return;
 
     if (user?.role !== 'admin' && isDateClosed(payment.date)) {
-      alert('لا يمكن عكس حركة مالية في تاريخ مغلق مالياً.');
+      showToast('لا يمكن عكس حركة مالية في تاريخ مغلق مالياً.', 'warning');
       return;
     }
 
@@ -1569,7 +1581,7 @@ export default function Payments() {
       });
     } catch (err: any) {
       console.error('Failed to reverse payment:', err);
-      alert(`فشل عكس الحركة: ${err?.message || 'خطأ غير معروف'}`);
+      showToast(`فشل عكس الحركة: ${err?.message || 'خطأ غير معروف'}`, 'error');
     } finally {
       setReversingPaymentId(null);
     }
@@ -2196,18 +2208,6 @@ export default function Payments() {
         </div>
       </div>
 
-      {message && (
-        <div
-          className={`shrink-0 rounded-xl border px-4 py-2.5 text-xs font-bold ${
-            message.type === 'success'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-rose-200 bg-rose-50 text-rose-700'
-          }`}
-        >
-          {message.text}
-        </div>
-      )}
-
       {/* Tier 2: Fixed Height KPI Cards Bar */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(220px,1fr))] shrink-0">
         {isAdmin(user) ? (
@@ -2703,9 +2703,10 @@ export default function Payments() {
                 </p>
               </div>
 
-              <div className="overflow-y-auto">
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {paymentType === 'in' ? (
-                  <form onSubmit={handleIncomingSubmit} className="space-y-6 p-6">
+                  <form onSubmit={handleIncomingSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                    <div className="flex-1 min-h-0 overflow-y-auto space-y-6 p-6">
                     {/* ─── Payment Mode Toggle ─────────────────── */}
                     {hasPermission(user, 'payments:write') && (
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-1 flex gap-1">
@@ -2906,10 +2907,19 @@ export default function Payments() {
                                     const exact = customers.find(
                                       (c) => normalizeArabic(c.name) === normalizeArabic(val)
                                     );
-                                    if (exact && exact.id !== incomingForm.customerId) {
+                                    if (exact) {
+                                      if (exact.id !== incomingForm.customerId) {
+                                        setIncomingForm((current) => ({
+                                          ...current,
+                                          customerId: exact.id,
+                                          saleId: '',
+                                          installmentId: '',
+                                        }));
+                                      }
+                                    } else if (incomingForm.customerId) {
                                       setIncomingForm((current) => ({
                                         ...current,
-                                        customerId: exact.id,
+                                        customerId: '',
                                         saleId: '',
                                         installmentId: '',
                                       }));
@@ -2917,7 +2927,7 @@ export default function Payments() {
                                   }
                                 }}
                                 onFocus={() => setShowCustomerSuggestions(true)}
-                                onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 200)}
+                                onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 180)}
                                 className="input-ui w-full"
                                 placeholder="اكتب اسم العميل للبحث..."
                               />
@@ -2927,7 +2937,8 @@ export default function Payments() {
                                     <button
                                       key={c.id}
                                       type="button"
-                                      onClick={() => {
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
                                         setIncomingForm((current) => ({
                                           ...current,
                                           customerId: c.id,
@@ -2952,6 +2963,7 @@ export default function Payments() {
                           <Field label="الفاتورة">
                             <select
                               value={incomingForm.saleId}
+                              disabled={!incomingForm.customerId}
                               onChange={(event) =>
                                 setIncomingForm((current) => ({
                                   ...current,
@@ -2961,9 +2973,15 @@ export default function Payments() {
                                   description: '',
                                 }))
                               }
-                              className="input-ui"
+                              className="input-ui disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                             >
-                              <option value="">اختر الفاتورة</option>
+                              <option value="">
+                                {!incomingForm.customerId
+                                  ? 'اختر العميل أولاً...'
+                                  : customerSales.length === 0
+                                    ? 'لا توجد فواتير لهذا العميل'
+                                    : 'اختر الفاتورة'}
+                              </option>
                               {customerSales.map((sale) => (
                                 <option key={sale.id} value={sale.id}>
                                   {sale.invoiceNumber} {sale.remaining <= 0 ? '(مسددة بالكامل - للمراجعة أو التعديل)' : `- المتبقي ${formatCurrency(sale.remaining)}`}
@@ -3157,8 +3175,9 @@ export default function Payments() {
                         </div>
                       </aside>
                     </div>
+                    </div>
 
-                    <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row">
+                    <div className="shrink-0 flex flex-col-reverse gap-3 border-t border-slate-100 bg-white px-6 py-4 sm:flex-row">
                       <button
                         type="button"
                         onClick={closeModal}
@@ -3192,7 +3211,8 @@ export default function Payments() {
                     </div>
                   </form>
                 ) : (
-                  <form onSubmit={handleOutgoingSubmit} className="space-y-6 p-6">
+                  <form onSubmit={handleOutgoingSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                    <div className="flex-1 min-h-0 overflow-y-auto space-y-6 p-6">
                     <div className="grid gap-4 md:grid-cols-2">
                       <Field label="المورد">
                         <select
@@ -3301,8 +3321,9 @@ export default function Payments() {
                         </div>
                       );
                     })()}
+                    </div>
 
-                    <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row">
+                    <div className="shrink-0 flex flex-col-reverse gap-3 border-t border-slate-100 bg-white px-6 py-4 sm:flex-row">
                       <button
                         type="button"
                         onClick={closeModal}

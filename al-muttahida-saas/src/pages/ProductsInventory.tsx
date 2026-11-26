@@ -166,13 +166,14 @@ export default function ProductsInventory() {
     e.preventDefault();
 
     if (!formData.name.trim()) {
-      alert('يرجى كتابة اسم الصنف');
+      showToast('يرجى كتابة اسم الصنف', 'warning');
       return;
     }
 
     if (numSalePrice < numPurchasePrice && numPurchasePrice > 0) {
-      alert(
+      showToast(
         `سعر البيع (${numSalePrice} ج) لا يمكن أن يكون أقل من سعر الشراء والتكلفة (${numPurchasePrice} ج) للأصناف المخزنية لمنع البيع بخسارة.`,
+        'warning',
       );
       return;
     }
@@ -204,7 +205,7 @@ export default function ProductsInventory() {
       resetForm();
     } catch (err: any) {
       console.error('Error saving product:', err);
-      alert(err?.message || 'حدث خطأ أثناء حفظ الصنف في المخزن.');
+      showToast(err?.message || 'حدث خطأ أثناء حفظ الصنف في المخزن.', 'error');
     }
   };
 
@@ -669,7 +670,8 @@ export default function ProductsInventory() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[85vh] overflow-y-auto text-right" dir="rtl">
+            <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden text-right" dir="rtl">
+              <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5 max-h-[75vh]">
               {/* Product Name */}
               <div>
                 <label className="block text-sm font-black text-slate-900 mb-1.5">
@@ -827,9 +829,10 @@ export default function ProductsInventory() {
                   rows={2}
                 />
               </div>
+              </div>
 
               {/* Form Action Buttons */}
-              <div className="flex items-center gap-3 pt-3 border-t border-slate-200">
+              <div className="shrink-0 flex items-center gap-3 px-6 py-4 border-t border-slate-200 bg-white">
                 <button
                   type="submit"
                   className="flex-1 h-12 bg-[#1e40af] hover:bg-[#1d4ed8] text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"

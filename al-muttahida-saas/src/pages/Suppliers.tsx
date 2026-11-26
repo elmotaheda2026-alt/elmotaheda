@@ -343,6 +343,7 @@ export default function Suppliers() {
                 <label className="block text-xs font-bold text-slate-600 mb-1">الاسم</label>
                 <input
                   type="text"
+                  autoFocus
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="input-ui text-xs h-9 w-full"

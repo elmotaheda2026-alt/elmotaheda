@@ -316,6 +316,7 @@ export default function SalesReps() {
                 <label className="block text-xs font-bold text-slate-500 mb-1">الاسم</label>
                 <input
                   type="text"
+                  autoFocus
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="input-ui text-sm h-10 w-full"

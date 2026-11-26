@@ -136,6 +136,14 @@ function startBackend() {
       }
     } catch (_) {}
 
+    const packagedFrontendDir = path.join(process.resourcesPath || '', 'frontend');
+    const devFrontendDir = path.resolve(__dirname, '..', 'dist');
+    const resolvedFrontendDir = fs.existsSync(path.join(packagedFrontendDir, 'index.html'))
+      ? packagedFrontendDir
+      : fs.existsSync(path.join(devFrontendDir, 'index.html'))
+        ? devFrontendDir
+        : '';
+
     const env = {
       PORT: '4000',
       DB_HOST: '127.0.0.1',
@@ -146,6 +154,7 @@ function startBackend() {
       DB_ENCRYPT: 'false',
       DB_TRUST_CERT: 'true',
       ALLOW_SEED: 'false',
+      ...(resolvedFrontendDir ? { FRONTEND_DIST_DIR: resolvedFrontendDir } : {}),
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
     };
@@ -316,6 +325,7 @@ function startBackend() {
   }).finally(() => {
     startBackendPromise = null;
   });
+  return startBackendPromise;
 }
 
 /**

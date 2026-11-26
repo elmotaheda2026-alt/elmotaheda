@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { getNotifications, markAllNotificationsRead, syncNotifications } from '../lib/storage';
 import { checkBackendHealth, isMobileDevice } from '../lib/apiClient';
 import { canViewNotification, hasPermission } from '../lib/permissions';
+import { useRealtimeSync } from '../lib/realtimeSync';
 import HelpGuideDrawer from './HelpGuideDrawer';
 
 interface HeaderProps {
@@ -85,6 +86,17 @@ export default function Header({ onMenuClick, title }: HeaderProps) {
                 : 'مستخدم';
 
   const canReadNotifications = hasPermission(user, 'notifications:read');
+
+  useRealtimeSync(['notifications', 'sales', 'payments'], () => {
+    if (!canReadNotifications) return;
+    void syncNotifications()
+      .then(() => {
+        if (!showNotifications) {
+          setNotifications(getNotifications().filter((n) => canViewNotification(user, n)).slice(0, 5));
+        }
+      })
+      .catch(() => {});
+  });
 
   useEffect(() => {
     let active = true;

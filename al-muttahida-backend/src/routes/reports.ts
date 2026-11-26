@@ -234,7 +234,13 @@ router.get('/dashboard/metrics', async (req, res) => {
     periodCashPenalties,
     periodCancelledRetainedFees,
   ] = await Promise.all([
-    db.get<{ baseline_capital: number; starting_cash_balance: number }>('SELECT TOP 1 baseline_capital, starting_cash_balance FROM settings'),
+    db.get<{
+      baseline_capital: number;
+      starting_cash_balance: number;
+      starting_receivables: number;
+      starting_payables: number;
+      starting_inventory_value: number;
+    }>('SELECT TOP 1 baseline_capital, starting_cash_balance, starting_receivables, starting_payables, starting_inventory_value FROM settings'),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
     db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
     db.get<MetricRow>('SELECT COALESCE(SUM(quantity * purchase_price),0) AS total FROM products'),
@@ -340,6 +346,9 @@ router.get('/dashboard/metrics', async (req, res) => {
   const postedCapitalValue = money((capitalDeposits?.total || 0) - (capitalWithdrawals?.total || 0));
   const baselineCapital = money(settings?.baseline_capital || 8500000);
   const startingCashBalance = money(settings?.starting_cash_balance || 0);
+  const startingReceivables = money(settings?.starting_receivables || 0);
+  const startingPayables = money(settings?.starting_payables || 0);
+  const startingInventoryValue = money(settings?.starting_inventory_value || 0);
   const paidInCapital = subscribedCapitalValue > 0 ? subscribedCapitalValue : postedCapitalValue > 0 ? postedCapitalValue : baselineCapital;
   const capitalSource = subscribedCapitalValue > 0 ? 'shareholders' : postedCapitalValue > 0 ? 'posted_capital_transactions' : 'system_baseline';
   const allTimeOtherOperatingIncome = money((allTimeCashPenalties?.total || 0) + (allTimeCancelledRetainedFees?.total || 0));
@@ -348,8 +357,11 @@ router.get('/dashboard/metrics', async (req, res) => {
   const retainedEarnings = money(allTimeNetProfit - (profitWithdrawals?.total || 0));
   const shareholdersEquity = money(paidInCapital + retainedEarnings);
   const cashInSafe = money(startingCashBalance + (cashIn?.total || 0) - (cashOut?.total || 0) - (standaloneExpenses?.total || 0));
-  const totalAssets = money(cashInSafe + (inventory?.total || 0) + (customers?.total || 0));
-  const totalLiabilities = money(suppliers?.total);
+  const inventoryValue = money(startingInventoryValue + (inventory?.total || 0));
+  const totalCustomersBalance = money(startingReceivables + (customers?.total || 0));
+  const totalSuppliersBalance = money(startingPayables + (suppliers?.total || 0));
+  const totalAssets = money(cashInSafe + inventoryValue + totalCustomersBalance);
+  const totalLiabilities = totalSuppliersBalance;
   const totalEquity = shareholdersEquity;
   const accountingVariance = money(totalAssets - (totalLiabilities + totalEquity));
   const monthSpan = calculateMonthSpan(startDate, endDate);
@@ -372,9 +384,15 @@ router.get('/dashboard/metrics', async (req, res) => {
     capitalSource,
     baselineCapital,
     cashInSafe,
-    inventoryValue: money(inventory?.total),
-    totalCustomersBalance: money(customers?.total),
-    totalSuppliersBalance: money(suppliers?.total),
+    inventoryValue,
+    totalCustomersBalance,
+    totalSuppliersBalance,
+    openingBalances: {
+      startingCashBalance,
+      startingReceivables,
+      startingPayables,
+      startingInventoryValue,
+    },
     retainedEarnings,
     allTimeNetProfit,
     shareholdersEquity,
@@ -384,10 +402,10 @@ router.get('/dashboard/metrics', async (req, res) => {
     accountingVariance,
     isBalanced: Math.abs(accountingVariance) <= 0.01,
     trace: Math.abs(accountingVariance) <= 0.01 ? [] : [
-      { account: 'cash_in_safe', expectedDriver: 'posted payments plus shareholder cash movements', amount: cashInSafe },
-      { account: 'inventory_at_cost', expectedDriver: 'products.quantity * products.purchase_price', amount: money(inventory?.total) },
-      { account: 'receivables', expectedDriver: 'customers.balance', amount: money(customers?.total) },
-      { account: 'payables', expectedDriver: 'suppliers.balance', amount: money(suppliers?.total) },
+      { account: 'cash_in_safe', expectedDriver: 'starting cash + posted payments + shareholder cash movements', amount: cashInSafe },
+      { account: 'inventory_at_cost', expectedDriver: 'starting inventory + products.quantity * products.purchase_price', amount: inventoryValue },
+      { account: 'receivables', expectedDriver: 'starting receivables + customers.balance', amount: totalCustomersBalance },
+      { account: 'payables', expectedDriver: 'starting payables + suppliers.balance', amount: totalSuppliersBalance },
       { account: 'paid_in_capital', expectedDriver: capitalSource, amount: paidInCapital },
       { account: 'retained_earnings', expectedDriver: 'all-time effective sales - COGS - expenses', amount: retainedEarnings },
     ],
@@ -412,25 +430,37 @@ router.get('/dashboard/metrics', async (req, res) => {
 
 // ── Cached Dashboard Metrics (fast boot endpoint — reads 1 row) ─────────
 
-function mapCacheToResponse(cache: any) {
+function mapCacheToResponse(cache: any, opening?: {
+  starting_cash_balance?: number;
+  starting_receivables?: number;
+  starting_payables?: number;
+  starting_inventory_value?: number;
+}) {
   const m = (v: unknown) => Number(Number(v || 0).toFixed(2));
-  const cashInSafe = m(Number(cache.cash_in_total) - Number(cache.cash_out_total));
+  const startingCash = m(opening?.starting_cash_balance);
+  const startingRec = m(opening?.starting_receivables);
+  const startingPay = m(opening?.starting_payables);
+  const startingInv = m(opening?.starting_inventory_value);
+  const cashInSafe = m(startingCash + Number(cache.cash_in_total) - Number(cache.cash_out_total));
+  const inventoryValue = m(startingInv + Number(cache.inventory_value));
+  const totalCustomersBalance = m(startingRec + Number(cache.customer_receivables));
+  const totalSuppliersBalance = m(startingPay + Number(cache.supplier_payables));
   const subscribedCapital = m(cache.subscribed_capital);
   const postedCapital = m(Number(cache.capital_deposits) - Number(cache.capital_withdrawals));
   const paidInCapital = subscribedCapital > 0 ? subscribedCapital : postedCapital > 0 ? postedCapital : 8500000;
   const capitalSource = subscribedCapital > 0 ? 'shareholders' : postedCapital > 0 ? 'posted_capital_transactions' : 'system_baseline';
   const allTimeNetProfit = m(Number(cache.all_time_sales) - Number(cache.all_time_cogs) - Number(cache.all_time_expenses));
-  const totalAssets = m(cashInSafe + Number(cache.inventory_value) + Number(cache.customer_receivables));
-  const totalLiabilities = m(cache.supplier_payables);
+  const totalAssets = m(cashInSafe + inventoryValue + totalCustomersBalance);
+  const totalLiabilities = totalSuppliersBalance;
   const totalEquity = m(paidInCapital + allTimeNetProfit);
 
   return {
     capital: paidInCapital,
     capitalSource,
     cashInSafe,
-    inventoryValue: m(cache.inventory_value),
-    totalCustomersBalance: m(cache.customer_receivables),
-    totalSuppliersBalance: m(cache.supplier_payables),
+    inventoryValue,
+    totalCustomersBalance,
+    totalSuppliersBalance,
     retainedEarnings: allTimeNetProfit,
     allTimeNetProfit,
     shareholdersEquity: totalEquity,
@@ -462,7 +492,10 @@ router.get('/dashboard/metrics-cached', async (_req, res) => {
       if (!cache) return res.status(500).json({ message: 'Failed to compute metrics' });
     }
 
-    return res.json(mapCacheToResponse(cache));
+    const opening = await db.get<any>(
+      'SELECT TOP 1 starting_cash_balance, starting_receivables, starting_payables, starting_inventory_value FROM settings',
+    );
+    return res.json(mapCacheToResponse(cache, opening));
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
