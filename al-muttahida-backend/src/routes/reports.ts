@@ -241,8 +241,8 @@ router.get('/dashboard/metrics', async (req, res) => {
       starting_payables: number;
       starting_inventory_value: number;
     }>('SELECT TOP 1 baseline_capital, starting_cash_balance, starting_receivables, starting_payables, starting_inventory_value FROM settings'),
-    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
-    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted' AND COALESCE(reference_type, '') != 'internal_transfer'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'in' AND status = 'posted' AND COALESCE(created_by, '') != 'import' AND COALESCE(reference_type, '') != 'internal_transfer'"),
+    db.get<MetricRow>("SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE type = 'out' AND status = 'posted' AND COALESCE(created_by, '') != 'import' AND COALESCE(reference_type, '') != 'internal_transfer'"),
     db.get<MetricRow>('SELECT COALESCE(SUM(quantity * purchase_price),0) AS total FROM products'),
     db.get<MetricRow>('SELECT COALESCE(SUM(balance),0) AS total FROM customers'),
     db.get<MetricRow>('SELECT COALESCE(SUM(balance),0) AS total FROM suppliers'),
@@ -306,11 +306,12 @@ router.get('/dashboard/metrics', async (req, res) => {
     db.get<MetricRow>(`
       SELECT COALESCE(SUM(e.amount), 0) AS total
       FROM expenses e
-      WHERE NOT EXISTS (
-        SELECT 1 FROM payments p
-        WHERE p.type = 'out' AND p.status = 'posted'
-          AND p.reference_type = 'expense' AND p.reference_id = e.id
-      )
+      WHERE COALESCE(e.created_by, '') != 'import'
+        AND NOT EXISTS (
+          SELECT 1 FROM payments p
+          WHERE p.type = 'out' AND p.status = 'posted'
+            AND p.reference_type = 'expense' AND p.reference_id = e.id
+        )
     `),
     db.get<MetricRow>(`
       SELECT COALESCE(SUM(amount), 0) AS total

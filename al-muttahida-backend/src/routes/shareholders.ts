@@ -38,6 +38,7 @@ const payoutPreferenceSchema = z.object({
   payoutCycleMonths: z.number().int().min(0).max(60).optional(),
   payoutNoticeDays: z.number().int().min(0).max(180).optional(),
   nextPayoutDate: z.string().optional().nullable(),
+  requestedPayoutAmount: z.number().nonnegative().optional().nullable(),
 });
 
 const txSchema = z.object({
@@ -1341,6 +1342,10 @@ export async function computeShareholdersEngine(
       payoutNoticeDays: noticeDays,
       nextPayoutDate: nextPay,
       noticeDeadlineDate: noticeDeadline,
+      requestedPayoutAmount:
+        s.requested_payout_amount !== null && s.requested_payout_amount !== undefined
+          ? roundMoney(s.requested_payout_amount)
+          : null,
       sharePercentage: model.sharePercentage,
       managementFeePercentage: model.managementFeePercentage,
       capital: model.currentCapital,
@@ -1671,8 +1676,36 @@ router.get('/live-trading', async (req, res) => {
         : null;
     const profitBasis = req.query.profitBasis === 'accrual' ? 'accrual' : 'realized';
 
-    const result = await computeShareholdersEngine(db, startDate, endDate, profitBasis);
-    return res.json(result);
+    const [result, counterpart] = await Promise.all([
+      computeShareholdersEngine(db, startDate, endDate, profitBasis),
+      computeShareholdersEngine(db, startDate, endDate, profitBasis === 'realized' ? 'accrual' : 'realized'),
+    ]);
+
+    const realizedEngine = profitBasis === 'realized' ? result : counterpart;
+    const accrualEngine = profitBasis === 'accrual' ? result : counterpart;
+    const realizedById = new Map<string, any>(realizedEngine.shareholders.map((p: any) => [p.id, p]));
+    const accrualById = new Map<string, any>(accrualEngine.shareholders.map((p: any) => [p.id, p]));
+
+    const enrichedShareholders = result.shareholders.map((p: any) => {
+      const r = realizedById.get(p.id);
+      const a = accrualById.get(p.id);
+      const realizedAvailableProfit = roundMoney(Math.max(0, Number(r?.availableProfit ?? p.availableProfit ?? 0)));
+      const accrualNetEntitlement = roundMoney(Number(a?.netEntitlement ?? p.netEntitlement ?? 0));
+      const accrualAvailableProfit = roundMoney(Math.max(0, Number(a?.availableProfit ?? p.availableProfit ?? 0)));
+      const deferredProfit = roundMoney(Math.max(0, accrualAvailableProfit - realizedAvailableProfit));
+      return {
+        ...p,
+        realizedAvailableProfit,
+        accrualNetEntitlement,
+        accrualAvailableProfit,
+        deferredProfit,
+      };
+    });
+
+    return res.json({
+      ...result,
+      shareholders: enrichedShareholders,
+    });
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Database error' });
   }
@@ -2078,14 +2111,17 @@ router.patch('/:id/payout-preference', async (req: AuthedRequest, res) => {
     return res.status(400).json({ message: 'بيانات تفضيل الأرباح غير صالحة', errors: parsed.error.format() });
   }
 
-  const { payoutPreference, payoutCycleMonths, payoutNoticeDays, nextPayoutDate } = parsed.data;
+  const { payoutPreference, payoutCycleMonths, payoutNoticeDays, nextPayoutDate, requestedPayoutAmount } = parsed.data;
   const normalizedPref = payoutPreference === 'cash' ? 'cash' : 'capitalize';
   const now = new Date().toISOString();
 
   try {
     const db = await dbPromise;
+    await db.run(
+      "IF COL_LENGTH('shareholders', 'requested_payout_amount') IS NULL ALTER TABLE shareholders ADD requested_payout_amount DECIMAL(18, 2) NULL",
+    );
     const existing = await db.get<any>(
-      'SELECT id, name, payout_cycle_months, payout_notice_days, next_payout_date FROM shareholders WHERE id = ?',
+      'SELECT id, name, payout_cycle_months, payout_notice_days, next_payout_date, requested_payout_amount FROM shareholders WHERE id = ?',
       req.params.id
     );
     if (!existing) {
@@ -2112,16 +2148,25 @@ router.patch('/:id/payout-preference', async (req: AuthedRequest, res) => {
       normalizedPref === 'capitalize' && !rawNextDate
         ? computeNextCycleEndDate(localTodayIso(), effectiveCycle > 0 ? effectiveCycle : 1)
         : rawNextDate;
+    const effectiveRequestedAmount =
+      normalizedPref === 'capitalize'
+        ? null
+        : requestedPayoutAmount !== undefined
+          ? (requestedPayoutAmount !== null && Number(requestedPayoutAmount) > 0 ? roundMoney(requestedPayoutAmount) : null)
+          : (existing.requested_payout_amount !== null && existing.requested_payout_amount !== undefined
+            ? roundMoney(existing.requested_payout_amount)
+            : null);
     const noticeDeadlineDate = effectiveNextDate ? addDaysIso(effectiveNextDate, -effectiveNoticeDays) : null;
 
     await db.run(
       `UPDATE shareholders
-       SET payout_preference = ?, payout_cycle_months = ?, payout_notice_days = ?, next_payout_date = ?, updated_at = ?
+       SET payout_preference = ?, payout_cycle_months = ?, payout_notice_days = ?, next_payout_date = ?, requested_payout_amount = ?, updated_at = ?
        WHERE id = ?`,
       normalizedPref,
       effectiveCycle,
       effectiveNoticeDays,
       effectiveNextDate,
+      effectiveRequestedAmount,
       now,
       req.params.id
     );
@@ -2132,6 +2177,7 @@ router.patch('/:id/payout-preference', async (req: AuthedRequest, res) => {
       payoutCycleMonths: effectiveCycle,
       payoutNoticeDays: effectiveNoticeDays,
       nextPayoutDate: effectiveNextDate,
+      requestedPayoutAmount: effectiveRequestedAmount,
     });
 
     return res.json({
@@ -2140,6 +2186,7 @@ router.patch('/:id/payout-preference', async (req: AuthedRequest, res) => {
       payoutCycleMonths: effectiveCycle,
       payoutNoticeDays: effectiveNoticeDays,
       nextPayoutDate: effectiveNextDate,
+      requestedPayoutAmount: effectiveRequestedAmount,
       noticeDeadlineDate,
     });
   } catch (error: any) {
@@ -2279,7 +2326,7 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
     if (data.type === 'profit_withdrawal') {
       if (roundMoney(data.amount) > roundMoney(livePartner.availableProfit + 0.01)) {
         return res.status(400).json({
-          message: `المبلغ المطلوب سحبه (${data.amount}) يتجاوز الأرباح المتاحة للسحب (${livePartner.availableProfit})`,
+          message: `المبلغ المطلوب سحبه (${data.amount}) يتجاوز الأرباح المحققة المتاحة للسحب من الأقساط (${livePartner.availableProfit}). باقي أرباح البيع مؤجلة لحين تحصيل الأقساط.`,
         });
       }
     } else if (data.type === 'capital_withdrawal') {
@@ -2292,7 +2339,7 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
 
     await db.withTransaction(async (txDb: any) => {
       const shareholder = await txDb.get(
-        'SELECT name, capital, current_balance, payout_preference, payout_cycle_months, payout_notice_days, next_payout_date FROM shareholders WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
+        'SELECT name, capital, current_balance, payout_preference, payout_cycle_months, payout_notice_days, next_payout_date, requested_payout_amount FROM shareholders WITH (UPDLOCK, ROWLOCK) WHERE id = ?',
         data.shareholderId,
       );
 
@@ -2347,23 +2394,35 @@ router.post('/transactions', async (req: AuthedRequest, res) => {
           data.shareholderId
         );
       } else if (data.type === 'profit_withdrawal') {
-        const shouldResetToAuto = shareholder.payout_preference === 'cash' && roundMoney(livePartner.availableProfit - data.amount) <= 1;
+        const requestedAmt = roundMoney(Number(shareholder.requested_payout_amount || 0));
+        const fulfilledRequest = requestedAmt > 0 && roundMoney(data.amount) >= roundMoney(requestedAmt - 0.01);
+        const depletedAvailable = roundMoney(livePartner.availableProfit - data.amount) <= 1;
+        const shouldResetToAuto =
+          shareholder.payout_preference === 'cash' &&
+          (fulfilledRequest || (requestedAmt <= 0 && depletedAvailable));
         let nextPayout = shareholder.next_payout_date ? toDatePart(shareholder.next_payout_date) : null;
+        let nextRequestedAmount: number | null = requestedAmt > 0 ? requestedAmt : null;
         if (shouldResetToAuto) {
           const cycleMonths = Number(shareholder.payout_cycle_months ?? 1) || 1;
           nextPayout = computeNextCycleEndDate(localTodayIso(), cycleMonths);
+          nextRequestedAmount = null;
+        } else if (shareholder.payout_preference === 'cash' && requestedAmt > 0) {
+          const remReq = roundMoney(Math.max(0, requestedAmt - data.amount));
+          nextRequestedAmount = remReq > 0.01 ? remReq : null;
         }
         await txDb.run(
           `UPDATE shareholders
            SET current_balance = current_balance - ?,
                payout_preference = CASE WHEN ? = 1 THEN 'capitalize' ELSE payout_preference END,
                next_payout_date = CASE WHEN ? = 1 THEN ? ELSE next_payout_date END,
+               requested_payout_amount = ?,
                updated_at = ?
            WHERE id = ?`,
           data.amount,
           shouldResetToAuto ? 1 : 0,
           shouldResetToAuto ? 1 : 0,
           nextPayout,
+          nextRequestedAmount,
           now,
           data.shareholderId
         );

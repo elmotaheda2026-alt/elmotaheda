@@ -23,8 +23,8 @@ import {
   RefreshCw,
   AlertTriangle,
   BarChart3,
-  MessageCircle,
   CalendarClock,
+  CheckCircle2,
 } from 'lucide-react';
 import { Shareholder, ShareholderTransaction, Sale, Expense, Product } from '../types';
 import { useRealtimeSync } from '../lib/realtimeSync';
@@ -134,18 +134,12 @@ function computeNextFutureCycleDate(baseDateStr?: string | null, cycleMonths?: n
   return candidate;
 }
 
-function normalizeWhatsAppPhone(phone?: string | null): string {
-  const digits = String(phone || '').replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('01') && digits.length === 11) return `2${digits}`;
-  if (digits.startsWith('00')) return digits.slice(2);
-  return digits;
-}
-
 export default function Shareholders() {
   const { settings, user } = useAuth();
   const { confirmDialog, showToast } = useDialog();
   const [shareholders, setShareholders] = useState<any[]>([]);
+  const [cashRequestDrafts, setCashRequestDrafts] = useState<Record<string, { amount: string; date: string; saving?: boolean }>>({});
+  const [editingCashRequest, setEditingCashRequest] = useState<Record<string, boolean>>({});
   const [transactions, setTransactions] = useState<ShareholderTransaction[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -724,10 +718,11 @@ export default function Shareholders() {
     const cycleCounts = new Map<number, number>();
 
     for (const s of liveShareholders) {
-      const avail = Math.max(0, Number(s.availableProfit || 0));
+      const avail = Math.max(0, Number(s.realizedAvailableProfit ?? s.availableProfit ?? 0));
+      const requested = Math.max(0, Number(s.requestedPayoutAmount || 0));
       const pref = s.payoutPreference === 'cash' ? 'cash' : 'capitalize';
       if (pref === 'cash') {
-        cashReadyAmount += avail;
+        cashReadyAmount += requested > 0 ? requested : avail;
         cashReadyCount++;
       } else {
         capitalizeAmount += avail;
@@ -792,7 +787,7 @@ export default function Shareholders() {
       }
       const label =
         nextPref === 'cash'
-          ? 'محتاج يصرف كاش (تم إيقاف الرسملة التلقائية — حدد التاريخ المطلوب)'
+          ? 'طلب صرف نقدي (حدد المبلغ المطلوب وتاريخ الصرف ثم اضغط حفظ)'
           : 'رسملة تلقائية في الموعد';
       showToast(`تم تحديث ${partner.name}: ${label}`, 'success');
       await loadData();
@@ -802,14 +797,26 @@ export default function Shareholders() {
     }
   };
 
-  const handleCashDateChange = async (partner: any, nextDate: string) => {
+  const handleSaveCashRequest = async (partner: any) => {
     if (!canManageShareholders) return;
-    const cleanDate = nextDate ? toIsoDay(nextDate) : '';
+    const draft = cashRequestDrafts[partner.id];
+    const rawAmount = draft?.amount !== undefined ? draft.amount : (partner.requestedPayoutAmount ? String(partner.requestedPayoutAmount) : '');
+    const rawDate = draft?.date !== undefined ? draft.date : (partner.nextPayoutDate || '');
+    const parsedAmount = rawAmount.trim() !== '' ? Number(rawAmount) : null;
+    if (parsedAmount !== null && (Number.isNaN(parsedAmount) || parsedAmount < 0)) {
+      showToast('يرجى إدخال مبلغ صحيح لطلب الصرف النقدي.', 'warning');
+      return;
+    }
+    const cleanDate = rawDate ? toIsoDay(rawDate) : '';
+    setCashRequestDrafts((prev) => ({
+      ...prev,
+      [partner.id]: { amount: rawAmount, date: rawDate, saving: true },
+    }));
     try {
       setShareholders((prev) =>
         prev.map((s) =>
           s.id === partner.id
-            ? { ...s, payoutPreference: 'cash', nextPayoutDate: cleanDate || null }
+            ? { ...s, payoutPreference: 'cash', nextPayoutDate: cleanDate || null, requestedPayoutAmount: parsedAmount }
             : s
         )
       );
@@ -817,24 +824,30 @@ export default function Shareholders() {
         await api.updateShareholderPayoutPreference(partner.id, {
           payoutPreference: 'cash',
           nextPayoutDate: cleanDate || null,
+          requestedPayoutAmount: parsedAmount,
         });
       } else {
         await updateShareholder(partner.id, {
           ...partner,
           payoutPreference: 'cash',
           nextPayoutDate: cleanDate || null,
+          requestedPayoutAmount: parsedAmount,
         });
       }
       showToast(
-        cleanDate
-          ? `تم تحديد موعد صرف أرباح ${partner.name}: ${formatDateDisplay(cleanDate)}`
-          : `تم مسح تاريخ الصرف المحدد لـ ${partner.name}`,
+        `تم حفظ طلب الصرف النقدي لـ ${partner.name}${parsedAmount ? ` بمبلغ ${formatCurrency(parsedAmount)}` : ''}${cleanDate ? ` بتاريخ ${formatDateDisplay(cleanDate)}` : ''}`,
         'success'
       );
+      setEditingCashRequest((prev) => ({ ...prev, [partner.id]: false }));
       await loadData();
     } catch (err: any) {
-      showToast(err?.message || 'تعذر حفظ موعد الصرف المطلوب', 'error');
+      showToast(err?.message || 'تعذر حفظ بيانات طلب الصرف النقدي', 'error');
       await loadData();
+    } finally {
+      setCashRequestDrafts((prev) => ({
+        ...prev,
+        [partner.id]: { amount: rawAmount, date: rawDate, saving: false },
+      }));
     }
   };
 
@@ -885,38 +898,6 @@ export default function Shareholders() {
       showToast(err?.message || 'تعذر تحديث مدة الرسملة التلقائية', 'error');
       await loadData();
     }
-  };
-
-  const openPartnerWhatsApp = (partner: any) => {
-    const intlPhone = normalizeWhatsAppPhone(partner.phone);
-    if (!intlPhone) {
-      showToast('رقم هاتف الشريك غير مسجل أو غير صالح لواتساب', 'warning');
-      return;
-    }
-    const reviewStr = partner.nextPayoutDate ? formatDateDisplay(partner.nextPayoutDate) : 'الموعد الدوري';
-    const capStr = formatCurrency(partner.capital || 0);
-    const profStr = formatCurrency(partner.availableProfit || 0);
-    const companyName = settings?.companyName || 'المتحدة';
-    const isCash = partner.payoutPreference === 'cash';
-    const msg = isCash
-      ? [
-          `السلام عليكم أستاذ ${partner.name}، تحياتنا من إدارة شركة ${companyName}.`,
-          `ملخص حسابكم الحالي:`,
-          `• رأس المال / التمويل: ${capStr}`,
-          `• الأرباح المتاحة حالياً: ${profStr}`,
-          partner.nextPayoutDate
-            ? `• موعد الصرف النقدي المطلوب: ${reviewStr}`
-            : `• حالة الصرف: جاهز للصرف كاش عند التحديد.`,
-        ].join('\n')
-      : [
-          `السلام عليكم أستاذ ${partner.name}، تحياتنا من إدارة شركة ${companyName}.`,
-          `ملخص حسابكم وموعد الرسملة التلقائية:`,
-          `• رأس المال / التمويل الحالي: ${capStr}`,
-          `• الأرباح المتاحة حالياً: ${profStr}`,
-          `• موعد الرسملة التلقائية القادم: ${reviewStr}`,
-          `سيتم إضافة الأرباح المتاحة إلى رأس المال تلقائياً في هذا الموعد، إلا إذا رغبتم في صرفها كاش قبل الموعد.`,
-        ].join('\n');
-    window.open(`https://wa.me/${intlPhone}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
   };
 
   // Filtered shareholders by search
@@ -1050,19 +1031,26 @@ export default function Shareholders() {
     const selectedPartner: any = liveShareholders.find((s: any) => s.id === selectedShareholderId);
     if (!selectedPartner) return;
 
-    const availableProfit = Number(selectedPartner.availableProfit || 0);
+    const realizedAvailable = Number(selectedPartner.realizedAvailableProfit ?? selectedPartner.availableProfit ?? 0);
+    const accrualAvailable = Number(selectedPartner.accrualAvailableProfit ?? realizedAvailable);
+    const deferredProfit = Math.max(0, Number((accrualAvailable - realizedAvailable).toFixed(2)));
     const capital = Number(selectedPartner.capital || 0);
     const requestedAmount = Number(transactionForm.amount || 0);
 
     // Strict separation between Profit Withdrawal and Capital Withdrawal
     if (transactionType === 'profit_withdrawal') {
-      if (availableProfit <= 0) {
-        showToast('لا توجد أرباح متاحة للسحب لهذا الشريك حالياً.', 'warning');
+      if (realizedAvailable <= 0) {
+        showToast(
+          deferredProfit > 0
+            ? `لا توجد أرباح محققة متاحة للسحب حالياً (يوجد ${formatCurrency(deferredProfit)} أرباح بيع مؤجلة لحين تحصيل الأقساط).`
+            : 'لا توجد أرباح متاحة للسحب لهذا الشريك حالياً.',
+          'warning',
+        );
         return;
       }
-      if (requestedAmount > availableProfit + 0.01) {
+      if (requestedAmount > realizedAvailable + 0.01) {
         showToast(
-          `المبلغ المطلوب (${formatCurrency(requestedAmount)}) أكبر من الأرباح المتاحة للسحب (${formatCurrency(availableProfit)}).`,
+          `المبلغ المطلوب (${formatCurrency(requestedAmount)}) أكبر من الأرباح المحققة المتاحة للسحب من الأقساط (${formatCurrency(realizedAvailable)}). باقي أرباح البيع مؤجلة لحين التحصيل.`,
           'warning',
         );
         return;
@@ -1456,10 +1444,10 @@ export default function Shareholders() {
               </div>
               <div className="px-1.5 min-w-0">
                 <span className="text-[10px] font-semibold text-slate-500 block leading-tight">
-                  الأرباح المتاحة
+                  أرباح البيع
                 </span>
                 <span className="text-xs sm:text-sm font-black text-emerald-700 block mt-1">
-                  <CurrencyText value={`+${formatCurrency(shareholder.availableProfit)}`} />
+                  <CurrencyText value={`+${formatCurrency(shareholder.accrualAvailableProfit ?? shareholder.availableProfit)}`} />
                 </span>
               </div>
               <div className="px-1.5 min-w-0">
@@ -1467,7 +1455,12 @@ export default function Shareholders() {
                   إجمالي المستحق
                 </span>
                 <span className="text-xs sm:text-sm font-black text-[#0f1f4a] block mt-1">
-                  <CurrencyText value={formatCurrency(shareholder.totalNetValue)} />
+                  <CurrencyText
+                    value={formatCurrency(
+                      Number(shareholder.capital || 0) +
+                        Number(shareholder.accrualAvailableProfit ?? shareholder.availableProfit ?? 0),
+                    )}
+                  />
                 </span>
               </div>
             </div>
@@ -1475,8 +1468,10 @@ export default function Shareholders() {
             {/* 1 Concise Secondary Row */}
             <div className="flex items-center justify-between gap-2 text-[11px] px-1 text-slate-500 font-medium">
               <span className="truncate">
-                إجمالي أرباحه:{' '}
-                <strong className="text-slate-800 tabular-nums">+{formatNumberOnly(shareholder.netEntitlement)}</strong>
+                متاح للسحب الآن:{' '}
+                <strong className="text-emerald-700 tabular-nums">
+                  +{formatNumberOnly(shareholder.realizedAvailableProfit ?? shareholder.availableProfit)}
+                </strong>
               </span>
               <span className="truncate">
                 تم صرفه:{' '}
@@ -1524,21 +1519,14 @@ export default function Shareholders() {
                       <CalendarClock size={11} className="shrink-0" />
                       <span className="truncate">
                         {pref === 'cash'
-                          ? 'موقوف تلقائياً للصرف كاش'
+                          ? (shareholder.requestedPayoutAmount || shareholder.nextPayoutDate
+                              ? `طلب صرف نقدي${shareholder.requestedPayoutAmount ? `: ${formatCurrency(shareholder.requestedPayoutAmount)}` : ''}${shareholder.nextPayoutDate ? ` — يوم ${formatDateDisplay(shareholder.nextPayoutDate)}` : ''}`
+                              : 'مجدول للصرف النقدي')
                           : shareholder.nextPayoutDate
                             ? `تُرسمل تلقائياً يوم: ${formatDateDisplay(shareholder.nextPayoutDate)}`
                             : 'رسملة تلقائية حسب الدورة'}
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => openPartnerWhatsApp(shareholder)}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] transition-colors cursor-pointer shrink-0"
-                      title="إرسال ملخص الحساب وموعد الرسملة أو الصرف عبر واتساب"
-                    >
-                      <MessageCircle size={11} />
-                      <span>واتساب</span>
-                    </button>
                   </div>
                   {canManageShareholders && (
                     <div className="grid grid-cols-2 gap-1 bg-white p-0.5 rounded-lg border border-slate-200/80">
@@ -1562,29 +1550,92 @@ export default function Shareholders() {
                             : 'text-slate-600 hover:bg-slate-100'
                         }`}
                       >
-                        محتاج يصرف كاش
+                        طلب صرف نقدي
                       </button>
                     </div>
                   )}
-                  {pref === 'cash' && (
-                    <div className="flex items-center gap-1.5 pt-1 border-t border-amber-200/70">
-                      <span className="text-[10px] font-bold text-amber-800 whitespace-nowrap shrink-0">
-                        محتاج فلوسه يوم:
-                      </span>
-                      {canManageShareholders ? (
-                        <DatePicker
-                          value={shareholder.nextPayoutDate || ''}
-                          onChange={(val) => handleCashDateChange(shareholder, val)}
-                          placeholder="اختر التاريخ"
-                          className="flex-1 min-w-0 h-7 text-[11px] font-bold border-amber-300 bg-white"
-                        />
-                      ) : (
-                        <span className="text-[11px] font-black text-amber-900 tabular-nums">
-                          {shareholder.nextPayoutDate ? formatDateDisplay(shareholder.nextPayoutDate) : 'غير محدد'}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {pref === 'cash' && (() => {
+                    const draft = cashRequestDrafts[shareholder.id];
+                    const amountVal =
+                      draft?.amount !== undefined
+                        ? draft.amount
+                        : shareholder.requestedPayoutAmount
+                          ? String(shareholder.requestedPayoutAmount)
+                          : '';
+                    const dateVal =
+                      draft?.date !== undefined
+                        ? draft.date
+                        : shareholder.nextPayoutDate || '';
+                    const isSaving = Boolean(draft?.saving);
+                    const hasSavedRequest = Boolean(shareholder.requestedPayoutAmount && Number(shareholder.requestedPayoutAmount) > 0);
+                    const isEditing = editingCashRequest[shareholder.id] ?? !hasSavedRequest;
+                    return (
+                      <div className="pt-1.5 border-t border-amber-200/70 space-y-1.5">
+                        {canManageShareholders && isEditing ? (
+                          <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-1.5">
+                            <div className="min-w-0">
+                              <label className="block text-[9px] font-bold text-amber-800 mb-0.5">المبلغ المطلوب</label>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={amountVal}
+                                onChange={(e) =>
+                                  setCashRequestDrafts((prev) => ({
+                                    ...prev,
+                                    [shareholder.id]: { amount: e.target.value, date: dateVal },
+                                  }))
+                                }
+                                placeholder="المبلغ..."
+                                className="w-full h-7 px-2 rounded-lg border border-amber-300 bg-white text-[11px] font-bold text-slate-900 outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <label className="block text-[9px] font-bold text-amber-800 mb-0.5">تاريخ الصرف</label>
+                              <DatePicker
+                                value={dateVal}
+                                onChange={(val) =>
+                                  setCashRequestDrafts((prev) => ({
+                                    ...prev,
+                                    [shareholder.id]: { amount: amountVal, date: val },
+                                  }))
+                                }
+                                placeholder="اختر التاريخ"
+                                className="w-full h-7 text-[11px] font-bold border-amber-300 bg-white"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => handleSaveCashRequest(shareholder)}
+                              className="h-7 px-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                            >
+                              {isSaving ? '...' : 'حفظ'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 text-[10.5px]">
+                            <div className="flex items-center gap-1.5 text-emerald-800 font-bold min-w-0">
+                              <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                              <span className="truncate">
+                                محفوظ: {shareholder.requestedPayoutAmount ? formatCurrency(shareholder.requestedPayoutAmount) : 'غير محدد'}
+                                {shareholder.nextPayoutDate ? ` — يوم ${formatDateDisplay(shareholder.nextPayoutDate)}` : ''}
+                              </span>
+                            </div>
+                            {canManageShareholders && (
+                              <button
+                                type="button"
+                                onClick={() => setEditingCashRequest((prev) => ({ ...prev, [shareholder.id]: true }))}
+                                className="px-2 py-0.5 rounded-md bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold transition-colors cursor-pointer shrink-0"
+                              >
+                                تعديل
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
@@ -1880,20 +1931,6 @@ export default function Shareholders() {
             </div>
           ) : (
             <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-[#eef2f6] space-y-5">
-              {/* Calm Info Banner for Pre-Join Profits */}
-              {liveMetrics?.accountantReport &&
-                Math.abs(Number(liveMetrics.accountantReport.preCapitalProfit || 0)) > 0.01 && (
-                  <div className="bg-blue-50/70 border border-blue-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 text-xs text-slate-700 shadow-2xs">
-                    <ShieldCheck size={16} className="text-blue-600 shrink-0 mt-0.5" />
-                    <div className="leading-relaxed">
-                      <strong className="font-black text-slate-900">ملاحظة بخصوص الأرباح السابقة لتاريخ الانضمام:</strong>{' '}
-                      توجد أرباح بقيمة{' '}
-                      <strong className="font-mono text-slate-900">{formatCurrency(liveMetrics.accountantReport.preCapitalProfit)}</strong>{' '}
-                      تحققت قبل أقدم تاريخ انضمام مسجل للشركاء حالياً (كالأرصدة المرحلة من نظام سابق). إذا أردت شمولها، عدّل <strong>«تاريخ الانضمام»</strong> من زر التعديل (✏️).
-                    </div>
-                  </div>
-                )}
-
               {liveMetrics?.accountantReport &&
                 Number(liveMetrics.accountantReport.totalOverDistributedDelta || 0) > 0.05 && (
                   <div className="bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 text-xs text-rose-900 shadow-2xs">
@@ -1915,7 +1952,7 @@ export default function Shareholders() {
                         الرسملة التلقائية للأرباح
                       </h3>
                       <p className="text-[10.5px] text-slate-500">
-                        تُضاف الأرباح لرأس المال تلقائياً في موعدها، إلا إذا اخترت للشريك «محتاج يصرف كاش».
+                        تُضاف الأرباح المحققة لرأس المال تلقائياً في موعدها، إلا إذا اخترت للشريك «طلب صرف نقدي».
                       </p>
                     </div>
                   </div>
@@ -1946,7 +1983,7 @@ export default function Shareholders() {
                   </div>
                   <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 px-3.5 py-2 flex items-center justify-between gap-2 min-w-0">
                     <div className="min-w-0">
-                      <span className="text-[11px] font-bold text-amber-900 block">مطلوب تجهيزه للصرف كاش</span>
+                      <span className="text-[11px] font-bold text-amber-900 block">مطلوب تجهيزه للصرف النقدي</span>
                       <span className="text-[10px] text-amber-700/80">{payoutPlanSummary.cashReadyCount} شريك/مساهم</span>
                     </div>
                     <strong className="text-sm font-black text-amber-800 max-w-[48%] text-left">
@@ -1969,9 +2006,6 @@ export default function Shareholders() {
                     <div className="flex items-center gap-2 text-[11px] font-bold">
                       <span className="px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700">
                         رأس المال: {formatCurrency(foundersSummary.foundersCapital)}
-                      </span>
-                      <span className="px-2.5 py-0.5 rounded-lg bg-blue-50 border border-blue-200 text-[#1e40af]">
-                        الملكية: %{foundersSummary.rawFoundersShare}
                       </span>
                     </div>
                   </div>
@@ -2388,21 +2422,6 @@ export default function Shareholders() {
                 return (
                   <>
                     {/* Calm Note if Pre-Join Profits Exist */}
-                    {hasPreCapital && (
-                      <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-slate-700">
-                        <ShieldCheck size={16} className="text-blue-600 shrink-0 mt-0.5" />
-                        <div className="leading-relaxed">
-                          <strong className="font-black text-slate-900">ملاحظة بخصوص الأرباح السابقة لتاريخ الانضمام:</strong>{' '}
-                          توجد أرباح بقيمة <strong className="font-mono text-slate-900">{formatCurrency(rpt.preCapitalProfit)}</strong> تحققت قبل أقدم تاريخ انضمام مسجل للشركاء الحاليين.
-                          {liveShareholders.length > 0 && (
-                            <span>
-                              {' '}إذا كانت تخص الشركاء، يمكنك تعديل <strong>«تاريخ الانضمام»</strong> من بطاقة الشريك ليتم شمولها.
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
                     {Number(rpt.totalOverDistributedDelta || 0) > 0.05 && (
                       <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-rose-900">
                         <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5" />
@@ -2922,17 +2941,44 @@ export default function Shareholders() {
                 </div>
               </div>
 
-              {/* Card 4: Available Profits */}
+              {/* Card 4: Available Profits (Realized) */}
               <div className="p-3.5 rounded-xl bg-white border border-emerald-200 shadow-2xs flex items-center justify-between gap-2.5">
                 <div className="min-w-0">
-                  <span className="text-[11px] font-bold text-emerald-800 block mb-0.5 truncate">الأرباح المتاحة للسحب</span>
+                  <span className="text-[11px] font-bold text-emerald-800 block mb-0.5 truncate">المتاح للسحب الآن (محقق)</span>
                   <span className="text-base md:text-lg font-black text-emerald-700 tabular-nums block leading-tight truncate">
-                    {formatCurrency(inspectingPartner.availableProfit)}
+                    {formatCurrency(inspectingPartner.realizedAvailableProfit ?? inspectingPartner.availableProfit)}
                   </span>
+                  {Number(inspectingPartner.deferredProfit || 0) > 0 && (
+                    <span className="text-[10px] font-bold text-indigo-700 block mt-0.5 truncate">
+                      مؤجل تحت التحصيل: {formatCurrency(inspectingPartner.deferredProfit)}
+                    </span>
+                  )}
                 </div>
                 <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shrink-0">
                   <DollarSign size={16} />
                 </div>
+              </div>
+            </div>
+
+            {/* Sales Profit vs Realized Profit vs Deferred Profit Breakdown */}
+            <div className="px-4 py-2 bg-indigo-50/60 border-b border-indigo-100 shrink-0 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <div className="rounded-lg bg-white border border-indigo-100 px-3 py-1.5 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-indigo-800">أرباح البيع (عند التعاقد)</span>
+                <strong className="font-black text-indigo-900 tabular-nums">
+                  {formatCurrency(inspectingPartner.accrualAvailableProfit ?? inspectingPartner.availableProfit)}
+                </strong>
+              </div>
+              <div className="rounded-lg bg-white border border-emerald-100 px-3 py-1.5 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-emerald-800">المتاح للسحب الآن (من الأقساط)</span>
+                <strong className="font-black text-emerald-700 tabular-nums">
+                  {formatCurrency(inspectingPartner.realizedAvailableProfit ?? inspectingPartner.availableProfit)}
+                </strong>
+              </div>
+              <div className="rounded-lg bg-white border border-amber-100 px-3 py-1.5 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-amber-800">أرباح مؤجلة (تحت التحصيل)</span>
+                <strong className="font-black text-amber-700 tabular-nums">
+                  {formatCurrency(inspectingPartner.deferredProfit || 0)}
+                </strong>
               </div>
             </div>
 
@@ -3172,7 +3218,7 @@ export default function Shareholders() {
       {/* Shareholder Create/Edit Modal */}
       {showShareholderModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
             <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
               <h3 className="text-base font-black text-slate-900">
                 {editingShareholder ? 'تعديل بيانات الشريك / المساهم' : 'إضافة شريك أو مساهم جديد'}
@@ -3430,96 +3476,57 @@ export default function Shareholders() {
                     <span>موعد الرسملة التلقائية أو الصرف</span>
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2.5">
                   {[
-                    { id: 'capitalize', label: 'رسملة تلقائية في الموعد', desc: 'تُضاف الأرباح لرأس المال تلقائياً كل دورة' },
-                    { id: 'cash', label: 'محتاج يصرف كاش', desc: 'إيقاف الرسملة التلقائية وتحديد موعد الصرف' },
-                  ].map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => {
-                        const nextPref = opt.id as 'cash' | 'capitalize';
-                        setShareholderForm({
-                          ...shareholderForm,
-                          payoutPreference: nextPref,
-                          nextPayoutDate:
-                            nextPref === 'capitalize'
-                              ? computeNextFutureCycleDate(
-                                  shareholderForm.joinedDate || localTodayIso(),
-                                  shareholderForm.payoutCycleMonths || 1
-                                )
-                              : shareholderForm.nextPayoutDate,
-                        });
-                      }}
-                      className={`p-2 rounded-lg border text-right transition-all cursor-pointer ${
-                        (shareholderForm.payoutPreference === 'cash' ? 'cash' : 'capitalize') === opt.id
-                          ? 'bg-white border-[#1e40af] ring-1 ring-[#1e40af]/30 shadow-2xs'
-                          : 'bg-slate-100/60 border-slate-200 hover:bg-white'
-                      }`}
-                    >
-                      <span className="block text-[11px] font-black text-slate-900">{opt.label}</span>
-                      <span className="block text-[9.5px] text-slate-500 mt-0.5 leading-tight">{opt.desc}</span>
-                    </button>
-                  ))}
+                    { id: 'capitalize', label: 'رسملة تلقائية (سياسة الشركة)', desc: 'تُضاف الأرباح المحققة لرأس المال تلقائياً حسب دورة الشركة' },
+                    { id: 'cash', label: 'طلب صرف نقدي', desc: 'إيقاف الرسملة التلقائية وتحديد موعد الصرف' },
+                  ].map((opt) => {
+                    const isSelected = (shareholderForm.payoutPreference === 'cash' ? 'cash' : 'capitalize') === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          const nextPref = opt.id as 'cash' | 'capitalize';
+                          const companyCycle = payoutPlanSummary.currentCycleMonths || 1;
+                          setShareholderForm({
+                            ...shareholderForm,
+                            payoutPreference: nextPref,
+                            payoutCycleMonths: companyCycle,
+                            nextPayoutDate:
+                              nextPref === 'capitalize'
+                                ? computeNextFutureCycleDate(
+                                    shareholderForm.joinedDate || localTodayIso(),
+                                    companyCycle
+                                  )
+                                : shareholderForm.nextPayoutDate,
+                          });
+                        }}
+                        className={`p-2.5 rounded-xl border text-right transition-all cursor-pointer ${
+                          isSelected
+                            ? opt.id === 'cash'
+                              ? 'bg-amber-50/70 border-amber-500 ring-1 ring-amber-400/40 shadow-2xs'
+                              : 'bg-indigo-50/60 border-[#1e40af] ring-1 ring-[#1e40af]/30 shadow-2xs'
+                            : 'bg-white border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="block text-xs font-black text-slate-900">{opt.label}</span>
+                        <span className="block text-[10px] text-slate-500 mt-0.5 leading-snug">{opt.desc}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                {shareholderForm.payoutPreference === 'cash' && (
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">دورة الرسملة</label>
-                    <select
-                      value={shareholderForm.payoutCycleMonths || 1}
-                      onChange={(e) => {
-                        const cycle = Number(e.target.value);
-                        setShareholderForm({
-                          ...shareholderForm,
-                          payoutCycleMonths: cycle,
-                          nextPayoutDate:
-                            shareholderForm.payoutPreference === 'cash'
-                              ? shareholderForm.nextPayoutDate
-                              : computeNextFutureCycleDate(
-                                  shareholderForm.joinedDate || localTodayIso(),
-                                  cycle
-                                ),
-                        });
-                      }}
-                      className="input-ui h-9 w-full text-xs px-2 font-bold bg-white"
-                    >
-                      <option value={1}>كل نهاية شهر</option>
-                      <option value={3}>كل 3 شهور (نهاية الشهر)</option>
-                      <option value={6}>كل 6 شهور (نهاية الشهر)</option>
-                      <option value={12}>كل سنة (نهاية السنة)</option>
-                    </select>
+                    <label className="block text-[11px] font-bold text-amber-800 mb-1">تاريخ الصرف المطلوب</label>
+                    <DatePicker
+                      value={shareholderForm.nextPayoutDate || ''}
+                      onChange={(val) => setShareholderForm({ ...shareholderForm, nextPayoutDate: val })}
+                      placeholder="يوم/شهر/سنة"
+                      className="w-full h-9 text-xs font-bold border-amber-300 bg-white"
+                    />
                   </div>
-                  {shareholderForm.payoutPreference === 'cash' ? (
-                    <div>
-                      <label className="block text-[11px] font-bold text-amber-800 mb-1">محتاج فلوسه يوم</label>
-                      <DatePicker
-                        value={shareholderForm.nextPayoutDate || ''}
-                        onChange={(val) => setShareholderForm({ ...shareholderForm, nextPayoutDate: val })}
-                        placeholder="يوم/شهر/سنة"
-                        className="w-full h-9 text-xs font-bold border-amber-300 bg-white"
-                      />
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">موعد الرسملة التلقائية</label>
-                      <div className="h-9 px-2.5 rounded-lg border border-indigo-200 bg-indigo-50/70 flex items-center justify-between gap-1 text-[11px] font-bold text-indigo-800">
-                        <span className="truncate">
-                          {formatDateDisplay(
-                            shareholderForm.nextPayoutDate ||
-                              computeNextFutureCycleDate(
-                                shareholderForm.joinedDate,
-                                shareholderForm.payoutCycleMonths || 1
-                              )
-                          )}
-                        </span>
-                        <span className="text-[9.5px] font-medium text-indigo-600 whitespace-nowrap shrink-0">
-                          نهاية الشهر تلقائياً
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
 
               <div>
@@ -3587,6 +3594,9 @@ export default function Shareholders() {
               {(() => {
                 const partner = liveShareholders.find((s: any) => s.id === selectedShareholderId);
                 if (!partner) return null;
+                const salesProfit = Number(partner.accrualAvailableProfit ?? partner.availableProfit ?? 0);
+                const realizedAvail = Number(partner.realizedAvailableProfit ?? partner.availableProfit ?? 0);
+                const deferred = Math.max(0, Number(partner.deferredProfit ?? (salesProfit - realizedAvail)));
                 return (
                   <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
                     <div>
@@ -3594,10 +3604,16 @@ export default function Shareholders() {
                       <strong className="text-slate-900 font-black">{formatCurrency(partner.capital)}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500 block">الأرباح المتاحة للسحب:</span>
-                      <strong className="text-emerald-600 font-black">
-                        {formatCurrency(partner.availableProfit)}
-                      </strong>
+                      <span className="text-indigo-700 block">أرباح البيع (إجمالي):</span>
+                      <strong className="text-indigo-800 font-black">{formatCurrency(salesProfit)}</strong>
+                    </div>
+                    <div>
+                      <span className="text-emerald-700 block font-bold">المتاح للسحب الآن (من الأقساط):</span>
+                      <strong className="text-emerald-700 font-black">{formatCurrency(realizedAvail)}</strong>
+                    </div>
+                    <div>
+                      <span className="text-amber-700 block">أرباح مؤجلة (تحت التحصيل):</span>
+                      <strong className="text-amber-700 font-black">{formatCurrency(deferred)}</strong>
                     </div>
                   </div>
                 );

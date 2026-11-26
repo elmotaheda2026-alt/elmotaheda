@@ -2,10 +2,10 @@ import sql from 'mssql';
 import crypto from 'node:crypto';
 
 const config = {
-  server: '127.0.0.1',
-  port: 1433,
-  user: 'sallam',
-  password: 'ah123',
+  server: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT || 1433),
+  user: process.env.DB_USER || 'alm_app',
+  password: process.env.DB_PASSWORD || 'Alm@2026#App',
   database: 'master',
   options: {
     encrypt: false,

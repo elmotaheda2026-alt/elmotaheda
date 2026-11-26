@@ -75,7 +75,8 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
          COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' THEN amount ELSE 0 END), 0) AS totalOut,
          COALESCE(SUM(CASE WHEN type = 'in' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayIn,
          COALESCE(SUM(CASE WHEN type = 'out' AND (status IS NULL OR status != 'voided') AND COALESCE(reference_type, '') != 'internal_transfer' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayOut
-       FROM payments`,
+       FROM payments
+       WHERE COALESCE(created_by, '') != 'import'`,
       todayDate,
       todayDate,
       todayDate,
@@ -85,12 +86,13 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
          COALESCE(SUM(e.amount), 0) AS totalExpenses,
          COALESCE(SUM(CASE WHEN CONVERT(date, e.date) = CONVERT(date, ?) THEN e.amount ELSE 0 END), 0) AS todayExpenses
        FROM expenses e
-       WHERE NOT EXISTS (
-         SELECT 1 FROM payments p
-         WHERE p.reference_type = 'expense'
-           AND p.reference_id = e.id
-           AND (p.status IS NULL OR p.status != 'voided')
-       )`,
+       WHERE COALESCE(e.created_by, '') != 'import'
+         AND NOT EXISTS (
+           SELECT 1 FROM payments p
+           WHERE p.reference_type = 'expense'
+             AND p.reference_id = e.id
+             AND (p.status IS NULL OR p.status != 'voided')
+         )`,
       todayDate,
     );
 
@@ -103,6 +105,7 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
          COALESCE(SUM(CASE WHEN type = 'out' AND CONVERT(date, date) = CONVERT(date, ?) THEN amount ELSE 0 END), 0) AS todayOut
        FROM payments
        WHERE (status IS NULL OR status != 'voided')
+         AND COALESCE(created_by, '') != 'import'
        GROUP BY ${NORMALIZED_CHANNEL_SQL}`,
       todayDate,
       todayDate,
@@ -192,6 +195,7 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
              COALESCE(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS pOut
            FROM payments
            WHERE (status IS NULL OR status != 'voided')
+             AND COALESCE(created_by, '') != 'import'
              AND COALESCE(reference_type, '') != 'internal_transfer'
              AND CONVERT(date, date) >= CONVERT(date, ?)
              AND CONVERT(date, date) <= CONVERT(date, ?)`,
@@ -201,7 +205,8 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
         db.get<any>(
           `SELECT COALESCE(SUM(e.amount), 0) AS pExp
            FROM expenses e
-           WHERE CONVERT(date, e.date) >= CONVERT(date, ?)
+           WHERE COALESCE(e.created_by, '') != 'import'
+             AND CONVERT(date, e.date) >= CONVERT(date, ?)
              AND CONVERT(date, e.date) <= CONVERT(date, ?)
              AND NOT EXISTS (
                SELECT 1 FROM payments p
@@ -217,6 +222,7 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
              COALESCE(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS cumOut
            FROM payments
            WHERE (status IS NULL OR status != 'voided')
+             AND COALESCE(created_by, '') != 'import'
              AND COALESCE(reference_type, '') != 'internal_transfer'
              AND CONVERT(date, date) <= CONVERT(date, ?)`,
           rawEndDate,
@@ -224,7 +230,8 @@ router.get('/summary', requireAnyPermission('payments:read', 'reports:read'), as
         db.get<any>(
           `SELECT COALESCE(SUM(e.amount), 0) AS cumExp
            FROM expenses e
-           WHERE CONVERT(date, e.date) <= CONVERT(date, ?)
+           WHERE COALESCE(e.created_by, '') != 'import'
+             AND CONVERT(date, e.date) <= CONVERT(date, ?)
              AND NOT EXISTS (
                SELECT 1 FROM payments p
                WHERE p.reference_type = 'expense' AND p.reference_id = e.id

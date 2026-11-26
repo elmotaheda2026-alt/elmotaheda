@@ -590,6 +590,7 @@ export function emitApiHealth(connected: boolean) {
         payoutCycleMonths?: number;
         payoutNoticeDays?: number;
         nextPayoutDate?: string | null;
+        requestedPayoutAmount?: number | null;
       }
     ) =>
       request<{
